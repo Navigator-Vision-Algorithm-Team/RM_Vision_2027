@@ -10,6 +10,7 @@
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 // C++ system
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -74,6 +75,18 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
   target_sub_ = this->create_subscription<auto_aim_interfaces::msg::Target>(
     "/tracker/target", rclcpp::SensorDataQoS(),
     std::bind(&RMSerialDriver::sendData, this, std::placeholders::_1));
+
+  // Auto spin parameters and timer
+  enable_auto_spin_ = this->declare_parameter("enable_auto_spin", true);
+  spin_speed_ = this->declare_parameter("spin_speed", 1.0);
+  spin_timer_period_ = this->declare_parameter("spin_timer_period", 0.01);
+  current_spin_yaw_ = 0.0;
+
+  if (enable_auto_spin_) {
+    spin_timer_ = this->create_wall_timer(
+      std::chrono::duration<double>(spin_timer_period_),
+      std::bind(&RMSerialDriver::spinTimerCallback, this));
+  }
 }
 
 RMSerialDriver::~RMSerialDriver()
@@ -280,10 +293,23 @@ void RMSerialDriver::sendData(const auto_aim_interfaces::msg::Target::SharedPtr 
     // packet.r2 = msg->radius_2;
     // packet.dz = msg->dz;
     packet.robo_id = robo_id_unit8_map.at(msg->id);
-    if (packet.shoot) {
+    
+    // Auto-rotate when no target (tracking=false), stop when target found (tracking=true)
+    if (msg->tracking) {
+      // 检测到目标：停止旋转，使用弹道解算的 pitch/yaw 跟踪目标
       packet.pitch = pitch;
       packet.yaw = yaw;
+      packet.shoot = 0;  // Stop rotation, start tracking
+    } else {
+      // 未检测到目标：继续旋转搜索
+      static float search_yaw = 0.0f;
+      search_yaw += 0.5f;  // Continuous rotation
+      if (search_yaw > M_PI) search_yaw -= 2 * M_PI;
+      packet.pitch = 0.0f;
+      packet.yaw = search_yaw;
+      packet.shoot = 1;  // Continue searching
     }
+    
     crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&packet), sizeof(packet));
 
     // RCLCPP_INFO(get_logger(), "[Send] id %d!", packet.id);
@@ -448,6 +474,40 @@ void RMSerialDriver::resetTracker()
   auto request = std::make_shared<std_srvs::srv::Trigger::Request>();
   reset_tracker_client_->async_send_request(request);
   RCLCPP_INFO(get_logger(), "Reset tracker!");
+}
+
+void RMSerialDriver::spinTimerCallback()
+{
+  if (!serial_driver_ || !serial_driver_->port() || !serial_driver_->port()->is_open()) {
+    return;
+  }
+
+  current_spin_yaw_ += spin_speed_ * spin_timer_period_;
+  while (current_spin_yaw_ > M_PI) {
+    current_spin_yaw_ -= 2 * M_PI;
+  }
+  while (current_spin_yaw_ < -M_PI) {
+    current_spin_yaw_ += 2 * M_PI;
+  }
+
+  Header header;
+  SendPacket packet;
+  header.data_length = sizeof(packet) - sizeof(header) - 2;
+  header.cmd_id = 0x0402;
+  crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&header), sizeof(header) - 2);
+  packet.header = header;
+  packet.pitch = 0.0f;
+  packet.yaw = static_cast<float>(current_spin_yaw_);
+  packet.shoot = 0;
+  crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&packet), sizeof(packet));
+
+  try {
+    serial_driver_->port()->send(toVector(packet));
+  } catch (const std::exception & ex) {
+    RCLCPP_ERROR_THROTTLE(
+      get_logger(), *get_clock(), 20, "Auto spin send failed: %s", ex.what());
+    reopenPort();
+  }
 }
 
 }  // namespace rm_serial_driver

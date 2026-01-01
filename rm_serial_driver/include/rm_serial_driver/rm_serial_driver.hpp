@@ -16,6 +16,7 @@
 #include <visualization_msgs/msg/marker.hpp>
 
 // C++ system
+#include <cmath>
 #include <future>
 #include <memory>
 #include <string>
@@ -46,6 +47,8 @@ private:
 
   void resetTracker();
 
+  void spinTimerCallback();
+
   // Serial port
   std::unique_ptr<IoContext> owned_ctx_;
   std::string device_name_;
@@ -74,6 +77,13 @@ private:
   // For debug usage
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr latency_pub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr marker_pub_;
+
+  // Auto spin when enabled
+  rclcpp::TimerBase::SharedPtr spin_timer_;
+  bool enable_auto_spin_ = false;
+  double spin_speed_ = 0.0;         // rad/s
+  double spin_timer_period_ = 0.01;  // seconds
+  double current_spin_yaw_ = 0.0;    // rad
 
   std::thread receive_thread_;
 };
