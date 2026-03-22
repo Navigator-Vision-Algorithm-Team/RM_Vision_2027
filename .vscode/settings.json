@@ -1,3 +1,17 @@
 {
-    "cmake.sourceDirectory": "/Users/skiwalllee/code/RM/RM_Vision_2026/rm_gimbal_description"
+    "cmake.sourceDirectory": "/Users/skiwalllee/code/self_project/RM_Vision_2026/rm_gimbal_description",
+    "files.associations": {
+        "atomic": "cpp"
+    },
+    "ROS2.distro": "humble",
+    "python.autoComplete.extraPaths": [
+        "/home/ubuntu/Freshman/RM_Vision_2026/install/auto_aim_interfaces/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ],
+    "python.analysis.extraPaths": [
+        "/home/ubuntu/Freshman/RM_Vision_2026/install/auto_aim_interfaces/local/lib/python3.10/dist-packages",
+        "/opt/ros/humble/lib/python3.10/site-packages",
+        "/opt/ros/humble/local/lib/python3.10/dist-packages"
+    ]
 }

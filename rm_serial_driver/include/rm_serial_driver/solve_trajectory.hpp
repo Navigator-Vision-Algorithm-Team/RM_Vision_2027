@@ -50,6 +50,8 @@ struct SolveTrajectoryParams
   enum ARMOR_ID armor_id;    //装甲板类型  0-outpost 6-guard 7-base
                              //1-英雄 2-工程 3-4-5-步兵
   enum ARMOR_NUM armor_num;  //装甲板数字  2-balance 3-outpost 4-normal
+
+  uint8_t time=0;
 };
 
 //用于存储目标装甲板的信息

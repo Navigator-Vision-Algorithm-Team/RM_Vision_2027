@@ -2,6 +2,8 @@
 // ROS
 #include <camera_info_manager/camera_info_manager.hpp>
 #include <image_transport/image_transport.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/videoio.hpp>
 #include <rclcpp/logging.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/utilities.hpp>
@@ -48,6 +50,10 @@ public:
 
     declareParameters();
 
+    record_video_ = this->declare_parameter("record_video", false);
+    video_path_ = this->declare_parameter("video_path", "/tmp/hik_camera_raw.mp4");
+    video_fps_ = this->declare_parameter("video_fps", 60.0);
+
     MV_CC_StartGrabbing(camera_handle_);
 
     // Load camera info
@@ -91,6 +97,30 @@ public:
           image_msg_.step = out_frame.stFrameInfo.nWidth * 3;
           image_msg_.data.resize(image_msg_.width * image_msg_.height * 3);
 
+                    if (record_video_) {
+            if (!video_writer_.isOpened()) {
+              const int fourcc = cv::VideoWriter::fourcc('m', 'p', '4', 'v');
+              const cv::Size frame_size(
+                static_cast<int>(image_msg_.width), static_cast<int>(image_msg_.height));
+              if (!video_writer_.open(video_path_, fourcc, video_fps_, frame_size, true)) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to open video file: %s", video_path_.c_str());
+                record_video_ = false;
+              } else {
+                RCLCPP_INFO(this->get_logger(), "Recording video to: %s", video_path_.c_str());
+              }
+            }
+
+            if (video_writer_.isOpened()) {
+              // ROS image is rgb8, convert to BGR before writing with OpenCV.
+              cv::Mat rgb(
+                static_cast<int>(image_msg_.height), static_cast<int>(image_msg_.width), CV_8UC3,
+                image_msg_.data.data());
+              cv::Mat bgr;
+              cv::cvtColor(rgb, bgr, cv::COLOR_RGB2BGR);
+              video_writer_.write(bgr);
+            }
+          }
+
           camera_info_msg_.header = image_msg_.header;
           camera_pub_.publish(image_msg_, camera_info_msg_);
 
@@ -113,6 +143,9 @@ public:
 
   ~HikCameraNode() override
   {
+    if (video_writer_.isOpened()) {
+      video_writer_.release();
+    }
     if (capture_thread_.joinable()) {
       capture_thread_.join();
     }
@@ -192,6 +225,11 @@ private:
 
   int fail_conut_ = 0;
   std::thread capture_thread_;
+
+  bool record_video_ = false;
+  std::string video_path_;
+  double video_fps_ = 60.0;
+  cv::VideoWriter video_writer_;
 
   OnSetParametersCallbackHandle::SharedPtr params_callback_handle_;
 };

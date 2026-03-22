@@ -73,10 +73,36 @@ def generate_launch_description():
         period=2.0,
         actions=[tracker_node],
     )
+    # # ===============adding====================
+
+    # decision_node = Node(
+    #     package='rm_decision',
+    #     executable='decision_node',
+    #     name='decision_node',
+    #     output='both',
+    #     emulate_tty=True,
+    #     parameters=[{
+    #         'hp_threshold': 200.0,
+    #         'hp_recovery_ratio': 0.90,
+    #         'nav_action_name': '/red_standard_robot1/navigate_to_pose',
+    #         'nav_action_fallback': '/navigate_to_pose',
+    #     }],
+    #     remappings=[
+    #         ('game_status', '/serial/game_status'),
+    #         ('robot_status', '/serial/game_robot_status'),
+    #     ],
+    # )
+
+    # delay_decision_node = TimerAction(
+    #     period=2.5,
+    #     actions=[decision_node],
+    # )
 
     return LaunchDescription([
         robot_state_publisher,
         cam_detector,
         delay_serial_node,
         delay_tracker_node,
+        # ===============adding====================
+        delay_decision_node,
     ])

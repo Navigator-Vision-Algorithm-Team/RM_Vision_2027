@@ -25,7 +25,7 @@
   * `armor_tracker`：装甲板跟踪与状态估计节点（选择目标、坐标系变换、EKF 估计、发布跟踪目标）。
   * `auto_aim_interfaces`：自定义消息接口（Armors/Armor/Target 等）。
   * `auto_aim_bringup`：参数与 launch 文件（集成启动）。
-* `rm_serial_driver`：与电控的串口通讯模块（收机器人状态/发控制与解算结果）。
+* `auto_aim_interfaces`：与电控的串口通讯模块（收机器人状态/发控制与解算结果）。
 * `rm_gimbal_description`：URDF 模型与坐标系定义（云台-相机外参、坐标关系）。
 * `rm_vision`：顶层项目说明/容器化支持（工程元信息）。
 

@@ -14,6 +14,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/Armor.msg"
   "msg/Armors.msg"
   "msg/Target.msg"
+  "msg/GameStatus.msg"
+  "msg/GameRobotStatus.msg"
 
   "msg/DebugLight.msg"
   "msg/DebugLights.msg"

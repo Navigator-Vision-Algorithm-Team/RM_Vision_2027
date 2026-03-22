@@ -13,6 +13,7 @@ add_definitions(-Wall -Werror)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(ament_cmake_auto REQUIRED)
+find_package(OpenCV REQUIRED)
 ament_auto_find_build_dependencies()
 
 ament_auto_add_library(${PROJECT_NAME} SHARED
@@ -43,6 +44,8 @@ target_link_libraries(${PROJECT_NAME}
   MvCameraControl
   MVRender
   MvUsb3vTL
+
+  ${OpenCV_LIBS}
 )
 
 rclcpp_components_register_node(${PROJECT_NAME}
