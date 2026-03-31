@@ -163,15 +163,21 @@ uint8_t autoSolveTrajectory(float * pitch, float * yaw, float * aim_x, float * a
     //
 
     //计算枪管到目标装甲板yaw最小的那个装甲板
-    float yaw_diff_min = fabsf(*yaw - tar_position[0].yaw);
-    for (i = 1; i < 4; i++) {
-      float temp_yaw_diff = fabsf(*yaw - tar_position[i].yaw);
-      if (temp_yaw_diff < yaw_diff_min) {
-        yaw_diff_min = temp_yaw_diff;
+     float min = INFINITY;
+    float yaw_to_shooter = atan2f(st.yw, st.xw);
+    for (int i = 0; i < 4; i++) {
+       if (fabsf(tar_position[i].yaw - yaw_to_shooter) > 0.1 * PI) {
+       continue;
+      }
+
+      const float dist = tar_position[i].x * tar_position[i].x + tar_position[i].y * tar_position[i].y;
+      const float yaw_diff = fabsf(*yaw - tar_position[i].yaw);
+      if (dist * 0.5 + yaw_diff * 0.5 < min) {
+        min = dist * 0.5 + yaw_diff * 0.5;
         idx = i;
       }
     }
-    if (yaw_diff_min > PI / 4) {
+    if (min == INFINITY) {
       return 0;
     }
   }

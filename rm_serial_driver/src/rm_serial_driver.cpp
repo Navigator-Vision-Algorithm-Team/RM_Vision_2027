@@ -78,7 +78,7 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
   aiming_point_.color.a = 1.0;
   aiming_point_.lifetime = rclcpp::Duration::from_seconds(0.1);
 
-  tracking_timeout_ = this->declare_parameter("tracking_timeout", 2.0);
+  tracking_timeout_ = this->declare_parameter("tracking_timeout", 0.7);
   armors_timeout_ = this->declare_parameter("armors_timeout", 0.2);
 
   // Create Subscription
@@ -91,15 +91,15 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
     std::bind(&RMSerialDriver::armorsCallback, this, std::placeholders::_1));
 
   // Auto spin parameters and timer
-  enable_auto_spin_ = this->declare_parameter("enable_auto_spin", false);
-  spin_speed_ = this->declare_parameter("spin_speed", 1.0);
+  enable_auto_spin_ = this->declare_parameter("enable_auto_spin", true);
+  spin_speed_ = this->declare_parameter("spin_speed", 1.2);
   spin_timer_period_ = this->declare_parameter("spin_timer_period", 0.05);
   spin_pitch_ = this->declare_parameter("spin_pitch", 0.2);
   current_spin_yaw_ = 0.0;
   spin_dir_x_ = std::cos(current_spin_yaw_);
   spin_dir_y_ = std::sin(current_spin_yaw_);
 
-  if (false) {
+  if (enable_auto_spin_) {
     spin_timer_ = this->create_wall_timer(
       std::chrono::duration<double>(spin_timer_period_),
       std::bind(&RMSerialDriver::spinTimerCallback, this));
@@ -160,14 +160,14 @@ void RMSerialDriver::receiveData()
                 // RCLCPP_ERROR(get_logger(), "Data CRC error!");
                 break;
               }
-               RCLCPP_INFO(get_logger(), "[Receive] id %d!", imu_packet.id);
-               RCLCPP_INFO(get_logger(), "[Receive] roll %f!", imu_packet.roll);
-               RCLCPP_INFO(get_logger(), "[Receive] pitch %f!", imu_packet.pitch);
-               RCLCPP_INFO(get_logger(), "[Receive] yaw %f!", imu_packet.yaw);
+              //  RCLCPP_INFO(get_logger(), "[Receive] id %d!", imu_packet.id);
+              //  RCLCPP_INFO(get_logger(), "[Receive] roll %f!", imu_packet.roll);
+              //  RCLCPP_INFO(get_logger(), "[Receive] pitch %f!", imu_packet.pitch);
+              //  RCLCPP_INFO(get_logger(), "[Receive] yaw %f!", imu_packet.yaw);
 
-              RCLCPP_WARN(
-                get_logger(), "[Receive] roboid %d! color %d", imu_packet.roboid,
-                imu_packet.roboid > 100 ? 0 : 1);
+              // RCLCPP_WARN(
+              //   get_logger(), "[Receive] roboid %d! color %d", imu_packet.roboid,
+              //   imu_packet.roboid > 100 ? 0 : 1);
               if (
                 !initial_set_param_ || (imu_packet.roboid > 100 ? 0 : 1) != previous_receive_color_) {
                 setParam(rclcpp::Parameter("detect_color", (imu_packet.roboid > 100 ? 0 : 1)));
@@ -748,7 +748,7 @@ void RMSerialDriver::processPacket(const std::vector<uint8_t> & data, uint16_t c
 
       RCLCPP_INFO(
         get_logger(),
-        "[Recv 0x0201] id=%u lvl=%u hp=%u/%u cool=%u heat=%u power=%u mains=0x%02X",
+        "[Recv 0x0102] id=%u lvl=%u hp=%u/%u cool=%u heat=%u power=%u mains=0x%02X",
         static_cast<unsigned>(robot_id),
         static_cast<unsigned>(robot_level),
         static_cast<unsigned>(remain_hp),

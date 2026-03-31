@@ -6,8 +6,8 @@
 namespace rm_decision
 {
   // ====== 目标点坐标 — 按实际场地修改 ======
-  const TargetPoint CENTER_POINT = {4.0, 2.5, 0.0, 0.0, 0.0, 0.0, 1.0}; // 进攻点
-  const TargetPoint HOME_POINT = {0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 1.0};   // 出生点/补血点
+  const TargetPoint CENTER_POINT = {4.5, -4.0, 0.0, 0.0, 0.0, 0.0, 1.0}; // 进攻点
+  const TargetPoint HOME_POINT = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0};   // 出生点/补血点
 
   DecisionNode::DecisionNode(const rclcpp::NodeOptions &options)
       : Node("decision_node", options)

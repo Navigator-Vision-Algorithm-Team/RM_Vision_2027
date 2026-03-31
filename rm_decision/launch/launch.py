@@ -17,7 +17,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'nav_action_name',
-            default_value='navigate_to_pose',
+            default_value='/red_standard_robot1/navigate_to_pose',
             description='Primary NavigateToPose action name'
         ),
         DeclareLaunchArgument(
