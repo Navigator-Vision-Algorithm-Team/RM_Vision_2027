@@ -94,7 +94,22 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
   enable_auto_spin_ = this->declare_parameter("enable_auto_spin", true);
   spin_speed_ = this->declare_parameter("spin_speed", 1.2);
   spin_timer_period_ = this->declare_parameter("spin_timer_period", 0.05);
-  spin_pitch_ = this->declare_parameter("spin_pitch", 0.2);
+  spin_pitch_ = this->declare_parameter("spin_pitch", 0.0);
+  spin_pitch_min_ = this->declare_parameter("spin_pitch_min", 0.0);
+  spin_pitch_max_ = this->declare_parameter("spin_pitch_max", 0.5);
+  spin_pitch_speed_ = std::abs(this->declare_parameter("spin_pitch_speed", 0.5));
+  if (spin_pitch_min_ > spin_pitch_max_) {
+    const double tmp = spin_pitch_min_;
+    spin_pitch_min_ = spin_pitch_max_;
+    spin_pitch_max_ = tmp;
+  }
+  current_spin_pitch_ = spin_pitch_;
+  if (current_spin_pitch_ < spin_pitch_min_) {
+    current_spin_pitch_ = spin_pitch_min_;
+  } else if (current_spin_pitch_ > spin_pitch_max_) {
+    current_spin_pitch_ = spin_pitch_max_;
+  }
+  spin_pitch_increasing_ = true;
   current_spin_yaw_ = 0.0;
   spin_dir_x_ = std::cos(current_spin_yaw_);
   spin_dir_y_ = std::sin(current_spin_yaw_);
@@ -1139,6 +1154,22 @@ void RMSerialDriver::spinTimerCallback()
 
   current_spin_yaw_ = std::atan2(spin_dir_y_, spin_dir_x_);
 
+  // Update pitch with a triangle wave: 0 -> 2 -> 0 -> ...
+  const double pitch_step = spin_pitch_speed_ * spin_timer_period_;
+  if (spin_pitch_increasing_) {
+    current_spin_pitch_ += pitch_step;
+    if (current_spin_pitch_ >= spin_pitch_max_) {
+      current_spin_pitch_ = spin_pitch_max_;
+      spin_pitch_increasing_ = false;
+    }
+  } else {
+    current_spin_pitch_ -= pitch_step;
+    if (current_spin_pitch_ <= spin_pitch_min_) {
+      current_spin_pitch_ = spin_pitch_min_;
+      spin_pitch_increasing_ = true;
+    }
+  }
+
   // Prepare and send spin packet
   Header header;
   SendPacket packet;
@@ -1146,7 +1177,7 @@ void RMSerialDriver::spinTimerCallback()
   header.cmd_id = 0x0402;
   crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&header), sizeof(header) - 2);
   packet.header = header;
-  packet.pitch = static_cast<float>(spin_pitch_);
+  packet.pitch = static_cast<float>(current_spin_pitch_);
   packet.yaw = static_cast<float>(current_spin_yaw_);
   packet.shoot = 0;
   packet.robo_id = 0;

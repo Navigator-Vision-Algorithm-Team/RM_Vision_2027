@@ -109,7 +109,12 @@ private:
   bool enable_auto_spin_ = false;
   double spin_speed_ = 0.0;          // rad/s
   double spin_timer_period_ = 0.01;  // seconds
-  double spin_pitch_ = -0.10;        // rad, downward pitch used during auto spin
+  double spin_pitch_ = 0.0;          // Initial auto-spin pitch
+  double spin_pitch_min_ = 0.0;      // Auto-spin pitch lower bound
+  double spin_pitch_max_ = 0.5;      // Auto-spin pitch upper bound
+  double spin_pitch_speed_ = 0.5;    // Auto-spin pitch speed, unit/s
+  double current_spin_pitch_ = 0.0;  // Current auto-spin pitch
+  bool spin_pitch_increasing_ = true;  // true: toward max, false: toward min
   double current_spin_yaw_ = 0.0;    // rad
   double spin_dir_x_ = 1.0;          // unit direction x for spin yaw integration
   double spin_dir_y_ = 0.0;          // unit direction y for spin yaw integration
