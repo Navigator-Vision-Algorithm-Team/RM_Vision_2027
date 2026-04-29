@@ -78,7 +78,7 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
   aiming_point_.color.a = 1.0;
   aiming_point_.lifetime = rclcpp::Duration::from_seconds(0.1);
 
-  tracking_timeout_ = this->declare_parameter("tracking_timeout", 0.7);
+  tracking_timeout_ = this->declare_parameter("tracking_timeout", 1.2);
   armors_timeout_ = this->declare_parameter("armors_timeout", 0.2);
 
   // Create Subscription
@@ -90,35 +90,55 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
     "/detector/armors", rclcpp::SensorDataQoS(),
     std::bind(&RMSerialDriver::armorsCallback, this, std::placeholders::_1));
 
-  // Auto spin parameters and timer
-  enable_auto_spin_ = this->declare_parameter("enable_auto_spin", true);
+  // 运行模式开关与自旋参数。
+  use_referee_system_ =
+    this->declare_parameter("use_referee_system", false);  // true: 按裁判系统状态控制自瞄/自旋。
+  enable_auto_spin_ =
+    this->declare_parameter("enable_auto_spin", true);  // true: 未跟踪目标时允许自旋。
+  enable_pre_game_nod_ =
+    this->declare_parameter("enable_pre_game_nod", false);  // true: 赛前点头运动。
+  enable_spin_start_delay_ =
+    this->declare_parameter("enable_spin_start_delay", false);  // true: 比赛开始后延迟启动自旋。
+  spin_start_delay_sec_ = this->declare_parameter("spin_start_delay_sec", 2.0);
+  if (spin_start_delay_sec_ < 0.0) {
+    spin_start_delay_sec_ = 0.0;
+  }
+  game_start_progress_threshold_ = this->declare_parameter("game_start_progress_threshold", 4);
+  nod_pitch_min_ = this->declare_parameter("nod_pitch_min", 0.0);
+  nod_pitch_max_ = this->declare_parameter("nod_pitch_max", 0.5);
+  if (nod_pitch_min_ > nod_pitch_max_) {
+    const double tmp = nod_pitch_min_;
+    nod_pitch_min_ = nod_pitch_max_;
+    nod_pitch_max_ = tmp;
+  }
+  nod_frequency_ = std::abs(this->declare_parameter("nod_frequency", 0.35));
+  nod_elapsed_time_ = 0.0;
+
   spin_speed_ = this->declare_parameter("spin_speed", 1.2);
   spin_timer_period_ = this->declare_parameter("spin_timer_period", 0.05);
-  spin_pitch_ = this->declare_parameter("spin_pitch", 0.0);
-  spin_pitch_min_ = this->declare_parameter("spin_pitch_min", 0.0);
-  spin_pitch_max_ = this->declare_parameter("spin_pitch_max", 0.5);
-  spin_pitch_speed_ = std::abs(this->declare_parameter("spin_pitch_speed", 0.5));
-  if (spin_pitch_min_ > spin_pitch_max_) {
-    const double tmp = spin_pitch_min_;
-    spin_pitch_min_ = spin_pitch_max_;
-    spin_pitch_max_ = tmp;
-  }
-  current_spin_pitch_ = spin_pitch_;
-  if (current_spin_pitch_ < spin_pitch_min_) {
-    current_spin_pitch_ = spin_pitch_min_;
-  } else if (current_spin_pitch_ > spin_pitch_max_) {
-    current_spin_pitch_ = spin_pitch_max_;
-  }
-  spin_pitch_increasing_ = true;
+  spin_pitch_ = std::abs(this->declare_parameter("spin_pitch", 0.5));
+  spin_yaw_coeff_ = this->declare_parameter("spin_yaw_coeff", 1.0);
+  spin_sine_cycles_per_turn_ =
+    std::abs(this->declare_parameter("spin_sine_cycles_per_turn", 5.0));
+  spin_phase_shift_per_turn_ = this->declare_parameter("spin_phase_shift_per_turn", 0.35);
+  spin_elapsed_time_ = 0.0;
+  spin_extra_phase_ = 0.0;
+  const bool start_without_referee = !use_referee_system_;
+  game_started_.store(start_without_referee);
+  pre_game_nod_active_.store(use_referee_system_ ? enable_pre_game_nod_ : false);
+  spin_enabled_by_game_.store(start_without_referee);
+  spin_start_ready_ns_.store(0);
+  reset_spin_motion_pending_.store(true);
+  reset_nod_motion_pending_.store(true);
   current_spin_yaw_ = 0.0;
+  last_spin_yaw_for_phase_ = current_spin_yaw_;
   spin_dir_x_ = std::cos(current_spin_yaw_);
   spin_dir_y_ = std::sin(current_spin_yaw_);
 
-  if (enable_auto_spin_) {
-    spin_timer_ = this->create_wall_timer(
-      std::chrono::duration<double>(spin_timer_period_),
-      std::bind(&RMSerialDriver::spinTimerCallback, this));
-  }
+  // Always run this timer. Actual spin motion is gated by game state flags.
+  spin_timer_ = this->create_wall_timer(
+    std::chrono::duration<double>(spin_timer_period_),
+    std::bind(&RMSerialDriver::spinTimerCallback, this));
 }
 
 RMSerialDriver::~RMSerialDriver()
@@ -266,6 +286,7 @@ void RMSerialDriver::receiveData()
                 msg.stage_remain_time = static_cast<uint16_t>(stage_remain_time);
                 msg.sync_timestamp = sync_timestamp;
                 game_status_pub_->publish(msg);
+                updateGameStartControl(msg.game_progress);
               }
 
               RCLCPP_INFO(
@@ -310,6 +331,7 @@ void RMSerialDriver::receiveData()
                 msg.stage_remain_time = static_cast<uint16_t>(stage_remain_time);
                 msg.sync_timestamp = sync_timestamp;
                 game_status_pub_->publish(msg);
+                updateGameStartControl(msg.game_progress);
               }
 
               RCLCPP_INFO(
@@ -602,6 +624,7 @@ void RMSerialDriver::processPacket(const std::vector<uint8_t> & data, uint16_t c
       msg.stage_remain_time = static_cast<uint16_t>(stage_remain_time);
       msg.sync_timestamp = sync_timestamp;
       game_status_pub_->publish(msg);
+      updateGameStartControl(msg.game_progress);
 
       RCLCPP_INFO(
         get_logger(),
@@ -641,6 +664,7 @@ void RMSerialDriver::processPacket(const std::vector<uint8_t> & data, uint16_t c
       msg.stage_remain_time = static_cast<uint16_t>(stage_remain_time);
       msg.sync_timestamp = sync_timestamp;
       game_status_pub_->publish(msg);
+      updateGameStartControl(msg.game_progress);
 
       RCLCPP_INFO(
         get_logger(),
@@ -802,6 +826,17 @@ void RMSerialDriver::sendData(const auto_aim_interfaces::msg::Target::SharedPtr 
     {"", 0x000},  {"outpost", 0x010}, {"1", 0x001},     {"2", 0x002},   {"3", 0x003},
     {"4", 0x004}, {"5", 0x005},       {"guard", 0x007}, {"base", 0x011}};
 
+  const bool pre_game_nod = pre_game_nod_active_.load();  // true: 赛前点头状态会阻止自瞄。
+  const bool spin_ready = spin_enabled_by_game_.load();   // true: 比赛状态允许自瞄/自旋。
+  if (pre_game_nod || !spin_ready) {
+    is_tracking_.store(false);
+    RCLCPP_DEBUG_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "[Target Ignored] pre_game_nod=%d spin_ready=%d, auto-aim is disabled",
+      static_cast<int>(pre_game_nod), static_cast<int>(spin_ready));
+    return;
+  }
+
   try {
     std::lock_guard<std::mutex> lock(send_mutex_);  // Ensure thread safety when accessing send-related variables
     Header header;
@@ -960,6 +995,12 @@ void RMSerialDriver::sendNavigationCmd(const geometry_msgs::msg::Twist::SharedPt
 
 void RMSerialDriver::armorsCallback(auto_aim_interfaces::msg::Armors::SharedPtr msg)
 {
+  if (pre_game_nod_active_.load() || !spin_enabled_by_game_.load()) {
+    detector_has_armors_.store(false);
+    last_armors_msg_ns_.store(0);
+    return;
+  }
+
   last_armors_msg_ns_.store(this->now().nanoseconds());
   detector_has_armors_.store(!msg->armors.empty());
 }
@@ -1100,8 +1141,122 @@ void RMSerialDriver::resetTracker()
   RCLCPP_INFO(get_logger(), "Reset tracker!");
 }
 
+void RMSerialDriver::updateGameStartControl(uint8_t game_progress)
+{
+  if (!use_referee_system_) {
+    return;
+  }
+  const bool started = game_progress >= static_cast<uint8_t>(game_start_progress_threshold_);
+  const bool was_started = game_started_.exchange(started);
+
+  if (started) {
+    if (!was_started) {
+      pre_game_nod_active_.store(false);
+      reset_nod_motion_pending_.store(true);
+      reset_spin_motion_pending_.store(true);
+      is_tracking_.store(false);
+
+      if (enable_spin_start_delay_ && spin_start_delay_sec_ > 1e-6) {
+        const int64_t now_ns = this->now().nanoseconds();
+        const int64_t delay_ns = static_cast<int64_t>(spin_start_delay_sec_ * 1e9);
+        spin_enabled_by_game_.store(false);
+        spin_start_ready_ns_.store(now_ns + delay_ns);
+        RCLCPP_INFO(
+          get_logger(),
+          "[Game Start] Received start command, auto spin will start after %.2f s",
+          spin_start_delay_sec_);
+      } else {
+        spin_enabled_by_game_.store(true);
+        spin_start_ready_ns_.store(0);
+        RCLCPP_INFO(get_logger(), "[Game Start] Received start command, auto spin enabled");
+      }
+    }
+    return;
+  }
+
+  if (was_started || !pre_game_nod_active_.load()) {
+    spin_enabled_by_game_.store(false);
+    spin_start_ready_ns_.store(0);
+    pre_game_nod_active_.store(enable_pre_game_nod_);
+    reset_spin_motion_pending_.store(true);
+    reset_nod_motion_pending_.store(true);
+    is_tracking_.store(false);
+    RCLCPP_INFO(get_logger(), "[Game State] Match not started, return to pre-game state");
+  }
+}
+
+float RMSerialDriver::computePreGameNodPitch()
+{
+  const double two_pi = 6.28318530717958647692;
+  nod_elapsed_time_ += spin_timer_period_;
+
+  const double pitch_mid = 0.5 * (nod_pitch_min_ + nod_pitch_max_);
+  const double pitch_amp = 0.5 * (nod_pitch_max_ - nod_pitch_min_);
+
+  return static_cast<float>(pitch_mid + pitch_amp * std::sin(two_pi * nod_frequency_ * nod_elapsed_time_));
+}
+
+void RMSerialDriver::sendPreGameNodCommand()
+{
+  if (reset_nod_motion_pending_.exchange(false)) {
+    nod_elapsed_time_ = 0.0;
+  }
+
+  Header header;
+  SendPacket packet;
+  header.data_length = sizeof(packet) - sizeof(header) - 2;
+  header.cmd_id = 0x0402;
+  crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&header), sizeof(header) - 2);
+  packet.header = header;
+  packet.pitch = computePreGameNodPitch();
+  packet.yaw = static_cast<float>(st.current_yaw);
+  packet.shoot = 0;
+  packet.robo_id = 0;
+  crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&packet), sizeof(packet));
+
+  try {
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    serial_driver_->port()->send(toVector(packet));
+  } catch (const std::exception & ex) {
+    RCLCPP_ERROR(get_logger(), "[Pre-Game Nod] Send error: %s", ex.what());
+    reopenPort();
+  }
+}
+
 void RMSerialDriver::spinTimerCallback()
 {
+  const int64_t now_ns = this->now().nanoseconds();
+  if (!spin_enabled_by_game_.load()) {
+    const int64_t ready_ns = spin_start_ready_ns_.load();
+    if (ready_ns > 0 && now_ns >= ready_ns) {
+      spin_enabled_by_game_.store(true);
+      spin_start_ready_ns_.store(0);
+      reset_spin_motion_pending_.store(true);
+      RCLCPP_INFO(get_logger(), "[Game Start] Delay finished, auto spin enabled");
+    }
+  }
+
+  if (!spin_enabled_by_game_.load()) {
+    if (pre_game_nod_active_.load()) {
+      sendPreGameNodCommand();
+    }
+    return;
+  }
+
+  if (!enable_auto_spin_) {
+    // 自旋被参数关闭，非跟踪时保持云台静止。
+    return;
+  }
+
+  if (reset_spin_motion_pending_.exchange(false)) {
+    spin_elapsed_time_ = 0.0;
+    spin_extra_phase_ = 0.0;
+    current_spin_yaw_ = st.current_yaw;
+    last_spin_yaw_for_phase_ = current_spin_yaw_;
+    spin_dir_x_ = std::cos(current_spin_yaw_);
+    spin_dir_y_ = std::sin(current_spin_yaw_);
+  }
+
   // Keep timer frequency unchanged; only block while Armors state is fresh.
   if (detector_has_armors_.load()) {
     const int64_t now_ns = this->now().nanoseconds();
@@ -1126,6 +1281,9 @@ void RMSerialDriver::spinTimerCallback()
       current_spin_yaw_ = st.current_yaw;
       spin_dir_x_ = std::cos(current_spin_yaw_);
       spin_dir_y_ = std::sin(current_spin_yaw_);
+      spin_elapsed_time_ = 0.0;
+      spin_extra_phase_ = 0.0;
+      last_spin_yaw_for_phase_ = current_spin_yaw_;
     } 
     return;
   }
@@ -1136,8 +1294,9 @@ void RMSerialDriver::spinTimerCallback()
 
   std::lock_guard<std::mutex> lock(send_mutex_);
 
-  // Update spin direction by Z-axis rotation matrix, then recover yaw from the vector.
-  const double dtheta = spin_speed_ * spin_timer_period_;
+  // Update yaw spin using configured yaw coefficient.
+  const double yaw_angular_speed = spin_speed_ * spin_yaw_coeff_;
+  const double dtheta = yaw_angular_speed * spin_timer_period_;
   const double cos_theta = std::cos(dtheta);
   const double sin_theta = std::sin(dtheta);
   const double next_x = cos_theta * spin_dir_x_ - sin_theta * spin_dir_y_;
@@ -1154,21 +1313,29 @@ void RMSerialDriver::spinTimerCallback()
 
   current_spin_yaw_ = std::atan2(spin_dir_y_, spin_dir_x_);
 
-  // Update pitch with a triangle wave: 0 -> 2 -> 0 -> ...
-  const double pitch_step = spin_pitch_speed_ * spin_timer_period_;
-  if (spin_pitch_increasing_) {
-    current_spin_pitch_ += pitch_step;
-    if (current_spin_pitch_ >= spin_pitch_max_) {
-      current_spin_pitch_ = spin_pitch_max_;
-      spin_pitch_increasing_ = false;
-    }
-  } else {
-    current_spin_pitch_ -= pitch_step;
-    if (current_spin_pitch_ <= spin_pitch_min_) {
-      current_spin_pitch_ = spin_pitch_min_;
-      spin_pitch_increasing_ = true;
-    }
+  const double quarter_pi = 0.7853981633974483;
+  const bool wrapped_forward =
+    (last_spin_yaw_for_phase_ > quarter_pi && current_spin_yaw_ < -quarter_pi);
+  const bool wrapped_backward =
+    (last_spin_yaw_for_phase_ < -quarter_pi && current_spin_yaw_ > quarter_pi);
+
+  if (wrapped_forward || wrapped_backward) {
+    const double yaw_sign = (yaw_angular_speed >= 0.0) ? 1.0 : -1.0;
+    spin_extra_phase_ += yaw_sign * spin_phase_shift_per_turn_;
   }
+
+  last_spin_yaw_for_phase_ = current_spin_yaw_;
+
+  // Use the same bounded sine mapping as pre-game nodding for smoother pitch motion.
+  spin_elapsed_time_ += spin_timer_period_;
+  const double two_pi = 6.28318530717958647692;
+  const double spin_nod_frequency =
+    (spin_sine_cycles_per_turn_ * std::abs(yaw_angular_speed)) / two_pi;
+  const double pitch_mid = 0.5 * (nod_pitch_min_ + nod_pitch_max_);
+  const double pitch_amp = 0.5 * (nod_pitch_max_ - nod_pitch_min_);
+  const double spin_pitch_phase = two_pi * spin_nod_frequency * spin_elapsed_time_ + spin_extra_phase_;
+  const double current_spin_pitch =
+    pitch_mid + pitch_amp * std::sin(spin_pitch_phase);
 
   // Prepare and send spin packet
   Header header;
@@ -1177,7 +1344,7 @@ void RMSerialDriver::spinTimerCallback()
   header.cmd_id = 0x0402;
   crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&header), sizeof(header) - 2);
   packet.header = header;
-  packet.pitch = static_cast<float>(current_spin_pitch_);
+  packet.pitch = static_cast<float>(current_spin_pitch);
   packet.yaw = static_cast<float>(current_spin_yaw_);
   packet.shoot = 0;
   packet.robo_id = 0;

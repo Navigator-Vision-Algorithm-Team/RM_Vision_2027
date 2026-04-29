@@ -60,6 +60,12 @@ private:
 
   void spinTimerCallback();
 
+  void updateGameStartControl(uint8_t game_progress);
+
+  float computePreGameNodPitch();
+
+  void sendPreGameNodCommand();
+
   void processPacket(const std::vector<uint8_t>& data, uint16_t cmd_id);
 
   // Serial port
@@ -104,28 +110,46 @@ private:
   //发导航指令
   // rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr nav_point_pub_;
 
-  // Auto spin when enabled
+  // 自瞄/自旋运行时开关（参数）。
   rclcpp::TimerBase::SharedPtr spin_timer_;
-  bool enable_auto_spin_ = false;
+  bool use_referee_system_ = false;      // true: 有裁判系统时按比赛状态控制自瞄/自旋；false: 一直允许自瞄/自旋。
+  bool enable_auto_spin_ = true;        // true: 未跟踪目标时允许自旋。
+  bool enable_pre_game_nod_ = true;     // true: 比赛开始前点头运动。
+  bool enable_spin_start_delay_ = false;  // true: 比赛开始后延迟启动自旋。
+  double spin_start_delay_sec_ = 2.0;
+  int game_start_progress_threshold_ = 0;
+  std::atomic<bool> game_started_{false};  // 比赛开始状态（裁判系统或手动模式）。
+  std::atomic<bool> pre_game_nod_active_{true};  // true: 赛前点头状态会阻止自瞄。
+  std::atomic<bool> spin_enabled_by_game_{false};  // true: 比赛状态允许自瞄/自旋。
+  std::atomic<int64_t> spin_start_ready_ns_{0};  // 延迟启动自旋的时间戳（ns）。
+  std::atomic<bool> reset_spin_motion_pending_{false};  // true: 下次定时器回调重置自旋积分。
+  std::atomic<bool> reset_nod_motion_pending_{false};   // true: 下次定时器回调重置点头计时。
+
+  double nod_pitch_min_ = 0.0;
+  double nod_pitch_max_ = 0.5;
+  double nod_frequency_ = 0.35;
+  double nod_elapsed_time_ = 0.0;
+
   double spin_speed_ = 0.0;          // rad/s
   double spin_timer_period_ = 0.01;  // seconds
-  double spin_pitch_ = 0.0;          // Initial auto-spin pitch
-  double spin_pitch_min_ = 0.0;      // Auto-spin pitch lower bound
-  double spin_pitch_max_ = 0.5;      // Auto-spin pitch upper bound
-  double spin_pitch_speed_ = 0.5;    // Auto-spin pitch speed, unit/s
-  double current_spin_pitch_ = 0.0;  // Current auto-spin pitch
-  bool spin_pitch_increasing_ = true;  // true: toward max, false: toward min
+  double spin_pitch_ = 0.5;          // Pitch sine coefficient (negative sign applied in callback)
+  double spin_yaw_coeff_ = 1.0;      // Yaw angular speed coefficient
+  double spin_sine_cycles_per_turn_ = 3.0;  // Sine cycles when yaw rotates 2*pi
+  double spin_phase_shift_per_turn_ = 0.35;  // Extra pitch phase shift added after each yaw turn
+  double spin_elapsed_time_ = 0.0;   // Auto-spin elapsed time for sine sampling
+  double spin_extra_phase_ = 0.0;    // Accumulated extra phase to avoid repeating trajectory
+  double last_spin_yaw_for_phase_ = 0.0;  // Previous yaw used for turn-wrap detection
   double current_spin_yaw_ = 0.0;    // rad
   double spin_dir_x_ = 1.0;          // unit direction x for spin yaw integration
   double spin_dir_y_ = 0.0;          // unit direction y for spin yaw integration
-  std::atomic<bool> is_tracking_{false};  // Current tracking status
-  std::atomic<bool> detector_has_armors_{false};  // True when detector reports at least one armor
-  std::atomic<int64_t> last_armors_msg_ns_{0};    // Last /detector/armors timestamp in ns
-  double armors_timeout_ = 0.2;                   // Timeout for stale Armors blocking
-  std::mutex send_mutex_;                  // Protect serial port send
-  rclcpp::Time last_tracking_time_;       // Last tracking timestamp
-  double tracking_timeout_ = 2.0;         // Tracking timeout in seconds (increased for stability)
-  rclcpp::Time last_receive_time_;        // Last receive timestamp for tracking timeout
+  std::atomic<bool> is_tracking_{false};  // true: 跟踪器当前有有效目标。
+  std::atomic<bool> detector_has_armors_{false};  // true: 检测器当前有装甲板。
+  std::atomic<int64_t> last_armors_msg_ns_{0};    // 最近一次 /detector/armors 的时间戳（ns）。
+  double armors_timeout_ = 0.2;                   // 装甲板消息超时阈值。
+  std::mutex send_mutex_;                         // 保护串口发送的互斥锁。
+  rclcpp::Time last_tracking_time_;               // 最近一次跟踪时间戳。
+  double tracking_timeout_ = 2.0;                 // 跟踪超时阈值（秒）。
+  rclcpp::Time last_receive_time_;                // 最近一次接收时间戳（用于跟踪超时判断）。
   std::thread receive_thread_;
 };
 }  // namespace rm_serial_driver
