@@ -5,20 +5,27 @@
 namespace rm_auto_aim
 {
 ExtendedKalmanFilter::ExtendedKalmanFilter(
-  const VecVecFunc & f, const VecVecFunc & h, const VecMatFunc & j_f, const VecMatFunc & j_h,
-  const VoidMatFunc & u_q, const VecMatFunc & u_r, const Eigen::MatrixXd & P0)
+  const VecVecFunc & f, 
+  const VecVecFunc & h, 
+  const VecMatFunc & j_f, 
+  const VecMatFunc & j_h,
+  const VoidMatFunc & u_q, 
+  const VecMatFunc & u_r, 
+  const Eigen::MatrixXd & P0)
 : f(f),
   h(h),
   jacobian_f(j_f),
   jacobian_h(j_h),
   update_Q(u_q),
   update_R(u_r),
-  P_post(P0),
-  n(P0.rows()),
-  I(Eigen::MatrixXd::Identity(n, n)),
-  x_pri(n),
-  x_post(n)
+  x_add(x_add),
+  z_subtract(z_subtract),
+  P_post(P0)
 {
+  n = P0.rows();
+  I = Eigen::MatrixXd::Identity(n, n);
+  x_pri = Eigen::VectorXd::Zero(n);
+  x_post = Eigen::VectorXd::Zero(n);
 }
 
 void ExtendedKalmanFilter::setState(const Eigen::VectorXd & x0) { x_post = x0; }
@@ -39,11 +46,21 @@ Eigen::MatrixXd ExtendedKalmanFilter::predict()
 
 Eigen::MatrixXd ExtendedKalmanFilter::update(const Eigen::VectorXd & z)
 {
-  H = jacobian_h(x_pri), R = update_R(z);
+  H = jacobian_h(x_pri);
+  R = update_R(z);
 
-  K = P_pri * H.transpose() * (H * P_pri * H.transpose() + R).inverse();
-  x_post = x_pri + K * (z - h(x_pri));
-  P_post = (I - K * H) * P_pri;
+  Eigen::VectorXd z_pred = h(x_pri);
+  Eigen::VectorXd residual = z_subtract(z, z_pred);
+
+  Eigen::MatrixXd S = H * P_pri * H.transpose() + R;
+  K = P_pri * H.transpose() * S.inverse();
+
+  x_post = x_add(x_pri, K * residual);
+
+  Eigen::MatrixXd I_KH = I - K * H;
+  P_post = I_KH * P_pri * I_KH.transpose() + K * R * K.transpose();
+
+  nis = residual.transpose() * S.inverse() * residual;
 
   return x_post;
 }

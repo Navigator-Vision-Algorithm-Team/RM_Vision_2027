@@ -18,55 +18,72 @@ public:
   using VecMatFunc = std::function<Eigen::MatrixXd(const Eigen::VectorXd &)>;
   using VoidMatFunc = std::function<Eigen::MatrixXd()>;
 
+  // State addition function:
+  // x_new = x_add(x, dx)
+  // Default behavior: x + dx
+  using StateAddFunc = std::function<Eigen::VectorXd(
+    const Eigen::VectorXd &,
+    const Eigen::VectorXd &
+  )>;
+
+  // Measurement residual function:
+  // residual = z_subtract(z, z_pred)
+  // Default behavior: z - z_pred
+  using MeasureSubtractFunc = std::function<Eigen::VectorXd(
+    const Eigen::VectorXd &, 
+    const Eigen::VectorXd &
+  )>;
+
   explicit ExtendedKalmanFilter(
-    const VecVecFunc & f, const VecVecFunc & h, const VecMatFunc & j_f, const VecMatFunc & j_h,
-    const VoidMatFunc & u_q, const VecMatFunc & u_r, const Eigen::MatrixXd & P0);
+    const VecVecFunc & f, 
+    const VecVecFunc & h, 
+    const VecMatFunc & j_f, 
+    const VecMatFunc & j_h,
+    const VoidMatFunc & u_q, 
+    const VecMatFunc & u_r, 
+    const Eigen::MatrixXd & P0,
+    const StateAddFunc & x_add = defaultStateAdd,
+    const MeasureSubtractFunc & z_subtract = defaultMeasureSubtract
+  );
 
-  // Set the initial state
-  void setState(const Eigen::VectorXd & x0);
+  void setState(const Eigen::VectorXd & x0);// Set the initial state
+  Eigen::MatrixXd predict();// Compute a predicted state
+  Eigen::MatrixXd update(const Eigen::VectorXd & z);// Update the estimated state based on measurement
 
-  // Compute a predicted state
-  Eigen::MatrixXd predict();
-
-  // Update the estimated state based on measurement
-  Eigen::MatrixXd update(const Eigen::VectorXd & z);
+  double getNIS() const { return nis; }
 
 private:
-  // Process nonlinear vector function
-  VecVecFunc f;
-  // Observation nonlinear vector function
-  VecVecFunc h;
-  // Jacobian of f()
-  VecMatFunc jacobian_f;
-  Eigen::MatrixXd F;
-  // Jacobian of h()
-  VecMatFunc jacobian_h;
-  Eigen::MatrixXd H;
-  // Process noise covariance matrix
-  VoidMatFunc update_Q;
+  
+  VecVecFunc f;// Process nonlinear vector function
+  VecVecFunc h;// Observation nonlinear vector function
+  VecMatFunc jacobian_f;// Jacobian of f()
+  VecMatFunc jacobian_h;// Jacobian of h()
+  VoidMatFunc update_Q;// Process noise covariance matrix
+  VecMatFunc update_R;// Measurement noise covariance matrix
+  
+  Eigen::MatrixXd F;// Priori error estimate covariance matrix
+  Eigen::MatrixXd H;// Posteriori error estimate covariance matrix
   Eigen::MatrixXd Q;
-  // Measurement noise covariance matrix
-  VecMatFunc update_R;
   Eigen::MatrixXd R;
-
-  // Priori error estimate covariance matrix
   Eigen::MatrixXd P_pri;
-  // Posteriori error estimate covariance matrix
   Eigen::MatrixXd P_post;
-
-  // Kalman gain
   Eigen::MatrixXd K;
-
-  // System dimensions
-  int n;
-
-  // N-size identity
   Eigen::MatrixXd I;
-
-  // Priori state
   Eigen::VectorXd x_pri;
-  // Posteriori state
   Eigen::VectorXd x_post;
+
+  StateAddFunc x_add;
+  MeasureSubtractFunc z_subtract;
+  
+  int n;
+  double nis = 0.0;
+  static Eigen::VectorXd defaultStateAdd(const Eigen::VectorXd & x, const Eigen::VectorXd & dx){
+    return x + dx;
+  }
+
+  static Eigen::VectorXd defaultMeasureSubtract(const Eigen::VectorXd & z, const Eigen::VectorXd & z_pred){
+    return z - z_pred;
+  }
 };
 
 }  // namespace rm_auto_aim
