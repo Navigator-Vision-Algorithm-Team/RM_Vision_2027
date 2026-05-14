@@ -66,6 +66,12 @@ struct Armor
   std::string number;
   float confidence;
   std::string classfication_result;
+
+  // Priority for target selection (1=highest, 5=lowest), used by omniperception
+  int priority = 5;
+
+  // YOLO corner points (4 points: top-left, top-right, bottom-right, bottom-left)
+  std::vector<cv::Point2f> points;
 };
 
 }  // namespace rm_auto_aim

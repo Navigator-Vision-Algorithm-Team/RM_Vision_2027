@@ -1,12 +1,17 @@
 // Copyright 2022 Chen Jun
 // Licensed under the MIT License.
 
-#include <cv_bridge/cv_bridge.h>
+// [Ubuntu 24.04 / ROS2 Jazzy] cv_bridge uses .hpp header
+#include <cv_bridge/cv_bridge.hpp>
+// [Ubuntu 22.04 / ROS2 Humble] cv_bridge uses .h header — swap comments to switch:
+// #include <cv_bridge/cv_bridge.h>
 #include <rmw/qos_profiles.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/convert.h>
 
+// [Ubuntu 24.04 / ROS2 Jazzy] ament_index_cpp header path
 #include <ament_index_cpp/get_package_share_directory.hpp>
+// [Ubuntu 22.04 / ROS2 Humble] — same header path, no change needed
 #include <image_transport/image_transport.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
@@ -31,15 +36,29 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions & options)
 {
   RCLCPP_INFO(this->get_logger(), "Starting DetectorNode!");
 
-  // Detector
-  detector_ = initDetector();
+  // Check if YOLO detection is enabled
+  use_yolo_ = this->declare_parameter("use_yolo", false);
+
+  if (use_yolo_) {
+#ifdef HAS_OPENVINO
+    yolo_detector_ = initYOLODetector();
+    RCLCPP_INFO(this->get_logger(), "Using YOLO detector");
+#else
+    RCLCPP_WARN(this->get_logger(),
+      "use_yolo=true but OpenVINO not found. Falling back to traditional detector.");
+    use_yolo_ = false;
+    detector_ = initDetector();
+#endif
+  } else {
+    detector_ = initDetector();
+    RCLCPP_INFO(this->get_logger(), "Using traditional detector");
+  }
 
   // Armors Publisher
   armors_pub_ = this->create_publisher<auto_aim_interfaces::msg::Armors>(
     "/detector/armors", rclcpp::SensorDataQoS());
 
   // Visualization Marker Publisher
-  // See http://wiki.ros.org/rviz/DisplayTypes/Marker
   armor_marker_.ns = "armors";
   armor_marker_.action = visualization_msgs::msg::Marker::ADD;
   armor_marker_.type = visualization_msgs::msg::Marker::CUBE;
@@ -198,18 +217,60 @@ std::unique_ptr<Detector> ArmorDetectorNode::initDetector()
   return detector;
 }
 
+#ifdef HAS_OPENVINO
+std::unique_ptr<YOLODetector> ArmorDetectorNode::initYOLODetector()
+{
+  auto pkg_path = ament_index_cpp::get_package_share_directory("armor_detector");
+  // [Ubuntu 24.04 / ROS2 Jazzy] OpenVINO IR model (.xml format)
+  // [Ubuntu 22.04 / ROS2 Humble] Same format — OpenVINO IR is cross-platform
+  auto model_path = this->declare_parameter("yolo_model_path", pkg_path + "/model/yolov8.xml");
+  auto device = this->declare_parameter("yolo_device", "CPU");
+  auto score_threshold = this->declare_parameter("yolo_score_threshold", 0.7);
+  auto nms_threshold = this->declare_parameter("yolo_nms_threshold", 0.3);
+  auto input_size = this->declare_parameter("yolo_input_size", 416);
+
+  auto yolo = std::make_unique<YOLODetector>(model_path, device, score_threshold, nms_threshold, input_size);
+
+  // Optional ROI
+  auto use_roi = this->declare_parameter("yolo_use_roi", false);
+  if (use_roi) {
+    int roi_x = this->declare_parameter("yolo_roi_x", 0);
+    int roi_y = this->declare_parameter("yolo_roi_y", 0);
+    int roi_w = this->declare_parameter("yolo_roi_width", -1);
+    int roi_h = this->declare_parameter("yolo_roi_height", -1);
+    yolo->setROI(cv::Rect(roi_x, roi_y, roi_w, roi_h));
+  }
+
+  return yolo;
+}
+#endif  // HAS_OPENVINO
+
 std::vector<Armor> ArmorDetectorNode::detectArmors(
   const sensor_msgs::msg::Image::ConstSharedPtr & img_msg)
 {
   // Convert ROS img to cv::Mat
   auto img = cv_bridge::toCvShare(img_msg, "rgb8")->image;
 
-  // Update params
-  detector_->binary_thres = get_parameter("binary_thres").as_int();
-  detector_->detect_color = get_parameter("detect_color").as_int();
-  detector_->classifier->threshold = get_parameter("classifier_threshold").as_double();
+  std::vector<Armor> armors;
 
-  auto armors = detector_->detect(img);
+#ifdef HAS_OPENVINO
+  if (use_yolo_ && yolo_detector_ != nullptr) {
+    armors = yolo_detector_->detect(img);
+
+    // Run number classification on detected armors
+    if (detector_ && detector_->classifier) {
+      detector_->classifier->classify(armors);
+    }
+  } else
+#endif
+  if (detector_ != nullptr) {
+    // Update params
+    detector_->binary_thres = get_parameter("binary_thres").as_int();
+    detector_->detect_color = get_parameter("detect_color").as_int();
+    detector_->classifier->threshold = get_parameter("classifier_threshold").as_double();
+
+    armors = detector_->detect(img);
+  }
 
   auto final_time = this->now();
   auto latency = (final_time - img_msg->header.stamp).seconds() * 1000;
@@ -217,27 +278,30 @@ std::vector<Armor> ArmorDetectorNode::detectArmors(
 
   // Publish debug info
   if (debug_) {
-    binary_img_pub_.publish(
-      cv_bridge::CvImage(img_msg->header, "mono8", detector_->binary_img).toImageMsg());
+    if (detector_) {
+      binary_img_pub_.publish(
+        cv_bridge::CvImage(img_msg->header, "mono8", detector_->binary_img).toImageMsg());
 
-    // Sort lights and armors data by x coordinate
-    std::sort(
-      detector_->debug_lights.data.begin(), detector_->debug_lights.data.end(),
-      [](const auto & l1, const auto & l2) { return l1.center_x < l2.center_x; });
-    std::sort(
-      detector_->debug_armors.data.begin(), detector_->debug_armors.data.end(),
-      [](const auto & a1, const auto & a2) { return a1.center_x < a2.center_x; });
+      // Sort lights and armors data by x coordinate
+      std::sort(
+        detector_->debug_lights.data.begin(), detector_->debug_lights.data.end(),
+        [](const auto & l1, const auto & l2) { return l1.center_x < l2.center_x; });
+      std::sort(
+        detector_->debug_armors.data.begin(), detector_->debug_armors.data.end(),
+        [](const auto & a1, const auto & a2) { return a1.center_x < a2.center_x; });
 
-    lights_data_pub_->publish(detector_->debug_lights);
-    armors_data_pub_->publish(detector_->debug_armors);
+      lights_data_pub_->publish(detector_->debug_lights);
+      armors_data_pub_->publish(detector_->debug_armors);
 
-    if (!armors.empty()) {
-      auto all_num_img = detector_->getAllNumbersImage();
-      number_img_pub_.publish(
-        *cv_bridge::CvImage(img_msg->header, "mono8", all_num_img).toImageMsg());
+      if (!armors.empty()) {
+        auto all_num_img = detector_->getAllNumbersImage();
+        number_img_pub_.publish(
+          *cv_bridge::CvImage(img_msg->header, "mono8", all_num_img).toImageMsg());
+      }
+
+      detector_->drawResults(img);
     }
 
-    detector_->drawResults(img);
     // Draw camera center
     cv::circle(img, cam_center_, 5, cv::Scalar(255, 0, 0), 2);
     // Draw latency
@@ -287,6 +351,4 @@ void ArmorDetectorNode::publishMarkers()
 #include "rclcpp_components/register_node_macro.hpp"
 
 // Register the component with class_loader.
-// This acts as a sort of entry point, allowing the component to be discoverable when its library
-// is being loaded into a running process.
 RCLCPP_COMPONENTS_REGISTER_NODE(rm_auto_aim::ArmorDetectorNode)

@@ -62,6 +62,11 @@ public:
   // To store another pair of armors message
   double dz, another_r;
 
+  // Convergence state
+  bool is_converged() const;
+  bool is_diverged() const;
+  int update_count;
+
 private:
   void initEKF(const Armor & a);
 
@@ -80,6 +85,9 @@ private:
   int lost_count_;
 
   double last_yaw_;
+
+  // Per-robot-type EKF initialization parameters
+  Eigen::VectorXd getP0Diagonal(const std::string & robot_id, int armor_num) const;
 };
 
 }  // namespace rm_auto_aim

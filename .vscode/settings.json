@@ -1,5 +1,5 @@
 {
-    "cmake.sourceDirectory": "/Users/skiwalllee/code/self_project/RM_Vision_2026/rm_gimbal_description",
+    "cmake.sourceDirectory": "/home/ubuntu/code/RM_Vision_2026/rm_decision",
     "files.associations": {
         "atomic": "cpp"
     },

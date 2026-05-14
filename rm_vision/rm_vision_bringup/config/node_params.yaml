@@ -26,6 +26,20 @@
     classifier_threshold: 0.8
     ignore_classes: ["negative"]
 
+    # YOLO detection (set use_yolo: true to enable)
+    # Requires OpenVINO installed. Model files are in armor_detector/model/
+    use_yolo: false
+    yolo_model_path: ""  # default: <pkg_share>/model/yolov8.xml
+    yolo_device: "CPU"
+    yolo_score_threshold: 0.7
+    yolo_nms_threshold: 0.3
+    yolo_input_size: 416
+    yolo_use_roi: false
+    yolo_roi_x: 0
+    yolo_roi_y: 0
+    yolo_roi_width: -1
+    yolo_roi_height: -1
+
 /armor_tracker:
   ros__parameters:
     target_frame: odom

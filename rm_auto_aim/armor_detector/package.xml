@@ -17,6 +17,9 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
   <depend>sensor_msgs</depend>
+  <!-- [Ubuntu 24.04 / ROS2 Jazzy] ament_index_cpp must be explicitly declared -->
+  <!-- [Ubuntu 22.04 / ROS2 Humble] also works, included for consistency -->
+  <depend>ament_index_cpp</depend>
   <depend>geometry_msgs</depend>
   <depend>visualization_msgs</depend>
   <depend>message_filters</depend>

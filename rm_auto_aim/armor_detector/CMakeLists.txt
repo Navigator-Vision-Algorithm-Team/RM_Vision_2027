@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 project(armor_detector)
 
-## Use C++14
-set(CMAKE_CXX_STANDARD 14)
+## [Ubuntu 24.04 / ROS2 Jazzy] C++17 (required for std::optional, structured bindings, etc.)
+## [Ubuntu 22.04 / ROS2 Humble] C++14 — swap comments to switch:
+## set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ## By adding -Wall and -Werror, the compiler does not ignore warnings anymore,
@@ -20,16 +22,52 @@ find_package(ament_cmake_auto REQUIRED)
 find_package(OpenCV REQUIRED)
 ament_auto_find_build_dependencies()
 
+# [Optional] OpenVINO for YOLO detection
+# Install: https://docs.openvino.ai/2024/get-started/install-openvino.html
+# Ubuntu 22.04: apt install openvino-2024.6.0
+# Ubuntu 24.04: apt install openvino-2024.6.0
+find_package(OpenVINO QUIET)
+if(OpenVINO_FOUND)
+  message(STATUS "Found OpenVINO: YOLO detector enabled")
+  add_definitions(-DHAS_OPENVINO)
+  set(OpenVINO_LIBS openvino::runtime)
+else()
+  message(STATUS "OpenVINO not found: YOLO detector disabled (set use_yolo: false)")
+endif()
+
 ###########
 ## Build ##
 ###########
 
-ament_auto_add_library(${PROJECT_NAME} SHARED
-  DIRECTORY src
+# Core sources (always built)
+set(ARMOR_DETECTOR_SOURCES
+  src/detector.cpp
+  src/detector_node.cpp
+  src/number_classifier.cpp
+  src/pnp_solver.cpp
+  tools/extended_kalman_filter.cpp
+  tools/math_tools.cpp
 )
 
-target_include_directories(${PROJECT_NAME} PUBLIC ${OpenCV_INCLUDE_DIRS})
+# YOLO detector (only if OpenVINO is available)
+if(OpenVINO_FOUND)
+  list(APPEND ARMOR_DETECTOR_SOURCES src/yolo_detector.cpp)
+endif()
+
+ament_auto_add_library(${PROJECT_NAME} SHARED
+  ${ARMOR_DETECTOR_SOURCES}
+)
+
+target_include_directories(${PROJECT_NAME} PUBLIC
+  ${OpenCV_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
+
+if(OpenVINO_FOUND)
+  target_link_libraries(${PROJECT_NAME} ${OpenVINO_LIBS})
+endif()
 
 rclcpp_components_register_node(${PROJECT_NAME}
   PLUGIN rm_auto_aim::ArmorDetectorNode

@@ -11,16 +11,18 @@ ExtendedKalmanFilter::ExtendedKalmanFilter(
   const VecMatFunc & j_h,
   const VoidMatFunc & u_q, 
   const VecMatFunc & u_r, 
-  const Eigen::MatrixXd & P0)
+  const Eigen::MatrixXd & P0,
+  const StateAddFunc & x_add,
+  const MeasureSubtractFunc & z_subtract)
 : f(f),
   h(h),
   jacobian_f(j_f),
   jacobian_h(j_h),
   update_Q(u_q),
   update_R(u_r),
+  P_post(P0),
   x_add(x_add),
-  z_subtract(z_subtract),
-  P_post(P0)
+  z_subtract(z_subtract)
 {
   n = P0.rows();
   I = Eigen::MatrixXd::Identity(n, n);

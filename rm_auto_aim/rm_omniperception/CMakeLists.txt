@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(armor_tracker)
+project(rm_omniperception)
 
 ## [Ubuntu 24.04 / ROS2 Jazzy] C++17
 ## [Ubuntu 22.04 / ROS2 Humble] C++14 — swap comments to switch:
@@ -7,36 +7,28 @@ project(armor_tracker)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-## By adding -Wall and -Werror, the compiler does not ignore warnings anymore,
-## enforcing cleaner code.
 add_definitions(-Wall -Werror)
-
-## Export compile commands for clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-#######################
-## Find dependencies ##
-#######################
-
 find_package(ament_cmake_auto REQUIRED)
+find_package(OpenCV REQUIRED)
 ament_auto_find_build_dependencies()
-
-###########
-## Build ##
-###########
 
 ament_auto_add_library(${PROJECT_NAME} SHARED
   DIRECTORY src
 )
 
-rclcpp_components_register_node(${PROJECT_NAME}
-  PLUGIN rm_auto_aim::ArmorTrackerNode
-  EXECUTABLE ${PROJECT_NAME}_node
+target_include_directories(${PROJECT_NAME} PUBLIC
+  ${OpenCV_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-#############
-## Testing ##
-#############
+target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
+
+rclcpp_components_register_node(${PROJECT_NAME}
+  PLUGIN rm_omniperception::OmniPerceptronNode
+  EXECUTABLE omni_perceptron_node
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -46,15 +38,6 @@ if(BUILD_TESTING)
     ament_cmake_cpplint
   )
   ament_lint_auto_find_test_dependencies()
-
-  # find_package(ament_cmake_gtest)
-  # set(TEST_NAME test_kalman_filter)
-  # ament_add_gtest(${TEST_NAME} test/${TEST_NAME}.cpp)
-  # target_link_libraries(${TEST_NAME} ${PROJECT_NAME})
 endif()
-
-#############
-## Install ##
-#############
 
 ament_auto_package()

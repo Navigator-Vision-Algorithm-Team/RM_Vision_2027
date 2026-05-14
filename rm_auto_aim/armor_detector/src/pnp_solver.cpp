@@ -35,11 +35,20 @@ bool PnPSolver::solvePnP(const Armor & armor, cv::Mat & rvec, cv::Mat & tvec)
 {
   std::vector<cv::Point2f> image_armor_points;
 
-  // Fill in image points
-  image_armor_points.emplace_back(armor.left_light.bottom);
-  image_armor_points.emplace_back(armor.left_light.top);
-  image_armor_points.emplace_back(armor.right_light.top);
-  image_armor_points.emplace_back(armor.right_light.bottom);
+  // Use YOLO corner points if available, otherwise use lightbar points
+  if (!armor.points.empty() && armor.points.size() == 4) {
+    // YOLO keypoints: top-left, top-right, bottom-right, bottom-left
+    // PnP expects: bottom-left, top-left, top-right, bottom-right (clockwise from bottom-left)
+    image_armor_points.emplace_back(armor.points[3]);  // bottom-left
+    image_armor_points.emplace_back(armor.points[0]);  // top-left
+    image_armor_points.emplace_back(armor.points[1]);  // top-right
+    image_armor_points.emplace_back(armor.points[2]);  // bottom-right
+  } else {
+    image_armor_points.emplace_back(armor.left_light.bottom);
+    image_armor_points.emplace_back(armor.left_light.top);
+    image_armor_points.emplace_back(armor.right_light.top);
+    image_armor_points.emplace_back(armor.right_light.bottom);
+  }
 
   // Solve pnp
   auto object_points = armor.type == ArmorType::SMALL ? small_armor_points_ : large_armor_points_;
