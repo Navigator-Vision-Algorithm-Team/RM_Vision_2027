@@ -1,91 +1,57 @@
-// Copyright 2022 Chen Jun
-
-#ifndef ARMOR_PROCESSOR__KALMAN_FILTER_HPP_
-#define ARMOR_PROCESSOR__KALMAN_FILTER_HPP_
+#ifndef ARMOR_TRACKER__EXTENDED_KALMAN_FILTER_HPP_
+#define ARMOR_TRACKER__EXTENDED_KALMAN_FILTER_HPP_
 
 #include <Eigen/Dense>
+#include <deque>
 #include <functional>
+#include <map>
 
 namespace rm_auto_aim
 {
-
 class ExtendedKalmanFilter
 {
 public:
+  Eigen::VectorXd x;
+  Eigen::MatrixXd P;
+
   ExtendedKalmanFilter() = default;
 
-  using VecVecFunc = std::function<Eigen::VectorXd(const Eigen::VectorXd &)>;
-  using VecMatFunc = std::function<Eigen::MatrixXd(const Eigen::VectorXd &)>;
-  using VoidMatFunc = std::function<Eigen::MatrixXd()>;
+  ExtendedKalmanFilter(
+    const Eigen::VectorXd & x0, const Eigen::MatrixXd & P0,
+    std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> x_add =
+      [](const Eigen::VectorXd & a, const Eigen::VectorXd & b) { return a + b; });
 
-  // State addition function:
-  // x_new = x_add(x, dx)
-  // Default behavior: x + dx
-  using StateAddFunc = std::function<Eigen::VectorXd(
-    const Eigen::VectorXd &,
-    const Eigen::VectorXd &
-  )>;
+  Eigen::VectorXd predict(const Eigen::MatrixXd & F, const Eigen::MatrixXd & Q);
 
-  // Measurement residual function:
-  // residual = z_subtract(z, z_pred)
-  // Default behavior: z - z_pred
-  using MeasureSubtractFunc = std::function<Eigen::VectorXd(
-    const Eigen::VectorXd &, 
-    const Eigen::VectorXd &
-  )>;
+  Eigen::VectorXd predict(
+    const Eigen::MatrixXd & F, const Eigen::MatrixXd & Q,
+    std::function<Eigen::VectorXd(const Eigen::VectorXd &)> f);
 
-  explicit ExtendedKalmanFilter(
-    const VecVecFunc & f, 
-    const VecVecFunc & h, 
-    const VecMatFunc & j_f, 
-    const VecMatFunc & j_h,
-    const VoidMatFunc & u_q, 
-    const VecMatFunc & u_r, 
-    const Eigen::MatrixXd & P0,
-    const StateAddFunc & x_add = defaultStateAdd,
-    const MeasureSubtractFunc & z_subtract = defaultMeasureSubtract
-  );
+  Eigen::VectorXd update(
+    const Eigen::VectorXd & z, const Eigen::MatrixXd & H, const Eigen::MatrixXd & R,
+    std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract =
+      [](const Eigen::VectorXd & a, const Eigen::VectorXd & b) { return a - b; });
 
-  void setState(const Eigen::VectorXd & x0);// Set the initial state
-  Eigen::MatrixXd predict();// Compute a predicted state
-  Eigen::MatrixXd update(const Eigen::VectorXd & z);// Update the estimated state based on measurement
+  Eigen::VectorXd update(
+    const Eigen::VectorXd & z, const Eigen::MatrixXd & H, const Eigen::MatrixXd & R,
+    std::function<Eigen::VectorXd(const Eigen::VectorXd &)> h,
+    std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract =
+      [](const Eigen::VectorXd & a, const Eigen::VectorXd & b) { return a - b; });
 
-  double getNIS() const { return nis; }
+  std::map<std::string, double> data;
+  std::deque<int> recent_nis_failures{0};
+  size_t window_size = 100;
+  double last_nis;
 
 private:
-  
-  VecVecFunc f;// Process nonlinear vector function
-  VecVecFunc h;// Observation nonlinear vector function
-  VecMatFunc jacobian_f;// Jacobian of f()
-  VecMatFunc jacobian_h;// Jacobian of h()
-  VoidMatFunc update_Q;// Process noise covariance matrix
-  VecMatFunc update_R;// Measurement noise covariance matrix
-  
-  Eigen::MatrixXd F;// Priori error estimate covariance matrix
-  Eigen::MatrixXd H;// Posteriori error estimate covariance matrix
-  Eigen::MatrixXd Q;
-  Eigen::MatrixXd R;
-  Eigen::MatrixXd P_pri;
-  Eigen::MatrixXd P_post;
-  Eigen::MatrixXd K;
   Eigen::MatrixXd I;
-  Eigen::VectorXd x_pri;
-  Eigen::VectorXd x_post;
+  std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> x_add;
 
-  StateAddFunc x_add;
-  MeasureSubtractFunc z_subtract;
-  
-  int n;
-  double nis = 0.0;
-  static Eigen::VectorXd defaultStateAdd(const Eigen::VectorXd & x, const Eigen::VectorXd & dx){
-    return x + dx;
-  }
-
-  static Eigen::VectorXd defaultMeasureSubtract(const Eigen::VectorXd & z, const Eigen::VectorXd & z_pred){
-    return z - z_pred;
-  }
+  int nees_count_ = 0;
+  int nis_count_ = 0;
+  int total_count_ = 0;
 };
 
 }  // namespace rm_auto_aim
 
-#endif  // ARMOR_PROCESSOR__KALMAN_FILTER_HPP_
+#endif  // ARMOR_TRACKER__EXTENDED_KALMAN_FILTER_HPP_

@@ -1,8 +1,19 @@
 cmake_minimum_required(VERSION 3.8)
 project(hik_camera)
 
-## Use C++14
-set(CMAKE_CXX_STANDARD 14)
+# Auto-detect ROS distro and set C++ standard + preprocessor define
+if(DEFINED ENV{ROS_DISTRO})
+  set(ROS_DISTRO $ENV{ROS_DISTRO})
+else()
+  set(ROS_DISTRO "humble")
+endif()
+if(ROS_DISTRO STREQUAL "humble")
+  set(CMAKE_CXX_STANDARD 14)
+  add_definitions(-DROS_DISTRO_HUMBLE)
+else()
+  set(CMAKE_CXX_STANDARD 17)
+  add_definitions(-DROS_DISTRO_JAZZY)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ## By adding -Wall and -Werror, the compiler does not ignore warnings anymore,

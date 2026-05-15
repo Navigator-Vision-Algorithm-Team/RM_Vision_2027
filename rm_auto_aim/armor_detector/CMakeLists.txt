@@ -1,10 +1,19 @@
 cmake_minimum_required(VERSION 3.10)
 project(armor_detector)
 
-## [Ubuntu 24.04 / ROS2 Jazzy] C++17 (required for std::optional, structured bindings, etc.)
-## [Ubuntu 22.04 / ROS2 Humble] C++14 — swap comments to switch:
-set(CMAKE_CXX_STANDARD 14)
-# set(CMAKE_CXX_STANDARD 17)
+# Auto-detect ROS distro and set C++ standard + preprocessor define
+if(DEFINED ENV{ROS_DISTRO})
+  set(ROS_DISTRO $ENV{ROS_DISTRO})
+else()
+  set(ROS_DISTRO "humble")
+endif()
+if(ROS_DISTRO STREQUAL "humble")
+  set(CMAKE_CXX_STANDARD 14)
+  add_definitions(-DROS_DISTRO_HUMBLE)
+else()
+  set(CMAKE_CXX_STANDARD 17)
+  add_definitions(-DROS_DISTRO_JAZZY)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ## By adding -Wall and -Werror, the compiler does not ignore warnings anymore,
@@ -45,7 +54,6 @@ set(ARMOR_DETECTOR_SOURCES
   src/detector_node.cpp
   src/number_classifier.cpp
   src/pnp_solver.cpp
-  tools/extended_kalman_filter.cpp
   tools/math_tools.cpp
 )
 

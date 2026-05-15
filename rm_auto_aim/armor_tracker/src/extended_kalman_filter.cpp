@@ -1,70 +1,92 @@
-// Copyright 2022 Chen Jun
-
 #include "armor_tracker/extended_kalman_filter.hpp"
+
+#include <numeric>
 
 namespace rm_auto_aim
 {
 ExtendedKalmanFilter::ExtendedKalmanFilter(
-  const VecVecFunc & f, 
-  const VecVecFunc & h, 
-  const VecMatFunc & j_f, 
-  const VecMatFunc & j_h,
-  const VoidMatFunc & u_q, 
-  const VecMatFunc & u_r, 
-  const Eigen::MatrixXd & P0,
-  const StateAddFunc & x_add,
-  const MeasureSubtractFunc & z_subtract)
-: f(f),
-  h(h),
-  jacobian_f(j_f),
-  jacobian_h(j_h),
-  update_Q(u_q),
-  update_R(u_r),
-  P_post(P0),
-  x_add(x_add),
-  z_subtract(z_subtract)
+  const Eigen::VectorXd & x0, const Eigen::MatrixXd & P0,
+  std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> x_add)
+: x(x0), P(P0), I(Eigen::MatrixXd::Identity(x0.rows(), x0.rows())), x_add(x_add)
 {
-  n = P0.rows();
-  I = Eigen::MatrixXd::Identity(n, n);
-  x_pri = Eigen::VectorXd::Zero(n);
-  x_post = Eigen::VectorXd::Zero(n);
+  data["residual_yaw"] = 0.0;
+  data["residual_pitch"] = 0.0;
+  data["residual_distance"] = 0.0;
+  data["residual_angle"] = 0.0;
+  data["nis"] = 0.0;
+  data["nees"] = 0.0;
+  data["nis_fail"] = 0.0;
+  data["nees_fail"] = 0.0;
+  data["recent_nis_failures"] = 0.0;
 }
 
-void ExtendedKalmanFilter::setState(const Eigen::VectorXd & x0) { x_post = x0; }
-
-Eigen::MatrixXd ExtendedKalmanFilter::predict()
+Eigen::VectorXd ExtendedKalmanFilter::predict(const Eigen::MatrixXd & F, const Eigen::MatrixXd & Q)
 {
-  F = jacobian_f(x_post), Q = update_Q();
-
-  x_pri = f(x_post);
-  P_pri = F * P_post * F.transpose() + Q;
-
-  // handle the case when there will be no measurement before the next predict
-  x_post = x_pri;
-  P_post = P_pri;
-
-  return x_pri;
+  return predict(F, Q, [&](const Eigen::VectorXd & x) { return F * x; });
 }
 
-Eigen::MatrixXd ExtendedKalmanFilter::update(const Eigen::VectorXd & z)
+Eigen::VectorXd ExtendedKalmanFilter::predict(
+  const Eigen::MatrixXd & F, const Eigen::MatrixXd & Q,
+  std::function<Eigen::VectorXd(const Eigen::VectorXd &)> f)
 {
-  H = jacobian_h(x_pri);
-  R = update_R(z);
+  P = F * P * F.transpose() + Q;
+  x = f(x);
+  return x;
+}
 
-  Eigen::VectorXd z_pred = h(x_pri);
-  Eigen::VectorXd residual = z_subtract(z, z_pred);
+Eigen::VectorXd ExtendedKalmanFilter::update(
+  const Eigen::VectorXd & z, const Eigen::MatrixXd & H, const Eigen::MatrixXd & R,
+  std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract)
+{
+  return update(z, H, R, [&](const Eigen::VectorXd & x) { return H * x; }, z_subtract);
+}
 
-  Eigen::MatrixXd S = H * P_pri * H.transpose() + R;
-  K = P_pri * H.transpose() * S.inverse();
+Eigen::VectorXd ExtendedKalmanFilter::update(
+  const Eigen::VectorXd & z, const Eigen::MatrixXd & H, const Eigen::MatrixXd & R,
+  std::function<Eigen::VectorXd(const Eigen::VectorXd &)> h,
+  std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract)
+{
+  Eigen::VectorXd x_prior = x;
+  Eigen::MatrixXd K = P * H.transpose() * (H * P * H.transpose() + R).inverse();
 
-  x_post = x_add(x_pri, K * residual);
+  // Joseph form for numerical stability
+  P = (I - K * H) * P * (I - K * H).transpose() + K * R * K.transpose();
 
-  Eigen::MatrixXd I_KH = I - K * H;
-  P_post = I_KH * P_pri * I_KH.transpose() + K * R * K.transpose();
+  x = x_add(x, K * z_subtract(z, h(x)));
 
-  nis = residual.transpose() * S.inverse() * residual;
+  // Chi-squared NIS/NEES tests
+  Eigen::VectorXd residual = z_subtract(z, h(x));
+  Eigen::MatrixXd S = H * P * H.transpose() + R;
+  double nis = residual.transpose() * S.inverse() * residual;
+  double nees = (x - x_prior).transpose() * P.inverse() * (x - x_prior);
 
-  return x_post;
+  // Chi-squared threshold (df=4, 95% confidence)
+  constexpr double nis_threshold = 0.711;
+  constexpr double nees_threshold = 0.711;
+
+  if (nis > nis_threshold) nis_count_++, data["nis_fail"] = 1;
+  if (nees > nees_threshold) nees_count_++, data["nees_fail"] = 1;
+  total_count_++;
+  last_nis = nis;
+
+  recent_nis_failures.push_back(nis > nis_threshold ? 1 : 0);
+
+  if (recent_nis_failures.size() > window_size) {
+    recent_nis_failures.pop_front();
+  }
+
+  int recent_failures = std::accumulate(recent_nis_failures.begin(), recent_nis_failures.end(), 0);
+  double recent_rate = static_cast<double>(recent_failures) / recent_nis_failures.size();
+
+  data["residual_yaw"] = residual[0];
+  data["residual_pitch"] = residual[1];
+  data["residual_distance"] = residual[2];
+  data["residual_angle"] = residual[3];
+  data["nis"] = nis;
+  data["nees"] = nees;
+  data["recent_nis_failures"] = recent_rate;
+
+  return x;
 }
 
 }  // namespace rm_auto_aim

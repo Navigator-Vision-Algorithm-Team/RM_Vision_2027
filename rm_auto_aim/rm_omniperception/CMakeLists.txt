@@ -1,10 +1,19 @@
 cmake_minimum_required(VERSION 3.10)
 project(rm_omniperception)
 
-## [Ubuntu 24.04 / ROS2 Jazzy] C++17
-## [Ubuntu 22.04 / ROS2 Humble] C++14 — swap comments to switch:
-## set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_STANDARD 17)
+# Auto-detect ROS distro and set C++ standard + preprocessor define
+if(DEFINED ENV{ROS_DISTRO})
+  set(ROS_DISTRO $ENV{ROS_DISTRO})
+else()
+  set(ROS_DISTRO "humble")
+endif()
+if(ROS_DISTRO STREQUAL "humble")
+  set(CMAKE_CXX_STANDARD 14)
+  add_definitions(-DROS_DISTRO_HUMBLE)
+else()
+  set(CMAKE_CXX_STANDARD 17)
+  add_definitions(-DROS_DISTRO_JAZZY)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_definitions(-Wall -Werror)

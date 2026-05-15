@@ -1,7 +1,5 @@
-// Copyright 2022 Chen Jun
 #include "armor_tracker/tracker_node.hpp"
 
-// STD
 #include <memory>
 #include <vector>
 
@@ -15,106 +13,12 @@ ArmorTrackerNode::ArmorTrackerNode(const rclcpp::NodeOptions & options)
   // Maximum allowable armor distance in the XOY plane
   max_armor_distance_ = this->declare_parameter("max_armor_distance", 10.0);
 
-  // Tracker
+  // Tracker parameters
   double max_match_distance = this->declare_parameter("tracker.max_match_distance", 0.15);
   double max_match_yaw_diff = this->declare_parameter("tracker.max_match_yaw_diff", 1.0);
   tracker_ = std::make_unique<Tracker>(max_match_distance, max_match_yaw_diff);
   tracker_->tracking_thres = this->declare_parameter("tracker.tracking_thres", 5);
   lost_time_thres_ = this->declare_parameter("tracker.lost_time_thres", 0.3);
-
-  // EKF - 11D state vector:
-  // [xc, vxc, yc, vyc, zc, vzc, yaw, vyaw, r1, r2_diff, z_diff]
-  // xc, yc, zc = robot center position
-  // yaw = rotation angle
-  // r1 = main radius
-  // r2_diff = r2 - r1 (for 4-armor balance步兵)
-  // z_diff = z2 - z1 (height difference for 4-armor robots)
-  //
-  // Measurement: [xa, ya, za, yaw] (single armor plate position + angle)
-
-  auto f = [this](const Eigen::VectorXd & x) {
-    Eigen::VectorXd x_new = x;
-    x_new(0) += x(1) * dt_;   // xc
-    x_new(2) += x(3) * dt_;   // yc
-    x_new(4) += x(5) * dt_;   // zc
-    x_new(6) += x(7) * dt_;   // yaw
-    return x_new;
-  };
-
-  auto j_f = [this](const Eigen::VectorXd &) {
-    Eigen::MatrixXd f_mat(11, 11);
-    f_mat.setIdentity();
-    f_mat(0, 1) = dt_;   // dxc/dvxc
-    f_mat(2, 3) = dt_;   // dyc/dvyc
-    f_mat(4, 5) = dt_;   // dzc/dvzc
-    f_mat(6, 7) = dt_;   // dyaw/dvyaw
-    return f_mat;
-  };
-
-  auto h = [](const Eigen::VectorXd & x) {
-    Eigen::VectorXd z(4);
-    double xc = x(0), yc = x(2), zc = x(4);
-    double yaw = x(6), r1 = x(8);
-    z(0) = xc - r1 * cos(yaw);  // xa
-    z(1) = yc - r1 * sin(yaw);  // ya
-    z(2) = zc;                   // za
-    z(3) = yaw;                  // yaw
-    return z;
-  };
-
-  auto j_h = [](const Eigen::VectorXd & x) {
-    Eigen::MatrixXd h_mat(4, 11);
-    h_mat.setZero();
-    double yaw = x(6), r1 = x(8);
-    h_mat(0, 0) = 1;                         // dxa/dxc
-    h_mat(0, 6) = r1 * sin(yaw);             // dxa/dyaw
-    h_mat(0, 8) = -cos(yaw);                 // dxa/dr1
-    h_mat(1, 2) = 1;                         // dya/dyc
-    h_mat(1, 6) = -r1 * cos(yaw);            // dya/dyaw
-    h_mat(1, 8) = -sin(yaw);                 // dya/dr1
-    h_mat(2, 4) = 1;                         // dza/dzc
-    h_mat(3, 6) = 1;                         // dyaw/dyaw
-    return h_mat;
-  };
-
-  // Process noise
-  s2qxyz_ = declare_parameter("ekf.sigma2_q_xyz", 20.0);
-  s2qyaw_ = declare_parameter("ekf.sigma2_q_yaw", 100.0);
-  s2qr_ = declare_parameter("ekf.sigma2_q_r", 800.0);
-  auto u_q = [this]() {
-    Eigen::MatrixXd q(11, 11);
-    q.setZero();
-    double t = dt_, x = s2qxyz_, y = s2qyaw_, r = s2qr_;
-    double q_x_x = pow(t, 4) / 4 * x, q_x_vx = pow(t, 3) / 2 * x, q_vx_vx = pow(t, 2) * x;
-    double q_y_y = pow(t, 4) / 4 * y, q_y_vy = pow(t, 3) / 2 * y, q_vy_vy = pow(t, 2) * y;
-    double q_r = pow(t, 4) / 4 * r;
-    // xc, vxc
-    q(0, 0) = q_x_x; q(0, 1) = q_x_vx; q(1, 0) = q_x_vx; q(1, 1) = q_vx_vx;
-    // yc, vyc
-    q(2, 2) = q_x_x; q(2, 3) = q_x_vx; q(3, 2) = q_x_vx; q(3, 3) = q_vx_vx;
-    // zc, vzc
-    q(4, 4) = q_x_x; q(4, 5) = q_x_vx; q(5, 4) = q_x_vx; q(5, 5) = q_vx_vx;
-    // yaw, vyaw
-    q(6, 6) = q_y_y; q(6, 7) = q_y_vy; q(7, 6) = q_y_vy; q(7, 7) = q_vy_vy;
-    // r1
-    q(8, 8) = q_r;
-    return q;
-  };
-
-  // Measurement noise
-  r_xyz_factor = declare_parameter("ekf.r_xyz_factor", 0.05);
-  r_yaw = declare_parameter("ekf.r_yaw", 0.02);
-  auto u_r = [this](const Eigen::VectorXd & z) {
-    Eigen::DiagonalMatrix<double, 4> r_mat;
-    double x = r_xyz_factor;
-    r_mat.diagonal() << abs(x * z[0]), abs(x * z[1]), abs(x * z[2]), r_yaw;
-    return static_cast<Eigen::MatrixXd>(r_mat);
-  };
-
-  // P0 - initial error estimate covariance
-  Eigen::DiagonalMatrix<double, 11> p0;
-  p0.setIdentity();
-  tracker_->ekf = ExtendedKalmanFilter{f, h, j_f, j_h, u_q, u_r, p0};
 
   // Reset tracker service
   using std::placeholders::_1;
@@ -136,7 +40,6 @@ ArmorTrackerNode::ArmorTrackerNode(const rclcpp::NodeOptions & options)
     this->get_node_base_interface(), this->get_node_timers_interface());
   tf2_buffer_->setCreateTimerInterface(timer_interface);
   tf2_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf2_buffer_);
-  // subscriber and filter
   armors_sub_.subscribe(this, "/detector/armors", rmw_qos_profile_sensor_data);
   target_frame_ = this->declare_parameter("target_frame", "odom");
   tf2_filter_ = std::make_shared<tf2_filter>(
@@ -144,10 +47,8 @@ ArmorTrackerNode::ArmorTrackerNode(const rclcpp::NodeOptions & options)
     this->get_node_clock_interface(), std::chrono::duration<int>(1));
   tf2_filter_->registerCallback(&ArmorTrackerNode::armorsCallback, this);
 
-  // Measurement publisher (for debug usage)
+  // Publishers
   info_pub_ = this->create_publisher<auto_aim_interfaces::msg::TrackerInfo>("/tracker/info", 10);
-
-  // Publisher
   target_pub_ = this->create_publisher<auto_aim_interfaces::msg::Target>(
     "/tracker/target", rclcpp::SensorDataQoS());
 
@@ -182,7 +83,7 @@ ArmorTrackerNode::ArmorTrackerNode(const rclcpp::NodeOptions & options)
 
 void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::SharedPtr armors_msg)
 {
-  // Tranform armor position from image frame to world coordinate
+  // Transform armor position from image frame to world coordinate
   for (auto & armor : armors_msg->armors) {
     geometry_msgs::msg::PoseStamped ps;
     ps.header = armors_msg->header;
@@ -221,7 +122,7 @@ void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::Sh
     dt_ = (time - last_time_).seconds();
     tracker_->lost_thres = static_cast<int>(lost_time_thres_ / dt_);
 
-    // Check for divergence
+    // Check for divergence (sp_vision_25 style)
     if (tracker_->is_diverged()) {
       RCLCPP_WARN(get_logger(), "Target diverged, resetting tracker!");
       tracker_->tracker_state = Tracker::LOST;
@@ -231,7 +132,7 @@ void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::Sh
       return;
     }
 
-    tracker_->update(armors_msg);
+    tracker_->update(armors_msg, dt_);
 
     // Publish Info
     info_msg.position_diff = tracker_->info_position_diff;
@@ -261,8 +162,8 @@ void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::Sh
       target_msg.yaw = state(6);
       target_msg.v_yaw = state(7);
       target_msg.radius_1 = state(8);
-      target_msg.radius_2 = state(8) + state(9);  // r1 + r2_diff
-      target_msg.dz = state(10);                   // z_diff
+      target_msg.radius_2 = state(8) + state(9);
+      target_msg.dz = state(10);
     }
   }
 

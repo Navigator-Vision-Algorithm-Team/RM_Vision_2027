@@ -1,17 +1,12 @@
-// Copyright 2022 Chen Jun
+#ifndef ARMOR_TRACKER__TRACKER_HPP_
+#define ARMOR_TRACKER__TRACKER_HPP_
 
-#ifndef ARMOR_PROCESSOR__TRACKER_HPP_
-#define ARMOR_PROCESSOR__TRACKER_HPP_
-
-// Eigen
 #include <Eigen/Eigen>
 
-// ROS
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/quaternion.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
 
-// STD
 #include <memory>
 #include <string>
 
@@ -33,8 +28,7 @@ public:
   using Armor = auto_aim_interfaces::msg::Armor;
 
   void init(const Armors::SharedPtr & armors_msg);
-
-  void update(const Armors::SharedPtr & armors_msg);
+  void update(const Armors::SharedPtr & armors_msg, double dt = 0.01);
 
   ExtendedKalmanFilter ekf;
 
@@ -56,22 +50,32 @@ public:
   double info_yaw_diff;
 
   Eigen::VectorXd measurement;
-
   Eigen::VectorXd target_state;
 
-  // To store another pair of armors message
   double dz, another_r;
 
-  // Convergence state
+  // Convergence / divergence (sp_vision_25 style)
   bool is_converged() const;
   bool is_diverged() const;
+  bool jumped = false;
   int update_count;
 
 private:
+  // -- EKF helpers (sp_vision_25 Target pattern) --
+  void predict(double dt);
+  void update_ypda(const Armor & armor, int id);
+
+  // Compute single armor position in cartesian from state vector
+  Eigen::Vector3d h_armor_xyz(const Eigen::VectorXd & x, int id) const;
+
+  // Full measurement Jacobian: d(ypd, angle)/d(state)
+  Eigen::MatrixXd h_jacobian(const Eigen::VectorXd & x, int id) const;
+
+  // All armor (x,y,z,angle) from current EKF state
+  std::vector<Eigen::Vector4d> armor_xyza_list() const;
+
   void initEKF(const Armor & a);
-
   void updateArmorsNum(const Armor & a);
-
   void handleArmorJump(const Armor & a);
 
   double orientationToYaw(const geometry_msgs::msg::Quaternion & q);
@@ -86,10 +90,16 @@ private:
 
   double last_yaw_;
 
-  // Per-robot-type EKF initialization parameters
-  Eigen::VectorXd getP0Diagonal(const std::string & robot_id, int armor_num) const;
+  // sp_vision_25 Target state tracking
+  bool is_converged_ = false;
+  int last_id_ = 0;
+  bool is_switch_ = false;
+  int switch_count_ = 0;
+
+  // Outpost speed clamping
+  static constexpr double outpost_max_v_yaw = 2.51;
 };
 
 }  // namespace rm_auto_aim
 
-#endif  // ARMOR_PROCESSOR__TRACKER_HPP_
+#endif  // ARMOR_TRACKER__TRACKER_HPP_

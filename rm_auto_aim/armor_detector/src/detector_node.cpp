@@ -1,10 +1,12 @@
 // Copyright 2022 Chen Jun
 // Licensed under the MIT License.
 
-// [Ubuntu 24.04 / ROS2 Jazzy] cv_bridge uses .hpp header
-// #include <cv_bridge/cv_bridge.hpp>
-// [Ubuntu 22.04 / ROS2 Humble] cv_bridge uses .h header — swap comments to switch:
+// cv_bridge header: Humble provides .h, Jazzy provides .hpp
+#ifdef ROS_DISTRO_HUMBLE
 #include <cv_bridge/cv_bridge.h>
+#else
+#include <cv_bridge/cv_bridge.hpp>
+#endif
 #include <rmw/qos_profiles.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/convert.h>
@@ -19,7 +21,7 @@
 #include <rclcpp/qos.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-// STD
+// STDPartial
 #include <algorithm>
 #include <map>
 #include <memory>
