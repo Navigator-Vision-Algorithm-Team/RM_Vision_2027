@@ -3,8 +3,8 @@ project(armor_tracker)
 
 ## [Ubuntu 24.04 / ROS2 Jazzy] C++17
 ## [Ubuntu 22.04 / ROS2 Humble] C++14 — swap comments to switch:
-## set(CMAKE_CXX_STANDARD 14)
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 14)
+# set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ## By adding -Wall and -Werror, the compiler does not ignore warnings anymore,

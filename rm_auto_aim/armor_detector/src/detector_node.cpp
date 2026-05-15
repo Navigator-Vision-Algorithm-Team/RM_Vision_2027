@@ -2,9 +2,9 @@
 // Licensed under the MIT License.
 
 // [Ubuntu 24.04 / ROS2 Jazzy] cv_bridge uses .hpp header
-#include <cv_bridge/cv_bridge.hpp>
+// #include <cv_bridge/cv_bridge.hpp>
 // [Ubuntu 22.04 / ROS2 Humble] cv_bridge uses .h header — swap comments to switch:
-// #include <cv_bridge/cv_bridge.h>
+#include <cv_bridge/cv_bridge.h>
 #include <rmw/qos_profiles.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/convert.h>
