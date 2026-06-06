@@ -3,11 +3,24 @@
 
 #include <chrono>
 #include <list>
+#include <string>
+#include <vector>
 
+#include "io/camera.hpp"
 #include "tasks/auto_aim/armor.hpp"
 
 namespace omniperception
 {
+
+struct OmniCameraConfig
+{
+  io::Camera * camera;
+  double mount_yaw;    // degrees
+  double mount_pitch;  // degrees
+  double fov_h;        // degrees
+  double fov_v;        // degrees
+};
+
 //一个识别结果可能包含多个armor,需要排序和过滤。armors, timestamp, delta_yaw, delta_pitch
 struct DetectionResult
 {

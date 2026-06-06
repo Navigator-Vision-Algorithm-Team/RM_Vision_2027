@@ -93,6 +93,16 @@ std::list<Target> Tracker::track(
 
   std::list<Target> targets = {target_};
   return targets;
+
+// 预测的位置和速度：(x, vx, y, vy, z, vz)
+// 预测的角度和角速度：(a, w)
+// 几何参数：半径 r、长短轴差 l、高度差 h
+// 目标类型信息：机器人名称、装甲板类型、优先级等
+// 卡尔曼滤波器状态：完整的 EKF 状态向量和协方差矩阵
+// 收敛状态：是否已经稳定跟踪
+// ````
+
+
 }
 
 std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
@@ -238,7 +248,7 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   // 根据兵种优化初始化参数
   auto is_balance = (armor.type == ArmorType::big) &&
                     (armor.name == ArmorName::three || armor.name == ArmorName::four ||
-                     armor.name == ArmorName::five);
+                     armor.name == ArmorName::five);// 知道兵种，并使用对应的卡尔曼参数。
 
   if (is_balance) {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};

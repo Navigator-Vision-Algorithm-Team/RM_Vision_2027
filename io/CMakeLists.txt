@@ -43,7 +43,6 @@ find_package(rclcpp QUIET)
 find_package(std_msgs QUIET)
 find_package(rosidl_typesupport_cpp QUIET)
 find_package(sp_msgs QUIET)
-
 # 如果找不到 ROS 环境，则跳过 ROS 相关的部分
 if(NOT ament_cmake_FOUND OR NOT rclcpp_FOUND OR NOT std_msgs_FOUND OR NOT rosidl_typesupport_cpp_FOUND OR NOT sp_msgs_FOUND)
     message(WARNING "ROS2 not found, skipping ROS2 specific code.")
@@ -54,6 +53,16 @@ else()
     target_sources(io PRIVATE ros2/publish2nav.cpp ros2/ros2.cpp ros2/subscribe2nav.cpp)
 
     # 设置 ROS2 依赖
-    include_directories(${std_msgs_INCLUDE_DIRS})
-    ament_target_dependencies(io rclcpp std_msgs sp_msgs)
+    target_include_directories(io PUBLIC
+      ${rclcpp_INCLUDE_DIRS}
+      ${std_msgs_INCLUDE_DIRS}
+      ${sp_msgs_INCLUDE_DIRS}
+      ${rosidl_typesupport_cpp_INCLUDE_DIRS}
+    )
+    target_link_libraries(io
+      ${rclcpp_LIBRARIES}
+      ${std_msgs_LIBRARIES}
+      ${sp_msgs_LIBRARIES}
+      ${rosidl_typesupport_cpp_LIBRARIES}
+    )
 endif()

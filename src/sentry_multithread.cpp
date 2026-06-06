@@ -11,7 +11,6 @@
 #include "io/camera.hpp"
 #include "io/cboard.hpp"
 #include "io/ros2/ros2.hpp"
-#include "io/usbcamera/usbcamera.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
@@ -25,6 +24,7 @@
 #include "tools/math_tools.hpp"
 #include "tools/plotter.hpp"
 #include "tools/recorder.hpp"
+#include "tools/yaml.hpp"
 
 using namespace std::chrono;
 
@@ -45,13 +45,41 @@ int main(int argc, char * argv[])
   }
   auto config_path = cli.get<std::string>(0);
 
+  auto yaml = tools::load(config_path);
+
   io::ROS2 ros2;
   io::CBoard cboard(config_path);
-  io::Camera camera(config_path);
-  io::USBCamera usbcam1("video0", config_path);
-  io::USBCamera usbcam2("video2", config_path);
-  io::USBCamera usbcam3("video4", config_path);
-  io::USBCamera usbcam4("video6", config_path);
+  io::Camera camera(config_path, "main");
+
+  // 读取全向感知相机配置
+  int omni_count = 0;
+  if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
+
+  std::vector<std::unique_ptr<io::Camera>> omni_cameras;
+  std::vector<omniperception::OmniCameraConfig> omni_configs;
+
+  for (int i = 1; i <= omni_count; i++) {
+    auto sursign = "omni" + std::to_string(i);
+    auto cam = std::make_unique<io::Camera>(config_path, sursign);
+
+    omniperception::OmniCameraConfig cfg;
+    cfg.camera = cam.get();
+    cfg.mount_yaw = yaml["omni_mount_yaw_" + std::to_string(i)]
+                      ? yaml["omni_mount_yaw_" + std::to_string(i)].as<double>()
+                      : 0.0;
+    cfg.mount_pitch = yaml["omni_mount_pitch_" + std::to_string(i)]
+                        ? yaml["omni_mount_pitch_" + std::to_string(i)].as<double>()
+                        : 0.0;
+    cfg.fov_h = yaml["omni_fov_h_" + std::to_string(i)]
+                  ? yaml["omni_fov_h_" + std::to_string(i)].as<double>()
+                  : 54.2;
+    cfg.fov_v = yaml["omni_fov_v_" + std::to_string(i)]
+                  ? yaml["omni_fov_v_" + std::to_string(i)].as<double>()
+                  : 44.5;
+
+    omni_configs.push_back(cfg);
+    omni_cameras.push_back(std::move(cam));
+  }
 
   auto_aim::YOLO yolo(config_path, false);
   auto_aim::Solver solver(config_path);
@@ -60,7 +88,7 @@ int main(int argc, char * argv[])
   auto_aim::Shooter shooter(config_path);
 
   omniperception::Decider decider(config_path);
-  omniperception::Perceptron perceptron(&usbcam1, &usbcam2, &usbcam3, &usbcam4, config_path);
+  omniperception::Perceptron perceptron(omni_configs, config_path);
 
   omniperception::DetectionResult switch_target;
   cv::Mat img;

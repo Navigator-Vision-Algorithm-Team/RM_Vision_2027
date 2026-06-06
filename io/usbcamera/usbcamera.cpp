@@ -30,7 +30,7 @@ USBCamera::USBCamera(const std::string & open_name, const std::string & config_p
       if (ok_) continue;
 
       if (open_count_ > 20) {
-        tools::logger()->warn("Give up to open {} USB camera", this->device_name);
+        tools::logger()->warn("Give up to open {} USB camera", this->device_name_);
         quit_ = true;
 
         {
@@ -74,7 +74,7 @@ cv::Mat USBCamera::read()
 {
   std::lock_guard<std::mutex> lock(cap_mutex_);
   if (!cap_.isOpened()) {
-    tools::logger()->warn("Failed to read {} USB camera", this->device_name);
+    tools::logger()->warn("Failed to read {} USB camera", this->device_name_);
     return cv::Mat();
   }
   cap_ >> img_;
@@ -107,18 +107,18 @@ void USBCamera::open()
   cap_.set(cv::CAP_PROP_GAIN, usb_gain_);
 
   if (sharpness_ == 2) {
-    device_name = "left";
+    device_name_ = "left";
     cap_.set(cv::CAP_PROP_FRAME_WIDTH, image_width_);
     cap_.set(cv::CAP_PROP_FRAME_HEIGHT, image_height_);
     cap_.set(cv::CAP_PROP_EXPOSURE, usb_exposure_);
   } else if (sharpness_ == 3) {
-    device_name = "right";
+    device_name_ = "right";
     cap_.set(cv::CAP_PROP_FRAME_WIDTH, image_width_);
     cap_.set(cv::CAP_PROP_FRAME_HEIGHT, image_height_);
     cap_.set(cv::CAP_PROP_EXPOSURE, usb_exposure_);
   }
 
-  tools::logger()->info("{} USBCamera opened", device_name);
+  tools::logger()->info("{} USBCamera opened", device_name_);
   // tools::logger()->info("USBCamera exposure time:{}", cap_.get(cv::CAP_PROP_EXPOSURE));
   tools::logger()->info("USBCamera fps:{}", cap_.get(cv::CAP_PROP_FPS));
   // tools::logger()->info("USBCamera gamma:{}", cap_.get(cv::CAP_PROP_GAMMA));
@@ -127,7 +127,7 @@ void USBCamera::open()
   capture_thread_ = std::thread{[this] {
     ok_ = true;
     std::this_thread::sleep_for(50ms);
-    tools::logger()->info("[{} USB camera] capture thread started ", this->device_name);
+    tools::logger()->info("[{} USB camera] capture thread started ", this->device_name_);
     while (!quit_) {
       std::this_thread::sleep_for(1ms);
 

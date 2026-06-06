@@ -10,7 +10,8 @@ using namespace std::chrono_literals;
 
 namespace io
 {
-MindVision::MindVision(double exposure_ms, double gamma, const std::string & vid_pid)
+MindVision::MindVision(
+  double exposure_ms, double gamma, const std::string & vid_pid, const std::string & device_name)
 : exposure_ms_(exposure_ms),
   gamma_(gamma),
   handle_(-1),
@@ -20,6 +21,7 @@ MindVision::MindVision(double exposure_ms, double gamma, const std::string & vid
   vid_(-1),
   pid_(-1)
 {
+  device_name_ = device_name;
   set_vid_pid(vid_pid);
   if (libusb_init(NULL)) tools::logger()->warn("Unable to init libusb!");
 

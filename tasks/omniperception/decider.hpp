@@ -5,11 +5,11 @@
 #include <iostream>
 #include <list>
 #include <unordered_map>
+#include <vector>
 
 #include "detection.hpp"
 #include "io/camera.hpp"
 #include "io/command.hpp"
-#include "io/usbcamera/usbcamera.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/target.hpp"
 #include "tasks/auto_aim/yolo.hpp"
@@ -22,16 +22,13 @@ public:
   Decider(const std::string & config_path);
 
   io::Command decide(
-    auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos, io::USBCamera & usbcam1,
-    io::USBCamera & usbcam2, io::Camera & back_cammera);
-
-  io::Command decide(
-    auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos, io::Camera & back_cammera);
+    auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos,
+    const std::vector<OmniCameraConfig> & omni_configs);
 
   io::Command decide(const std::vector<DetectionResult> & detection_queue);
 
   Eigen::Vector2d delta_angle(
-    const std::list<auto_aim::Armor> & armors, const std::string & camera);
+    const std::list<auto_aim::Armor> & armors, const OmniCameraConfig & cfg);
 
   bool armor_filter(std::list<auto_aim::Armor> & armors);
 
@@ -48,10 +45,6 @@ public:
     std::list<auto_aim::Armor> & armors, const std::vector<int8_t> & auto_aim_target);
 
 private:
-  int img_width_;
-  int img_height_;
-  double fov_h_, new_fov_h_;
-  double fov_v_, new_fov_v_;
   int mode_;
   int count_;
 

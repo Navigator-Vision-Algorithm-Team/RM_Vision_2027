@@ -14,7 +14,9 @@ namespace io
 class MindVision : public CameraBase
 {
 public:
-  MindVision(double exposure_ms, double gamma, const std::string & vid_pid);
+  MindVision(
+    double exposure_ms, double gamma, const std::string & vid_pid,
+    const std::string & device_name = "");
   ~MindVision() override;
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
 
