@@ -1,3 +1,78 @@
+本项目重写了同济大学的自瞄（感谢同济开源喵）
+
+# 修改在哪里
+
+我们发现同济的全向感知的思路是使用usb相机来做，但是我们的自瞄并不是，而是海康相机。
+同济确实设计了一个海康相机的类，但是这个类只是为了主相机或者是back相机服务的，并没有做全向感知的成员变量或者是方法。
+所以我们的决策是，不只是单单的添加一个海康的全向感知处理方法，而是在代码中改成通用的类处理，而具体全向相机是什么相机，什么参数。取决于我们的配置文件
+
+## 配置文件改变
+
+                                                                                             
+│      配置项      │      读取位置      │           说明            │
+
+│ enemy_color        │ Tracker, Decider   │ 敌方颜色 "red" / "blue"   │
+
+│ can_interface      │ CBoard → SocketCAN │ CAN 接口名                │
+                                                                                                           
+│ quaternion_canid   │ CBoard             │ 四元数 CAN ID（十六进制） │
+
+│ bullet_speed_canid                        │ CBoard             │ 弹速 CAN ID               │                                                                                  
+                                                                                
+│ send_canid                                │ CBoard                 │ 控制指令发送 CAN ID       │                                                                              
+                                                                                
+│ camera_name_main                          │ Camera("main")         │ 主相机类型                │                                                                              
+                                                                                
+│ vid_pid_main, exposure_ms_main, gain_main │ Camera("main")         │ 主相机参数（取决类型）    │                                                                              
+                                                                                
+│ omni_camera_count                         │ sentry_multithread.cpp │ 全向相机数量，0=停用      │                                                                              
+                                                                                
+│ camera_name_omniN                         │ Camera("omniN")        │ 第 N 个全向相机类型       │                                                                              
+                                                                            
+│ open_name_omniN                           │ Camera("omniN")        │ USB 相机的设备名              │                                                                          
+                                                                            
+│ omni_mount_yaw_N                          │ sentry_multithread.cpp │ 相机安装 yaw 偏移 (度)        │                                                                          
+                                                                            
+│ omni_mount_pitch_N                        │ sentry_multithread.cpp │ 相机安装 pitch 偏移 (度)      │                                                                          
+                                                                            
+│ omni_fov_h_N / omni_fov_v_N               │ sentry_multithread.cpp │ 相机 FOV (度)，默认 54.2/44.5 │                                                                          
+                                                                            
+│ yolo_name                                 │ YOLO                   │ 模型名 (yolov5/yolov8/yolo11) │                                                                          
+                                                                            
+│ yolov5/8/11_model_path                    │ YOLO 子类              │ 对应模型文件路径              │                                                                          
+                                                                            
+│ classify_model                            │ Classifier             │ 分类器 ONNX 模型              │                                                                          
+                                                                            
+│ device                                    │ YOLO 子类              │ 推理设备 "CPU"/"GPU"          │                                                                          
+                                                                            
+│ min_confidence                            │ YOLO 子类              │ 最小置信度                    │                                                                          
+                                                                  
+│ use_traditional                                     │ YOLO 子类              │ 是否启用传统方法后备          │                                                                
+                                                   
+│ use_roi + roi.{x,y,width,height}                                   │ YOLO 子类              │ ROI 裁剪                      │                                                 
+                                                
+│ threshold                                                             │ YOLO 子类 + Detector   │ 二值化阈值                    │                                              
+                                                
+│ max_angle_error, min/max_lightbar_*, min_armor_* 等                   │ Detector               │ 传统视觉方法参数              │                                              
+                                                
+│ min_detect_count, max_temp_lost_count, outpost_max_temp_lost_count    │ Tracker                │ 跟踪状态切换阈值              │                                              
+                                                
+│ yaw/pitch_offset, comming/leaving_angle, *_delay_time, decision_speed │ Aimer                  │ 瞄准器参数                    │                                              
+                                                
+│ left/right_yaw_offset                                                 │ Aimer                  │ 哨兵双枪管偏置（可选）        │                                              
+                                                
+│ auto_fire, first/second_tolerance, judge_distance                     │ Shooter                │ 开火控制                      │                                              
+                                                
+│ mode                                                                  │ Decider                │ 全向感知搜索模式              │                                              
+                                                
+│ R_gimbal2imubody                                                      │ Solver                 │ 云台→IMU 旋转矩阵             │                                              
+                                                
+│ camera_matrix, distort_coeffs                                         │ Solver                 │ 相机内参                      │                                              
+                                                
+│ R_camera2gimbal, t_camera2gimbal                                      │ Solver                 │ 手眼标定外参                  │                                              
+
+# 接下来是这个项目中原本的README
+
 # 同济大学SuperPower战队25赛季自瞄算法开源
 
 ## 本项目亮点
