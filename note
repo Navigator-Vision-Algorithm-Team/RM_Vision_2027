@@ -1,0 +1,222 @@
+● Here's how to run the project in production mode. The executables without test
+   or debug in their name are the normal ones:
+
+  Production Executables
+
+  ┌──────────────────────┬────────────────────────┬──────────────────────────┐
+  │      Executable      │    Config (default)    │       Description        │
+  ├──────────────────────┼────────────────────────┼──────────────────────────┤
+  │ ./build/standard     │ configs/standard3.yaml │ Standard robot, auto-aim │
+  │                      │                        │  only (CBoard gimbal)    │
+  ├──────────────────────┼────────────────────────┼──────────────────────────┤
+  │                      │                        │ Standard + MPC planner + │
+  │ ./build/standard_mpc │ (required)             │  buff mode (DM_IMU       │
+  │                      │                        │ gimbal)                  │
+  ├──────────────────────┼────────────────────────┼──────────────────────────┤
+  │ ./build/mt_standard  │ (required)             │ Multi-threaded standard, │
+  │                      │                        │  auto-aim + buff         │
+  ├──────────────────────┼────────────────────────┼──────────────────────────┤
+  │                      │                        │ Sentry robot:            │
+  │ ./build/sentry       │ configs/sentry.yaml    │ omniperception, ROS2,    │
+  │                      │                        │ multi-camera             │
+  ├──────────────────────┼────────────────────────┼──────────────────────────┤
+  │ ./build/uav          │ configs/uav.yaml       │ UAV robot                │
+  └──────────────────────┴────────────────────────┴──────────────────────────┘
+
+  How to Start (Normal Mode)
+
+  cd sp_vision_25
+
+  # Standard robot (simplest, no MPC):
+  ./build/standard configs/standard3.yaml
+
+  # Standard with MPC planner + buff:
+  ./build/standard_mpc configs/standard4.yaml
+
+  # Multi-threaded standard:
+  ./build/mt_standard configs/standard3.yaml
+
+  # Sentry (ROS2 + omniperception):
+  ./build/sentry configs/sentry.yaml
+
+  # UAV:
+  ./build/uav configs/uav.yaml
+
+  The entry point to pick depends on which robot role you're running. standard
+  is the simplest — it requires only a camera, an IMU (via CBoard serial), and
+  uses the basic aimer/shooter pipeline without MPC planning. standard_mpc is
+  the full-featured version with the MPC trajectory planner and buff (energy
+  mechanism) support.
+
+
+  sentry — Full sentry with two USB side cameras for 360-degree omnidirectional
+  perception. When the tracker loses its target, the decider can search across
+  all four camera feeds (front, back, left USB, right USB).
+
+  sentry_bp ("base platform") — Simplified sentry without USB side cameras. When
+   tracking is lost, the decider only searches using the main camera and the
+  back camera.
+
+  Changes Summary
+
+    Problem
+
+    Perceptron and parts of Decider used the concrete io::USBCamera* type, making it impossible to use HikRobot or MindVision cameras for omniperception. The io::Camera factory
+    already supported all three camera types, but omniperception bypassed it.
+
+    What was changed
+
+    1. io/camera.hpp — Added device_name() virtual method to CameraBase (with protected device_name_ member) and exposed it through io::Camera. Made sursign default to "" for
+    backward compatibility.
+
+    2. io/camera.cpp — Smart key resolution: when sursign is empty, reads old-style keys (camera_name, gamma, etc.); when non-empty, reads suffixed keys (camera_name_main,
+    gamma_main, etc.). Reads optional camera_position_<sursign> for mounting direction. Passes device_name to HikRobot/MindVision constructors. Added default CameraBase::read()
+    implementation.
+
+    3. io/usbcamera/usbcamera.{hpp,cpp} — Removed public std::string device_name member; uses inherited device_name_ from CameraBase instead.
+
+    4. io/hikrobot/hikrobot.{hpp,cpp} — Added optional device_name constructor parameter. Removed public device_name member.
+
+    5. io/mindvision/mindvision.{hpp,cpp} — Added optional device_name constructor parameter.
+
+    6. tasks/omniperception/perceptron.{hpp,cpp} — Changed all io::USBCamera* to io::Camera*. Uses cam->device_name() (method call) instead of cam->device_name (member access).
+
+    7. tasks/omniperception/decider.{hpp,cpp} — Removed unused usbcamera.hpp include. Fixed device_name → device_name() calls.
+
+    8. src/sentry_multithread.cpp — Removed unused usbcamera.hpp include. Works unchanged with io::Camera objects.
+
+    9. src/sentry.cpp, src/sentry_bp.cpp, src/sentry_debug.cpp — Replaced direct io::USBCamera usage with io::Camera. Updated Camera constructor calls.
+
+    How to configure
+
+    Old configs continue to work — Camera(config_path) with no sursign reads the original key names.
+
+    For multi-camera omniperception with HikRobot cameras, add to your config YAML:
+
+    # Main camera (e.g., HikRobot)
+    camera_name_main: "hikrobot"
+    vid_pid_main: "2bdf:0001"
+    exposure_ms_main: 3
+    gain_main: 10.0
+
+    # Omni cameras — can be any type
+    camera_name_omnicam1: "hikrobot"
+    vid_pid_omnicam1: "2bdf:0002"
+    exposure_ms_omnicam1: 2
+    gain_omnicam1: 5.0
+    camera_position_omnicam1: "left"   # mounting position for angle offset
+
+    camera_name_omnicam2: "Usbcamera"
+    open_name_omnicam2: "video0"
+    camera_position_omnicam2: "right"
+
+    The camera_position_<sursign> key is optional and sets the mounting direction:
+    - "left" → +62 degree yaw offset
+    - "right" → -62 degree yaw offset
+    - anything else (or absent) → default 170 degree offset (back camera behavior)
+
+    For USB cameras, device_name is auto-detected from sharpness as before, so camera_position_ is only needed if you want to override it.
+
+    ● Here's how it works:
+
+      The formula in delta_angle() is:
+
+      target_yaw = camera_mount_offset + (FOV/2) - armor_center_norm.x * FOV
+
+      - center_norm.x (0 to 1) is the armor's horizontal position in the image
+      - FOV/2 - center_norm.x * FOV converts that pixel position into degrees relative to the camera's optical axis
+      - camera_mount_offset (62, -62, 170) is the fixed angle of the camera's optical axis relative to robot forward
+
+      So the three hardcoded numbers mean:
+
+               forward (0°)
+                  ↑
+                  |
+          -62° ← 机器人 → +62°
+            (right)      (left)
+                  |
+                  ↓
+               +170° (back)
+
+      The gimbal's zero yaw is the robot's forward direction. Each camera is physically mounted pointing at one of these fixed angles. The system adds the detection delta to the
+      camera's mount angle to compute the absolute gimbal yaw command.
+
+      Yes, you can freely adjust the camera positions. You just need to change the hardcoded offsets in delta_angle() to match however you mount them. For example, if you mount two
+      omni cameras at ±90°, change 62 → 90 and -62 → -90.
+
+      A couple of issues in the current code worth noting:
+
+      1. The default/back case uses hardcoded FOV 54.2 x 44.5 instead of fov_h_/fov_v_ from config — probably a bug.
+      2. The mount offsets (62, -62, 170) are hardcoded in code, not configurable per-camera from YAML.
+
+      Summary of All Changes
+
+        Core Design Change
+
+        Replaced the hardcoded 3-position string-based camera system ("left", "right", "back") with per-camera numeric configuration from YAML. Removed the special "back_camera" concept
+        entirely.
+
+        Config Format (add to your YAML)
+
+        omni_camera_count: 3  # 0 = no omniperception
+
+        camera_name_omni1: "hikrobot"
+        vid_pid_omni1: "2bdf:0002"
+        exposure_ms_omni1: 2
+        gain_omni1: 5.0
+        omni_mount_yaw_1: 62.0    # camera optical axis yaw offset (degrees)
+        omni_mount_pitch_1: 0.0   # camera optical axis pitch offset
+        omni_fov_h_1: 87.7        # horizontal FOV (degrees)
+        omni_fov_v_1: 56.7        # vertical FOV (degrees)
+
+        camera_name_omni2: "Usbcamera"
+        open_name_omni2: "video0"
+        omni_mount_yaw_2: -62.0
+        omni_mount_pitch_2: 0.0
+        omni_fov_h_2: 87.7
+        omni_fov_v_2: 56.7
+
+        camera_name_omni3: "hikrobot"
+        vid_pid_omni3: "2bdf:0003"
+        exposure_ms_omni3: 2
+        gain_omni3: 5.0
+        omni_mount_yaw_3: 170.0
+        omni_mount_pitch_3: 0.0
+        omni_fov_h_3: 54.2
+        omni_fov_v_3: 44.5
+
+        Files Modified
+
+        File: detection.hpp
+        Change: Added OmniCameraConfig struct with camera pointer + mount angles + FOV
+        ────────────────────────────────────────
+        File: decider.hpp
+        Change: delta_angle() takes OmniCameraConfig instead of string. decide() uses vector<OmniCameraConfig>. Removed single-camera and 3-camera overloads. Removed fov_h_/fov_v_
+          members.
+        ────────────────────────────────────────
+        File: decider.cpp
+        Change: delta_angle(): single formula mount_yaw + FOV/2 - center.x * FOV. decide(): N-camera cycler. Constructor only reads enemy_color + mode.
+        ────────────────────────────────────────
+        File: perceptron.hpp
+        Change: Constructor takes vector<OmniCameraConfig>. Dynamic thread/yolo count.
+        ────────────────────────────────────────
+        File: perceptron.cpp
+        Change: Creates N yolos and N threads from config vector. Uses OmniCameraConfig for delta_angle.
+        ────────────────────────────────────────
+        File: sentry_multithread.cpp
+        Change: Reads omni_camera_count, creates cameras dynamically, builds config vector.
+        ────────────────────────────────────────
+        File: sentry.cpp
+        Change: Same pattern. Removed back_camera.
+        ────────────────────────────────────────
+        File: sentry_bp.cpp
+        Change: Same pattern. Removed back_camera.
+        ────────────────────────────────────────
+        File: sentry_debug.cpp
+        Change: Same pattern. Removed back_camera.
+
+        delta_angle() Formula
+
+        yaw   = mount_yaw + FOV_h/2 - center_norm.x * FOV_h
+        pitch = center_norm.y * FOV_v - FOV_v/2 + mount_pitch
+        No more hardcoded 62, -62, 170, 54.2, 44.5 — everything comes from config.
