@@ -1,0 +1,123 @@
+# =============================================================================
+#  sentry_multithread 示例配置文件
+#  使用方式: ./build/sentry_multithread configs/sentry_example.yaml
+# =============================================================================
+
+# ----- 敌方颜色 -----
+# 可选值: "red" 或 "blue"
+enemy_color: "blue"
+
+# ----- CAN 通信 (CBoard) -----
+can_interface: "can0"               # CAN 接口名 (如 can0, can1)
+quaternion_canid: 0x01              # 下位机上报四元数的 CAN ID (十六进制)
+bullet_speed_canid: 0x110           # 下位机上报弹速的 CAN ID
+send_canid: 0xff                    # 向 gimbal 发送控制指令的 CAN ID
+
+# ----- 主相机 (sursign="main") -----
+# camera_name 决定相机类型: "hikrobot" | "mindvision" | "Usbcamera"
+camera_name_main: "hikrobot"
+vid_pid_main: "2bdf:0001"           # USB VID:PID (HikRobot/MindVision 用)
+exposure_ms_main: 0.8               # 曝光时间 (ms)
+gain_main: 16.9                     # 增益 (HikRobot 用, MindVision 用 gamma_main)
+
+# ----- 全向感知相机数量 -----
+# 0 = 不启用全向感知 (等价于普通自瞄)
+omni_camera_count: 3
+
+# ----- 全向相机 1 (sursign="omni1") -----
+camera_name_omni1: "hikrobot"
+vid_pid_omni1: "2bdf:0002"
+exposure_ms_omni1: 2.0
+gain_omni1: 5.0
+omni_mount_yaw_1: 62.0              # 相机光轴相对机器人正前方的 yaw 偏移 (度)
+omni_mount_pitch_1: 0.0             # 相机光轴相对水平面的 pitch 偏移 (度)
+omni_fov_h_1: 87.7                  # 相机水平 FOV (度)
+omni_fov_v_1: 56.7                  # 相机垂直 FOV (度)
+
+# ----- 全向相机 2 (sursign="omni2") -----
+camera_name_omni2: "Usbcamera"      # USB 相机
+open_name_omni2: "video0"           # USB 相机设备名 (/dev/video*)
+omni_mount_yaw_2: -62.0
+omni_mount_pitch_2: 0.0
+omni_fov_h_2: 87.7
+omni_fov_v_2: 56.7
+
+# ----- 全向相机 3 (sursign="omni3") -----
+camera_name_omni3: "hikrobot"
+vid_pid_omni3: "2bdf:0003"
+exposure_ms_omni3: 2.0
+gain_omni3: 5.0
+omni_mount_yaw_3: 170.0             # 后置相机
+omni_mount_pitch_3: 0.0
+omni_fov_h_3: 54.2
+omni_fov_v_3: 44.5
+
+# ----- 神经网络 (YOLO) -----
+yolo_name: "yolov5"                 # 模型名: "yolov5" | "yolov8" | "yolo11"
+device: "GPU"                       # 推理设备: "CPU" | "GPU"
+yolov5_model_path: "assets/yolov5.xml"
+yolov8_model_path: "assets/yolov8.xml"
+yolo11_model_path: "assets/yolo11.xml"
+classify_model: "assets/tiny_resnet.onnx"  # 分类器模型 (传统方法用)
+min_confidence: 0.8                 # 检测最小置信度
+use_traditional: true               # 是否启用传统视觉方法作为后备
+
+# ----- ROI (感兴趣区域) -----
+use_roi: false                      # 是否启用 ROI 裁剪
+roi:                                # ROI 区域 (像素坐标)
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+# ----- 传统视觉方法参数 -----
+threshold: 150                      # 二值化阈值
+max_angle_error: 45                 # 灯条最大角度误差 (度)
+min_lightbar_ratio: 1.5             # 灯条最小长宽比
+max_lightbar_ratio: 20              # 灯条最大长宽比
+min_lightbar_length: 8              # 灯条最小长度 (像素)
+min_armor_ratio: 1                  # 装甲板最小长宽比
+max_armor_ratio: 5                  # 装甲板最大长宽比
+max_side_ratio: 1.5                 # 配对灯条最大边长比
+max_rectangular_error: 25           # 最大矩形拟合误差 (度)
+
+# ----- 跟踪器 (Tracker/EKF) -----
+min_detect_count: 5                 # 连续检测到多少次后进入跟踪状态
+max_temp_lost_count: 25             # 普通目标最大临时丢失帧数
+outpost_max_temp_lost_count: 75     # 前哨站目标最大临时丢失帧数
+
+# ----- 瞄准器 (Aimer) -----
+yaw_offset: -0.8                    # yaw 整体偏移 (度)
+pitch_offset: -1.0                  # pitch 整体偏移 (度)
+comming_angle: 60                   # 陀螺旋转 coming angle 阈值 (度)
+leaving_angle: 20                   # 陀螺旋转 leaving angle 阈值 (度)
+left_yaw_offset: -1.0               # 左侧射击 yaw 偏置 (度, 哨兵双枪管用)
+right_yaw_offset: -0.6              # 右侧射击 yaw 偏置 (度, 哨兵双枪管用)
+decision_speed: 10                  # 高速/低速判定阈值 (rad/s)
+high_speed_delay_time: 0.026        # 高速状态下弹道延迟时间 (s)
+low_speed_delay_time: 0.010         # 低速状态下弹道延迟时间 (s)
+
+# ----- 射手 (Shooter) -----
+auto_fire: true                     # 是否由自瞄自动控制开火
+first_tolerance: 5                  # 近距离射击容差 (度)
+second_tolerance: 2                 # 远距离射击容差 (度)
+judge_distance: 3                   # 近/远距离判断阈值 (m)
+
+# ----- 决策器 (Decider) -----
+mode: 1                             # 决策模式 (影响全向感知的搜索行为)
+
+# ----- 相机标定 -----
+# 云台旋转矩阵 → IMU 本体坐标系 (3x3 行优先, 通常为单位阵)
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+# 相机内参矩阵 (3x3 行优先)
+camera_matrix: [2414.9359264386621, 0, 717.26243105567414, 0, 2418.0489262208148, 582.68540529942845, 0, 0, 1]
+
+# 畸变系数 (k1, k2, p1, p2, k3)
+distort_coeffs: [-0.0209453389287673, 0.15028138841073832, -0.0006517722113234505, -0.0016861906197686788, 0]
+
+# 手眼标定 — 相机到云台的旋转矩阵 (3x3 行优先)
+R_camera2gimbal: [0.01928451708725664, 0.00012696140743255463, 0.99981402834802846, -0.99981344688553653, -0.0010834913551969569, 0.019284643459122196, 0.0010857382619952124, -0.99999940496346484, 0.00010604311483339372]
+
+# 手眼标定 — 相机到云台的平移向量 (m)
+t_camera2gimbal: [0.13089617453251859, 0.0038468007459533785, 0.094139945222010288]
