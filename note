@@ -220,3 +220,47 @@
         yaw   = mount_yaw + FOV_h/2 - center_norm.x * FOV_h
         pitch = center_norm.y * FOV_v - FOV_v/2 + mount_pitch
         No more hardcoded 62, -62, 170, 54.2, 44.5 — everything comes from config.
+
+        ● Yes, both are fully supported. The code has no hardcoded limit. Here's why:
+
+          1. 任意数量相机 — sentry_multithread.cpp:61 的循环是 for (int i = 1; i <= omni_count; i++)，Decider (decider.cpp:27) 用 omni_configs.size() 做取模轮询，Perceptron
+          同样动态分配线程和 YOLO 实例。设 omni_camera_count: 4 就行。
+          2. 全部用海康 — Camera 构造函数 (camera.cpp:35) 根据每个 sursign 独立读取 camera_name_<sursign> 并独立创建相机实例，互不干扰。每个海康相机通过不同的 vid_pid 区分。
+
+          1 主相机 + 4 海康全向相机的配置示例：
+
+          # 主相机
+          camera_name_main: "hikrobot"
+          vid_pid_main: "2bdf:0001"
+          exposure_ms_main: 0.8
+          gain_main: 16.9
+
+          # 4 个海康全向相机
+          omni_camera_count: 4
+
+          # omni1 — 左侧
+          camera_name_omni1: "hikrobot"
+          vid_pid_omni1: "2bdf:0002"
+          exposure_ms_omni1: 2.0
+          gain_omni1: 6.0
+          omni_mount_yaw_1: 62.0
+          omni_mount_pitch_1: 0.0
+          omni_fov_h_1: 87.7
+          omni_fov_v_1: 56.7
+
+          # omni2 — 右侧
+          camera_name_omni2: "hikrobot"
+          vid_pid_omni2: "2bdf:0003"
+          # ... 同上格式
+
+          # omni3 — 后方
+          camera_name_omni3: "hikrobot"
+          vid_pid_omni3: "2bdf:0004"
+          # ...
+
+          # omni4 — 上方/任意
+          camera_name_omni4: "hikrobot"
+          vid_pid_omni4: "2bdf:0005"
+          # ...
+
+          唯一的实际约束是 USB 带宽和 NUC 的 PCIe 通道数——5 个海康相机同时跑满带宽需要确认你的硬件是否撑得住。代码层面没有限制。

@@ -14,8 +14,10 @@ public:
   Shooter(const std::string & config_path);
 
   bool shoot(
-    const io::Command & command, const auto_aim::Aimer & aimer,
-    const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos);
+    const io::Command & command,
+    const auto_aim::Aimer & aimer,
+    const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos
+    );
 
 private:
   io::Command last_command_;
