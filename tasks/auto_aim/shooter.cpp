@@ -17,9 +17,11 @@ Shooter::Shooter(const std::string & config_path) : last_command_{false, false, 
 }
 
 bool Shooter::shoot(
-  const io::Command & command, const auto_aim::Aimer & aimer,
-  const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos)
-{
+  const io::Command & command,
+  const auto_aim::Aimer & aimer,
+  const std::list<auto_aim::Target> & targets,
+  const Eigen::Vector3d & gimbal_pos
+  ){
   if (!command.control || targets.empty() || !auto_fire_) return false;
 
   auto target_x = targets.front().ekf_x()[0];

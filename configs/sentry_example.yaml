@@ -8,7 +8,7 @@
 enemy_color: "blue"
 
 # ----- CAN 通信 (CBoard) -----
-can_interface: "can0"               # CAN 接口名 (如 can0, can1)
+can_interface: "vcan0"               # CAN 接口名 (如 can0, can1, vcan0 for testing)
 quaternion_canid: 0x01              # 下位机上报四元数的 CAN ID (十六进制)
 bullet_speed_canid: 0x110           # 下位机上报弹速的 CAN ID
 send_canid: 0xff                    # 向 gimbal 发送控制指令的 CAN ID
@@ -22,11 +22,11 @@ gain_main: 16.9                     # 增益 (HikRobot 用, MindVision 用 gamma
 
 # ----- 全向感知相机数量 -----
 # 0 = 不启用全向感知 (等价于普通自瞄)
-omni_camera_count: 4
+omni_camera_count: 1
 
 # ----- 全向相机 1 (sursign="omni1") -----
 camera_name_omni1: "hikrobot"
-vid_pid_omni1: "2bdf:0002"
+vid_pid_omni1: "2bdf:0001"
 exposure_ms_omni1: 2.0
 gain_omni1: 5.0
 omni_mount_yaw_1: 62.0              # 相机光轴相对机器人正前方的 yaw 偏移 (度)
@@ -42,39 +42,39 @@ omni_fov_v_1: 57.9                  # 相机垂直 FOV (度)
 #omni_fov_h_2: 87.7
 #omni_fov_v_2: 56.7
 
-# ----- 全向相机 2 (sursign="omni2") -----
-camera_name_omni2: "hikrobot"
-vid_pid_omni2: "2bdf:0002"
-exposure_ms_omni2: 2.0
-gain_omni2: 5.0
-omni_mount_yaw_2: 170.0
-omni_mount_pitch_2: 0.0
-omni_fov_h_2: 72.8
-omni_fov_v_2: 57.9
-
-# ----- 全向相机 3 (sursign="omni3") -----
-camera_name_omni3: "hikrobot"
-vid_pid_omni3: "2bdf:0003"
-exposure_ms_omni3: 2.0
-gain_omni3: 5.0
-omni_mount_yaw_3: 170.0             # 后置相机
-omni_mount_pitch_3: 0.0
-omni_fov_h_3: 72.8
-omni_fov_v_3: 57.9
-
-# ----- 全向相机 4 (sursign="omni4") -----
-camera_name_omni4: "hikrobot"
-vid_pid_omni4: "2bdf:0002"
-exposure_ms_omni4: 2.0
-gain_omni4: 5.0
-omni_mount_yaw_4: 170.0
-omni_mount_pitch_4: 0.0
-omni_fov_h_4: 72.8
-omni_fov_v_4: 57.9
+## ----- 全向相机 2 (sursign="omni2") -----
+#camera_name_omni2: "hikrobot"
+#vid_pid_omni2: "2bdf:0002"
+#exposure_ms_omni2: 2.0
+#gain_omni2: 5.0
+#omni_mount_yaw_2: 170.0
+#omni_mount_pitch_2: 0.0
+#omni_fov_h_2: 72.8
+#omni_fov_v_2: 57.9
+#
+## ----- 全向相机 3 (sursign="omni3") -----
+#camera_name_omni3: "hikrobot"
+#vid_pid_omni3: "2bdf:0003"
+#exposure_ms_omni3: 2.0
+#gain_omni3: 5.0
+#omni_mount_yaw_3: 170.0             # 后置相机
+#omni_mount_pitch_3: 0.0
+#omni_fov_h_3: 72.8
+#omni_fov_v_3: 57.9
+#
+## ----- 全向相机 4 (sursign="omni4") -----
+#camera_name_omni4: "hikrobot"
+#vid_pid_omni4: "2bdf:0002"
+#exposure_ms_omni4: 2.0
+#gain_omni4: 5.0
+#omni_mount_yaw_4: 170.0
+#omni_mount_pitch_4: 0.0
+#omni_fov_h_4: 72.8
+#omni_fov_v_4: 57.9
 
 # ----- 神经网络 (YOLO) -----
 yolo_name: "yolov5"                 # 模型名: "yolov5" | "yolov8" | "yolo11"
-device: "GPU"                       # 推理设备: "CPU" | "GPU"
+device: "CPU"                       # 推理设备: "CPU" | "GPU"
 yolov5_model_path: "assets/yolov5.xml"
 yolov8_model_path: "assets/yolov8.xml"
 yolo11_model_path: "assets/yolo11.xml"
