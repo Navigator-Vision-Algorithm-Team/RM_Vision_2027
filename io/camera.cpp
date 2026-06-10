@@ -36,7 +36,9 @@ Camera::Camera(const std::string & config_path, std::string sursign)
     auto gain = tools::read<double>(yaml, key("gain"));
     auto vid_pid = tools::read<std::string>(yaml, key("vid_pid"));
     auto exposure_ms = tools::read<double>(yaml, key("exposure_ms"));
-    camera_ = std::make_unique<HikRobot>(exposure_ms, gain, vid_pid, device_name);
+    int device_index = yaml[key("device_index")] ? yaml[key("device_index")].as<int>() : 0;
+    std::string serial_number = yaml[key("serial_number")] ? yaml[key("serial_number")].as<std::string>() : "";
+    camera_ = std::make_unique<HikRobot>(exposure_ms, gain, vid_pid, device_name, device_index, serial_number);
   }
 
   else if (camera_name == "Usbcamera") {

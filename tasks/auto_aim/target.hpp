@@ -23,7 +23,7 @@ public:
   bool jumped;
   int last_id;  // debug only
 
-  Target() = default;
+  Target() : armor_num_(0) {}
   Target(
     const Armor & armor, std::chrono::steady_clock::time_point t, double radius, int armor_num,
     Eigen::VectorXd P0_dig);

@@ -81,14 +81,14 @@ int main(int argc, char * argv[])
     omni_cameras.push_back(std::move(cam));
   }
 
-  auto_aim::YOLO yolo(config_path, false);
+  auto yolo = std::make_shared<auto_aim::YOLO>(config_path, false);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
 
   omniperception::Decider decider(config_path);
-  omniperception::Perceptron perceptron(omni_configs, config_path);
+  omniperception::Perceptron perceptron(omni_configs, config_path, yolo);
 
   omniperception::DetectionResult switch_target;
   cv::Mat img;
@@ -104,7 +104,7 @@ int main(int argc, char * argv[])
 
     Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
-    auto armors = yolo.detect(img);
+    auto armors = yolo->detect(img);
 
     decider.get_invincible_armor(ros2.subscribe_enemy_status());
 

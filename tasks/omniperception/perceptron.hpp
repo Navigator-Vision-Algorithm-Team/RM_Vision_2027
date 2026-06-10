@@ -21,7 +21,8 @@ class Perceptron
 {
 public:
   Perceptron(
-    const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path);
+    const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path,
+    std::shared_ptr<auto_aim::YOLO> yolo);
 
   ~Perceptron();
 
@@ -34,7 +35,7 @@ private:
   std::vector<std::thread> threads_;
   tools::ThreadSafeQueue<DetectionResult> detection_queue_;
 
-  std::vector<std::shared_ptr<auto_aim::YOLO>> yolos_;
+  std::shared_ptr<auto_aim::YOLO> yolo_;
 
   Decider decider_;
   bool stop_flag_;
