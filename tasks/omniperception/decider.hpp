@@ -49,7 +49,6 @@ private:
   int count_;
 
   auto_aim::Color enemy_color_;
-  auto_aim::YOLO detector_;
   std::vector<auto_aim::ArmorName> invincible_armor_;  //无敌状态机器人编号,英雄为1，哨兵为6
 
   // 定义ArmorName到ArmorPriority的映射类型

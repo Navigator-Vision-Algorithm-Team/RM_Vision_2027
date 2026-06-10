@@ -9,8 +9,11 @@ using namespace std::chrono_literals;
 namespace io
 {
 HikRobot::HikRobot(
-  double exposure_ms, double gain, const std::string & vid_pid, const std::string & device_name)
-: exposure_us_(exposure_ms * 1e3), gain_(gain), queue_(1), daemon_quit_(false), vid_(-1), pid_(-1)
+  double exposure_ms, double gain, const std::string & vid_pid,
+  const std::string & device_name, int device_index, const std::string & serial_number)
+: exposure_us_(exposure_ms * 1e3), gain_(gain), queue_(1), daemon_quit_(false),
+  vid_(-1), pid_(-1), handle_(nullptr), device_index_(device_index),
+  serial_number_(serial_number)
 {
   device_name_ = device_name;
   set_vid_pid(vid_pid);
@@ -27,7 +30,6 @@ HikRobot::HikRobot(
       if (capturing_) continue;
 
       capture_stop();
-      reset_usb();
       capture_start();
     }
 
@@ -72,7 +74,46 @@ void HikRobot::capture_start()
     return;
   }
 
-  ret = MV_CC_CreateHandle(&handle_, device_list.pDeviceInfo[0]);
+  // Log all found cameras for identification (first enumeration only)
+  static bool first_enum = true;
+  if (first_enum) {
+    for (unsigned int i = 0; i < device_list.nDeviceNum; i++) {
+      auto * usb_info = &device_list.pDeviceInfo[i]->SpecialInfo.stUsb3VInfo;
+      tools::logger()->info("Found camera [{}]: serial='{}' model='{}'", i,
+                            reinterpret_cast<char *>(usb_info->chSerialNumber),
+                            reinterpret_cast<char *>(usb_info->chModelName));
+    }
+    first_enum = false;
+  }
+
+  // Match camera by serial number (preferred) or fall back to device index
+  int target_index = -1;
+  if (!serial_number_.empty()) {
+    for (unsigned int i = 0; i < device_list.nDeviceNum; i++) {
+      auto * usb_info = &device_list.pDeviceInfo[i]->SpecialInfo.stUsb3VInfo;
+      std::string sn(reinterpret_cast<char *>(usb_info->chSerialNumber));
+      if (sn == serial_number_) {
+        target_index = static_cast<int>(i);
+        break;
+      }
+    }
+    if (target_index < 0) {
+      tools::logger()->warn(
+        "Camera with serial '{}' not found ({} device(s) enumerated)", serial_number_,
+        device_list.nDeviceNum);
+      return;
+    }
+  } else {
+    if (device_index_ >= static_cast<int>(device_list.nDeviceNum)) {
+      tools::logger()->warn(
+        "Camera index {} out of range (found {} device(s))", device_index_,
+        device_list.nDeviceNum);
+      return;
+    }
+    target_index = device_index_;
+  }
+
+  ret = MV_CC_CreateHandle(&handle_, device_list.pDeviceInfo[target_index]);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_CreateHandle failed: {:#x}", ret);
     return;
@@ -81,6 +122,8 @@ void HikRobot::capture_start()
   ret = MV_CC_OpenDevice(handle_);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_OpenDevice failed: {:#x}", ret);
+    MV_CC_DestroyHandle(handle_);
+    handle_ = nullptr;
     return;
   }
 
@@ -89,7 +132,7 @@ void HikRobot::capture_start()
   set_enum_value("GainAuto", MV_GAIN_MODE_OFF);
   set_float_value("ExposureTime", exposure_us_);
   set_float_value("Gain", gain_);
-  MV_CC_SetFrameRate(handle_, 150);
+  MV_CC_SetFrameRate(handle_, 30);
 
   ret = MV_CC_StartGrabbing(handle_);
   if (ret != MV_OK) {
@@ -140,8 +183,14 @@ void HikRobot::capture_start()
         {PixelType_Gvsp_BayerRG8, cv::COLOR_BayerRG2RGB},
         {PixelType_Gvsp_BayerGB8, cv::COLOR_BayerGB2RGB},
         {PixelType_Gvsp_BayerBG8, cv::COLOR_BayerBG2RGB}};
-      cv::cvtColor(img, dst_image, type_map.at(pixel_type));
-      img = dst_image;
+      auto it = type_map.find(pixel_type);
+      if (it != type_map.end()) {
+        cv::cvtColor(img, dst_image, it->second);
+        img = dst_image;
+      } else if (img.channels() == 1) {
+        cv::cvtColor(img, dst_image, cv::COLOR_GRAY2BGR);
+        img = dst_image;
+      }
 
       queue_.push({img, timestamp});
 
@@ -161,6 +210,8 @@ void HikRobot::capture_stop()
 {
   capture_quit_ = true;
   if (capture_thread_.joinable()) capture_thread_.join();
+
+  if (!handle_) return;
 
   unsigned int ret;
 

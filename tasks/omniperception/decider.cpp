@@ -10,7 +10,7 @@
 
 namespace omniperception
 {
-Decider::Decider(const std::string & config_path) : detector_(config_path), count_(0)
+Decider::Decider(const std::string & config_path) : count_(0)
 {
   auto yaml = YAML::LoadFile(config_path);
   enemy_color_ =
