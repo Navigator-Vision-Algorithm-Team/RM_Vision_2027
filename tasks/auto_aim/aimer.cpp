@@ -36,6 +36,8 @@ io::Command Aimer::aim(
   if (targets.empty()) return {false, false, 0, 0};
   auto target = targets.front();
 
+  if (target.ekf_x().size() < 9) return {false, false, 0, 0};
+
   auto ekf = target.ekf();
   double delay_time =
     target.ekf_x()[7] > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
@@ -144,8 +146,10 @@ io::Command Aimer::aim(
 AimPoint Aimer::choose_aim_point(const Target & target)
 {
   Eigen::VectorXd ekf_x = target.ekf_x();
+  if (ekf_x.size() < 9) return {false, Eigen::Vector4d::Zero()};
   std::vector<Eigen::Vector4d> armor_xyza_list = target.armor_xyza_list();
   auto armor_num = armor_xyza_list.size();
+  if (armor_num == 0) return {false, Eigen::Vector4d::Zero()};
   // 如果装甲板未发生过跳变，则只有当前装甲板的位置已知
   if (!target.jumped) return {true, armor_xyza_list[0]};
 

@@ -11,25 +11,21 @@
 namespace omniperception
 {
 Perceptron::Perceptron(
-  const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path)
-: detection_queue_(10), decider_(config_path), stop_flag_(false)
+  const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path,
+  std::shared_ptr<auto_aim::YOLO> yolo)
+: detection_queue_(10), yolo_(std::move(yolo)), decider_(config_path), stop_flag_(false)
 {
   if (omni_configs.empty()) {
     tools::logger()->info("Perceptron initialized with 0 cameras.");
     return;
   }
 
-  // 创建 YOLO 模型，每个相机一个
-  for (size_t i = 0; i < omni_configs.size(); i++) {
-    yolos_.push_back(std::make_shared<auto_aim::YOLO>(config_path, false));
-  }
-
   std::this_thread::sleep_for(std::chrono::seconds(2));
 
-  // 创建线程进行并行推理，每个相机一个线程
+  // 创建线程进行并行推理，所有相机共享同一个 YOLO
   for (size_t i = 0; i < omni_configs.size(); i++) {
     threads_.emplace_back(
-      [this, cfg = omni_configs[i], yolo = yolos_[i]] { parallel_infer(cfg, yolo); });
+      [this, cfg = omni_configs[i]] { parallel_infer(cfg, yolo_); });
   }
 
   tools::logger()->info("Perceptron initialized with {} cameras.", omni_configs.size());
