@@ -9,7 +9,7 @@
 #include <thread>
 
 #include "io/camera.hpp"
-#include "io/cboard.hpp"
+#include "io/serial_board.hpp"
 #include "io/ros2/ros2.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/shooter.hpp"
@@ -48,7 +48,7 @@ int main(int argc, char * argv[])
   auto yaml = tools::load(config_path);
 
   io::ROS2 ros2;
-  io::CBoard cboard(config_path);
+  io::SerialBoard serial_board(config_path);
   io::Camera camera(config_path, "main");
 
   // 读取全向感知相机配置
@@ -97,7 +97,7 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, timestamp);
-    Eigen::Quaterniond q = cboard.imu_at(timestamp - 1ms);
+    Eigen::Quaterniond q = serial_board.imu_at(timestamp - 1ms);
     recorder.record(img, q, timestamp);
     /// 自瞄核心逻辑
     solver.set_R_gimbal2world(q);
@@ -134,14 +134,14 @@ int main(int argc, char * argv[])
     }
 
     else {
-      command = aimer.aim(targets, timestamp, cboard.bullet_speed);
+      command = aimer.aim(targets, timestamp, serial_board.bullet_speed);
     }
 
     /// 发射逻辑
     command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
     // command.shoot = false;
 
-    cboard.send(command);
+    serial_board.send(command);
 
     /// ROS2通信
     Eigen::Vector4d target_info = decider.get_target_info(armors, targets);
