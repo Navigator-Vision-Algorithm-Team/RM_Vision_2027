@@ -16,6 +16,7 @@ struct Header
   uint16_t cmd_id;
 } __attribute__((packed));
 
+// cmd_id 0x502 — IMU data from gimbal
 struct IMUPacket
 {
   Header header;
@@ -28,6 +29,70 @@ struct IMUPacket
   uint16_t crc16 = 0;
 } __attribute__((packed));
 
+// cmd_id 0x503 — chassis velocity
+struct classisPacket
+{
+  Header header;
+  float vx;
+  float vy;
+  float vz;
+  uint8_t enable;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+// cmd_id 0x504 — button / trigger state
+struct bottonPacket
+{
+  Header header;
+  bool start;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+// cmd_id 0x505 — robot base state (reset, HP, mode, etc.)
+struct bassPacket
+{
+  Header header;
+  uint8_t roboid;
+  bool reset;
+  uint8_t position[2];
+  uint8_t HP;
+  uint8_t robomode;
+  bool canshoot;
+  uint8_t shootmode;
+  bool superpower;
+  bool online;
+  bool two;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+// cmd_id 0x0001 / 0x0100 — game / match status
+// game_info: low 4 bits = game_type, high 4 bits = game_progress
+struct GameStatusPacket
+{
+  Header header;
+  uint8_t game_info;
+  uint16_t stage_remain_time;
+  uint64_t sync_timestamp;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+// cmd_id 0x0201 / 0x0102 — robot health / shooting / power status
+// mains_power_state bit0/bit1/bit2: gimbal / chassis / shooter output
+struct GameRobotStatusPacket
+{
+  Header header;
+  uint8_t robot_id;
+  uint8_t robot_level;
+  uint16_t remain_hp;
+  uint16_t max_hp;
+  uint16_t shooter_cooling_rate;
+  uint16_t shooter_heat_limit;
+  uint16_t chassis_power_limit;
+  uint8_t mains_power_state;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+// cmd_id 0x0402 — vision → MCU aim command
 struct SendPacket
 {
   Header header;
@@ -39,6 +104,40 @@ struct SendPacket
   uint8_t shoot;
   uint16_t checksum = 0;
 } __attribute__((packed));
+
+// cmd_id 0x0405 — vision → MCU navigation command
+struct NavigationPacket
+{
+  Header header;
+  float vx;
+  float vy;
+  float wz;
+  uint16_t crc16;
+} __attribute__((packed, aligned(1)));
+
+// Parsed game status (extracted from GameStatusPacket)
+struct GameStatus
+{
+  uint8_t game_type;         // 比赛类型
+  uint8_t game_progress;     // 比赛阶段 (4 = 比赛中)
+  uint16_t stage_remain_time; // 阶段剩余时间
+  uint64_t sync_timestamp;   // 同步时间戳
+};
+
+// Parsed robot status (extracted from GameRobotStatusPacket)
+struct RobotStatus
+{
+  uint8_t robot_id;
+  uint8_t robot_level;
+  uint16_t remain_hp;
+  uint16_t max_hp;
+  uint16_t shooter_cooling_rate;
+  uint16_t shooter_heat_limit;
+  uint16_t chassis_power_limit;
+  bool mains_power_gimbal;    // 云台供电
+  bool mains_power_chassis;   // 底盘供电
+  bool mains_power_shooter;   // 发射机构供电
+};
 
 template <typename T>
 inline T fromVector(const std::vector<uint8_t> & data)
