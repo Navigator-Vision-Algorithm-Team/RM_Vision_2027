@@ -55,6 +55,9 @@ int main(int argc, char * argv[])
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
 
+  bool if_spin = false;
+  if (omni_count == 0) if_spin = true;
+
   std::vector<std::unique_ptr<io::Camera>> omni_cameras;
   std::vector<omniperception::OmniCameraConfig> omni_configs;
 
@@ -129,8 +132,13 @@ int main(int argc, char * argv[])
     }
 
     else if (tracker.state() == "lost") {
-      command = decider.decide(detection_queue);
-      command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
+
+      if (detection_queue.empty() && if_spin) {
+        command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0] + 0.5);
+      } else {
+        command = decider.decide(detection_queue);
+        command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
+      }
     }
 
     else {
