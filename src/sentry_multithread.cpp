@@ -99,10 +99,22 @@ int main(int argc, char * argv[])
     camera.read(img, timestamp);
     Eigen::Quaterniond q = serial_board.imu_at(timestamp - 1ms);
     recorder.record(img, q, timestamp);
+
+    // 比赛未开始时跳过自瞄逻辑（裁判系统控制）
+    if (!serial_board.is_game_started()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+
     /// 自瞄核心逻辑
     solver.set_R_gimbal2world(q);
 
     Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
+
+    // MCU 复位信号 → 重置跟踪器
+    if (serial_board.reset_pending()) {
+      tracker.reset();
+    }
 
     auto armors = yolo->detect(img);
 

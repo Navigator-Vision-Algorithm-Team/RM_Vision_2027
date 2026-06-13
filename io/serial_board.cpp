@@ -1,6 +1,5 @@
 #include "serial_board.hpp"
 
-#include "io/gimbal/packet.hpp"
 #include "io/gimbal/protocol_crc.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -19,6 +18,8 @@ SerialBoard::SerialBoard(const std::string & config_path)
   device_name_ = tools::read<std::string>(yaml, "com_port");
   baud_rate_ = yaml["baud_rate"].as<uint32_t>(921600);
   bullet_speed = yaml["bullet_speed"].as<double>(28.0);
+  use_referee_system_ = yaml["use_referee_system"].as<bool>(false);
+  game_start_progress_threshold_ = yaml["game_start_progress_threshold"].as<int>(4);
 
   try {
     serial_.setPort(device_name_);
@@ -35,8 +36,14 @@ SerialBoard::SerialBoard(const std::string & config_path)
     exit(1);
   }
 
+  // Without referee system, auto-aim is always enabled
+  if (!use_referee_system_) {
+    game_started_.store(true);
+  }
+
   tools::logger()->info(
-    "[SerialBoard] Serial port {} opened, baud_rate={}", device_name_, baud_rate_);
+    "[SerialBoard] Serial port {} opened, baud={}, referee={}",
+    device_name_, baud_rate_, use_referee_system_);
 
   receive_thread_ = std::thread(&SerialBoard::receiveThread, this);
 
@@ -103,6 +110,92 @@ void SerialBoard::send(Command command) const
   }
 }
 
+GameStatus SerialBoard::game_status() const
+{
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  return game_status_;
+}
+
+RobotStatus SerialBoard::robot_status() const
+{
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  return robot_status_;
+}
+
+bool SerialBoard::is_game_started() const
+{
+  return game_started_.load();
+}
+
+bool SerialBoard::reset_pending()
+{
+  return reset_pending_.exchange(false);
+}
+
+void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
+{
+  GameStatus gs;
+  gs.game_type = static_cast<uint8_t>(pkt.game_info & 0x0F);
+  gs.game_progress = static_cast<uint8_t>((pkt.game_info >> 4) & 0x0F);
+  gs.stage_remain_time = pkt.stage_remain_time;
+  gs.sync_timestamp = pkt.sync_timestamp;
+
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    game_status_ = gs;
+  }
+
+  // Update game-started state based on progress
+  if (use_referee_system_) {
+    bool started = gs.game_progress >= static_cast<uint8_t>(game_start_progress_threshold_);
+    bool was_started = game_started_.exchange(started);
+
+    if (started && !was_started) {
+      tools::logger()->info("[SerialBoard] Game started (progress={})", gs.game_progress);
+    } else if (!started && was_started) {
+      tools::logger()->info("[SerialBoard] Game ended / returned to pre-game");
+    }
+  }
+
+  tools::logger()->debug(
+    "[SerialBoard] GameStatus: type={} progress={} remain={} sync={}",
+    gs.game_type, gs.game_progress, gs.stage_remain_time, gs.sync_timestamp);
+}
+
+void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
+{
+  RobotStatus rs;
+  rs.robot_id = pkt.robot_id;
+  rs.robot_level = pkt.robot_level;
+  rs.remain_hp = pkt.remain_hp;
+  rs.max_hp = pkt.max_hp;
+  rs.shooter_cooling_rate = pkt.shooter_cooling_rate;
+  rs.shooter_heat_limit = pkt.shooter_heat_limit;
+  rs.chassis_power_limit = pkt.chassis_power_limit;
+  rs.mains_power_gimbal = (pkt.mains_power_state & 0x01) != 0;
+  rs.mains_power_chassis = ((pkt.mains_power_state >> 1) & 0x01) != 0;
+  rs.mains_power_shooter = ((pkt.mains_power_state >> 2) & 0x01) != 0;
+
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    robot_status_ = rs;
+  }
+
+  tools::logger()->debug(
+    "[SerialBoard] RobotStatus: id={} lv={} hp={}/{} cool={} heat={} power={} mains=g{}c{}s{}",
+    rs.robot_id, rs.robot_level, rs.remain_hp, rs.max_hp,
+    rs.shooter_cooling_rate, rs.shooter_heat_limit, rs.chassis_power_limit,
+    rs.mains_power_gimbal, rs.mains_power_chassis, rs.mains_power_shooter);
+}
+
+void SerialBoard::handleBass(const bassPacket & pkt)
+{
+  if (pkt.reset) {
+    reset_pending_.store(true);
+    tools::logger()->info("[SerialBoard] Reset signal received from MCU");
+  }
+}
+
 bool SerialBoard::read(uint8_t * buffer, size_t size)
 {
   try {
@@ -153,10 +246,7 @@ void SerialBoard::receiveThread()
     switch (header.cmd_id) {
       case 0x502: {
         data.resize(sizeof(IMUPacket) - sizeof(Header));
-        if (!read(data.data(), data.size())) {
-          error_count++;
-          break;
-        }
+        if (!read(data.data(), data.size())) { error_count++; break; }
         data.insert(data.begin(), headdata.begin(), headdata.end());
         IMUPacket imu_packet = fromVector<IMUPacket>(data);
 
@@ -166,23 +256,72 @@ void SerialBoard::receiveThread()
         }
 
         error_count = 0;
-
         auto t_now = std::chrono::steady_clock::now();
 
-        // Convert Euler angles to quaternion (RPY: yaw about Z, pitch about Y, roll about X)
         Eigen::Quaterniond q =
           Eigen::AngleAxisd(imu_packet.yaw, Eigen::Vector3d::UnitZ()) *
           Eigen::AngleAxisd(imu_packet.pitch, Eigen::Vector3d::UnitY()) *
           Eigen::AngleAxisd(imu_packet.roll, Eigen::Vector3d::UnitX());
 
         queue_.push({q, t_now});
-
-        // Update bullet_speed from YAML value (static config)
-        // Mode stays as auto_aim for the sentry
+        break;
+      }
+      case 0x503: {
+        data.resize(sizeof(classisPacket) - sizeof(Header));
+        if (!read(data.data(), data.size())) { error_count++; break; }
+        data.insert(data.begin(), headdata.begin(), headdata.end());
+        classisPacket pkt = fromVector<classisPacket>(data);
+        if (!crc16::Verify_CRC16_Check_Sum(
+              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
+        error_count = 0;
+        break;
+      }
+      case 0x504: {
+        data.resize(sizeof(bottonPacket) - sizeof(Header));
+        if (!read(data.data(), data.size())) { error_count++; break; }
+        data.insert(data.begin(), headdata.begin(), headdata.end());
+        bottonPacket pkt = fromVector<bottonPacket>(data);
+        if (!crc16::Verify_CRC16_Check_Sum(
+              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
+        error_count = 0;
+        break;
+      }
+      case 0x505: {
+        data.resize(sizeof(bassPacket) - sizeof(Header));
+        if (!read(data.data(), data.size())) { error_count++; break; }
+        data.insert(data.begin(), headdata.begin(), headdata.end());
+        bassPacket pkt = fromVector<bassPacket>(data);
+        if (!crc16::Verify_CRC16_Check_Sum(
+              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
+        error_count = 0;
+        handleBass(pkt);
+        break;
+      }
+      case 0x0001:
+      case 0x0100: {
+        data.resize(sizeof(GameStatusPacket) - sizeof(Header));
+        if (!read(data.data(), data.size())) { error_count++; break; }
+        data.insert(data.begin(), headdata.begin(), headdata.end());
+        GameStatusPacket pkt = fromVector<GameStatusPacket>(data);
+        if (!crc16::Verify_CRC16_Check_Sum(
+              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
+        error_count = 0;
+        handleGameStatus(pkt);
+        break;
+      }
+      case 0x0201:
+      case 0x0102: {
+        data.resize(sizeof(GameRobotStatusPacket) - sizeof(Header));
+        if (!read(data.data(), data.size())) { error_count++; break; }
+        data.insert(data.begin(), headdata.begin(), headdata.end());
+        GameRobotStatusPacket pkt = fromVector<GameRobotStatusPacket>(data);
+        if (!crc16::Verify_CRC16_Check_Sum(
+              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
+        error_count = 0;
+        handleGameRobotStatus(pkt);
         break;
       }
       default: {
-        // Discard unknown packet payload
         uint16_t payload_len = header.data_length;
         if (payload_len > 0 && payload_len < 256) {
           data.resize(payload_len);

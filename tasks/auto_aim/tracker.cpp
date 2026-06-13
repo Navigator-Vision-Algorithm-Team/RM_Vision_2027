@@ -28,6 +28,16 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
 
 std::string Tracker::state() const { return state_; }
 
+void Tracker::reset()
+{
+  state_ = "lost";
+  pre_state_ = "lost";
+  detect_count_ = 0;
+  temp_lost_count_ = 0;
+  max_temp_lost_count_ = normal_temp_lost_count_;
+  tools::logger()->info("[Tracker] Reset by MCU signal.");
+}
+
 std::list<Target> Tracker::track(
   std::list<Armor> & armors, std::chrono::steady_clock::time_point t, bool use_enemy_color)
 {

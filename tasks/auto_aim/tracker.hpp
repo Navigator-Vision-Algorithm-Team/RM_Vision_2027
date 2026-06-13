@@ -20,6 +20,7 @@ public:
   Tracker(const std::string & config_path, Solver & solver);
 
   std::string state() const;
+  void reset();
 
   std::list<Target> track(
     std::list<Armor> & armors, std::chrono::steady_clock::time_point t,
