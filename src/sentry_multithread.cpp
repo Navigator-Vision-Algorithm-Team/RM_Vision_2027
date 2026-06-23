@@ -198,7 +198,7 @@ int main(int argc, char * argv[])
     else if (tracker.state() == "lost") {
 
       if (detection_queue.empty() && if_spin) {
-        command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0] + 0.5);
+        command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0] + 4);
       } else {
         command = decider.decide(detection_queue);
         command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
