@@ -130,6 +130,7 @@ void HikRobot::capture_start()
   set_enum_value("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS);
   set_enum_value("ExposureAuto", MV_EXPOSURE_AUTO_MODE_OFF);
   set_enum_value("GainAuto", MV_GAIN_MODE_OFF);
+  set_enum_value("PixelFormat", PixelType_Gvsp_BayerRG8);  // 显式设置 Bayer 格式确保彩色输出
   set_float_value("ExposureTime", exposure_us_);
   set_float_value("Gain", gain_);
   MV_CC_SetFrameRate(handle_, 30);
@@ -141,12 +142,15 @@ void HikRobot::capture_start()
   }
 
   capture_thread_ = std::thread{[this] {
-    tools::logger()->info("HikRobot's capture thread started.");
+    // 读取实际生效的像素格式用于诊断
+    MVCC_ENUMVALUE actual_pixel_format = {0};
+    MV_CC_GetEnumValue(handle_, "PixelFormat", &actual_pixel_format);
+    tools::logger()->info(
+      "HikRobot's capture thread started. PixelFormat={:#x}", actual_pixel_format.nCurValue);
 
     capturing_ = true;
 
     MV_FRAME_OUT raw;
-    MV_CC_PIXEL_CONVERT_PARAM cvt_param;
 
     while (!capture_quit_) {
       std::this_thread::sleep_for(1ms);
@@ -161,38 +165,51 @@ void HikRobot::capture_start()
       }
 
       auto timestamp = std::chrono::steady_clock::now();
-      cv::Mat img(cv::Size(raw.stFrameInfo.nWidth, raw.stFrameInfo.nHeight), CV_8U, raw.pBufAddr);
-
-      cvt_param.nWidth = raw.stFrameInfo.nWidth;
-      cvt_param.nHeight = raw.stFrameInfo.nHeight;
-
-      cvt_param.pSrcData = raw.pBufAddr;
-      cvt_param.nSrcDataLen = raw.stFrameInfo.nFrameLen;
-      cvt_param.enSrcPixelType = raw.stFrameInfo.enPixelType;
-
-      cvt_param.pDstBuffer = img.data;
-      cvt_param.nDstBufferSize = img.total() * img.elemSize();
-      cvt_param.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
-
-      // ret = MV_CC_ConvertPixelType(handle_, &cvt_param);
       const auto & frame_info = raw.stFrameInfo;
       auto pixel_type = frame_info.enPixelType;
       cv::Mat dst_image;
-      const static std::unordered_map<MvGvspPixelType, cv::ColorConversionCodes> type_map = {
+
+      // Bayer 格式：单通道 raw，需要 debayer
+      const static std::unordered_map<MvGvspPixelType, cv::ColorConversionCodes> bayer_map = {
         {PixelType_Gvsp_BayerGR8, cv::COLOR_BayerGR2RGB},
         {PixelType_Gvsp_BayerRG8, cv::COLOR_BayerRG2RGB},
         {PixelType_Gvsp_BayerGB8, cv::COLOR_BayerGB2RGB},
         {PixelType_Gvsp_BayerBG8, cv::COLOR_BayerBG2RGB}};
-      auto it = type_map.find(pixel_type);
-      if (it != type_map.end()) {
-        cv::cvtColor(img, dst_image, it->second);
-        img = dst_image;
-      } else if (img.channels() == 1) {
-        cv::cvtColor(img, dst_image, cv::COLOR_GRAY2BGR);
-        img = dst_image;
+
+      auto bayer_it = bayer_map.find(pixel_type);
+      if (bayer_it != bayer_map.end()) {
+        cv::Mat raw_img(
+          cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC1, raw.pBufAddr);
+        cv::cvtColor(raw_img, dst_image, bayer_it->second);
+      }
+      // RGB8 格式：3 通道，直接封装
+      else if (pixel_type == PixelType_Gvsp_RGB8_Packed) {
+        dst_image = cv::Mat(
+          cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC3, raw.pBufAddr);
+        cv::cvtColor(dst_image, dst_image, cv::COLOR_RGB2BGR);
+      }
+      // BGR8 格式：3 通道，直接封装
+      else if (pixel_type == PixelType_Gvsp_BGR8_Packed) {
+        dst_image = cv::Mat(
+          cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC3, raw.pBufAddr);
+      }
+      // Mono8：单通道灰度
+      else if (pixel_type == PixelType_Gvsp_Mono8) {
+        cv::Mat raw_img(
+          cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC1, raw.pBufAddr);
+        cv::cvtColor(raw_img, dst_image, cv::COLOR_GRAY2BGR);
+      }
+      // 未知格式：尝试按单通道处理
+      else {
+        cv::Mat raw_img(
+          cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC1, raw.pBufAddr);
+        if (raw_img.channels() == 1)
+          cv::cvtColor(raw_img, dst_image, cv::COLOR_GRAY2BGR);
+        else
+          dst_image = raw_img;
       }
 
-      queue_.push({img, timestamp});
+      queue_.push({dst_image, timestamp});
 
       ret = MV_CC_FreeImageBuffer(handle_, &raw);
       if (ret != MV_OK) {

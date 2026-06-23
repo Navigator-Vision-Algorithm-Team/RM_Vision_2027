@@ -58,6 +58,14 @@ void CBoard::send(Command command) const
   frame.data[6] = (int16_t)(command.horizon_distance * 1e4) >> 8;
   frame.data[7] = (int16_t)(command.horizon_distance * 1e4);
 
+  static int send_count = 0;
+  if (++send_count % 30 == 0)  // 1 Hz (at 30fps)
+    tools::logger()->info(
+      "[CBoard] CAN id=0x{:x} ctrl={} shoot={} yaw={:.2f}deg({}) pitch={:.2f}deg({})",
+      frame.can_id, frame.data[0], frame.data[1],
+      command.yaw * 57.3, (int16_t)(command.yaw * 1e4),
+      command.pitch * 57.3, (int16_t)(command.pitch * 1e4));
+
   try {
     can_.write(&frame);
   } catch (const std::exception & e) {

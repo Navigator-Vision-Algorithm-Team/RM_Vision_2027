@@ -13,7 +13,7 @@ namespace tools
 class Recorder
 {
 public:
-  Recorder(double fps = 30);
+  Recorder(double fps = 30, const std::string & camera_name = "");
   ~Recorder();
   void record(
     const cv::Mat & img, const Eigen::Quaterniond & q,
@@ -29,6 +29,7 @@ private:
   bool init_;
   std::atomic<bool> stop_thread_;
   double fps_;
+  std::string camera_name_;
   std::string text_path_;
   std::string video_path_;
   std::ofstream text_writer_;

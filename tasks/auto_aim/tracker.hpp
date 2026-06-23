@@ -42,6 +42,7 @@ private:
   Target target_;
   std::chrono::steady_clock::time_point last_timestamp_;
   ArmorPriority omni_target_priority_;
+  double last_center_y_ = -1;  // 上次接受的测量在图像中的 Y 坐标
 
   void state_machine(bool found);
 

@@ -11,6 +11,7 @@
 #include "detection.hpp"
 #include "io/camera.hpp"
 #include "tasks/auto_aim/armor.hpp"
+#include "tools/recorder.hpp"
 #include "tools/thread_pool.hpp"
 #include "tools/thread_safe_queue.hpp"
 
@@ -22,14 +23,15 @@ class Perceptron
 public:
   Perceptron(
     const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path,
-    std::shared_ptr<auto_aim::YOLO> yolo);
+    std::shared_ptr<auto_aim::YOLO> yolo,
+    std::vector<tools::Recorder *> recorders = {});
 
   ~Perceptron();
 
   std::vector<DetectionResult> get_detection_queue();
 
   void parallel_infer(
-    const OmniCameraConfig & cfg, const std::shared_ptr<auto_aim::YOLO> & yolo);
+    const OmniCameraConfig & cfg, const std::shared_ptr<auto_aim::YOLO> & yolo, size_t index);
 
 private:
   std::vector<std::thread> threads_;
@@ -41,6 +43,7 @@ private:
   bool stop_flag_;
   mutable std::mutex mutex_;
   std::condition_variable condition_;
+  std::vector<tools::Recorder *> omni_recorders_;
 };
 
 }  // namespace omniperception

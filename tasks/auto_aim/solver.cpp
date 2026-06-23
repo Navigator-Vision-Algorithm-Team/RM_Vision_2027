@@ -67,6 +67,27 @@ void Solver::solve(Armor & armor) const
   armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
   armor.xyz_in_world = R_gimbal2world_ * armor.xyz_in_gimbal;
 
+  // --- debug: trace Z through each coordinate frame ---
+  static int solve_count = 0;
+  solve_count++;
+  if (solve_count % 5 == 0) {  // log every 5th solve to avoid spam
+    tools::logger()->debug(
+      "[Solver] #{:d} PnP cam=({:.3f},{:.3f},{:.3f})m -> gimbal=({:.3f},{:.3f},{:.3f})m -> "
+      "world=({:.3f},{:.3f},{:.3f})m type={} name={}",
+      solve_count,
+      xyz_in_camera[0], xyz_in_camera[1], xyz_in_camera[2],
+      armor.xyz_in_gimbal[0], armor.xyz_in_gimbal[1], armor.xyz_in_gimbal[2],
+      armor.xyz_in_world[0], armor.xyz_in_world[1], armor.xyz_in_world[2],
+      ARMOR_TYPES[armor.type], ARMOR_NAMES[armor.name]);
+    // also log the 4 corner image points for verification
+    tools::logger()->debug(
+      "[Solver] pts=({:.0f},{:.0f}) ({:.0f},{:.0f}) ({:.0f},{:.0f}) ({:.0f},{:.0f})",
+      armor.points[0].x, armor.points[0].y,
+      armor.points[1].x, armor.points[1].y,
+      armor.points[2].x, armor.points[2].y,
+      armor.points[3].x, armor.points[3].y);
+  }
+
   cv::Mat rmat;
   cv::Rodrigues(rvec, rmat);
   Eigen::Matrix3d R_armor2camera;

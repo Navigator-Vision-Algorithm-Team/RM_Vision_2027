@@ -128,6 +128,15 @@ void Decider::sort(std::vector<DetectionResult> & detection_queue)
       [](const auto_aim::Armor & a, const auto_aim::Armor & b) { return a.priority < b.priority; });
   }
 
+  // 移除过滤后没有装甲板的 DetectionResult
+  detection_queue.erase(
+    std::remove_if(
+      detection_queue.begin(), detection_queue.end(),
+      [](const DetectionResult & dr) { return dr.armors.empty(); }),
+    detection_queue.end());
+
+  if (detection_queue.empty()) return;
+
   // 根据优先级对 DetectionResult 进行排序
   std::sort(
     detection_queue.begin(), detection_queue.end(),
