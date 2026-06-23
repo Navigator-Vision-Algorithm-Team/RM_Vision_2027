@@ -151,7 +151,15 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   auto armor_num = armor_xyza_list.size();
   if (armor_num == 0) return {false, Eigen::Vector4d::Zero()};
   // 如果装甲板未发生过跳变，则只有当前装甲板的位置已知
-  if (!target.jumped) return {true, armor_xyza_list[0]};
+  if (!target.jumped) {
+    static int nojump_count = 0;
+    if (++nojump_count % 10 == 0)
+      tools::logger()->debug(
+        "[Aimer] not jumped, aim_point xyza=({:.2f},{:.2f},{:.2f},{:.1f}deg)",
+        armor_xyza_list[0][0], armor_xyza_list[0][1], armor_xyza_list[0][2],
+        armor_xyza_list[0][3] * 57.3);
+    return {true, armor_xyza_list[0]};
+  }
 
   // 整车旋转中心的球坐标yaw
   auto center_yaw = std::atan2(ekf_x[2], ekf_x[0]);
@@ -185,11 +193,23 @@ AimPoint Aimer::choose_aim_point(const Target & target)
       if (lock_id_ != id0 && lock_id_ != id1)
         lock_id_ = (std::abs(delta_angle_list[id0]) < std::abs(delta_angle_list[id1])) ? id0 : id1;
 
+      static int lock_log_count = 0;
+      if (++lock_log_count % 10 == 0)
+        tools::logger()->debug(
+          "[Aimer] jumped locked id={} xyza=({:.2f},{:.2f},{:.2f},{:.1f}deg)",
+          lock_id_, armor_xyza_list[lock_id_][0], armor_xyza_list[lock_id_][1],
+          armor_xyza_list[lock_id_][2], armor_xyza_list[lock_id_][3] * 57.3);
       return {true, armor_xyza_list[lock_id_]};
     }
 
     // 只有一个装甲板在可射击范围内时，退出锁定模式
     lock_id_ = -1;
+    static int single_log_count = 0;
+    if (++single_log_count % 10 == 0)
+      tools::logger()->debug(
+        "[Aimer] jumped single id={} xyza=({:.2f},{:.2f},{:.2f},{:.1f}deg)",
+        id_list[0], armor_xyza_list[id_list[0]][0], armor_xyza_list[id_list[0]][1],
+        armor_xyza_list[id_list[0]][2], armor_xyza_list[id_list[0]][3] * 57.3);
     return {true, armor_xyza_list[id_list[0]]};
   }
 

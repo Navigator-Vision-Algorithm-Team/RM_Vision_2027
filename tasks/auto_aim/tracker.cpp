@@ -270,6 +270,7 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
     target_ = Target(armor, t, 0.2, 4, P0_dig);
   }
 
+  last_center_y_ = -1;  // 新建目标时重置图像 Y 检验基准
   return true;
 }
 
@@ -287,6 +288,7 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
 
   if (found_count == 0) return false;
 
+  bool any_accepted = false;
   for (auto & armor : armors) {
     if (
       armor.name != target_.name || armor.type != target_.armor_type
@@ -294,9 +296,50 @@ bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock
     )
       continue;
 
+    // 图像空间 Y 校验：真目标不会在画面中上下乱跳（云台抖动 ±50px 内）
+    // 对所有帧生效，包括新 EKF，防止误检在 EKF 未收敛时污染状态
+    if (last_center_y_ >= 0 && std::abs(armor.center.y - last_center_y_) > 100) {
+      tools::logger()->debug(
+        "[Tracker] Reject by image Y: det_y={:.0f} last_y={:.0f}",
+        armor.center.y, last_center_y_);
+      continue;
+    }
+
     solver_.solve(armor);
 
+    // 3D 位置一致性校验：仅对已收敛的 EKF 生效
+    bool position_ok = true;
+    if (target_.update_count_ >= 5) {
+      auto pred_xyza_list = target_.armor_xyza_list();
+      double min_dist = 1e10;
+      for (const auto & pred : pred_xyza_list) {
+        double dist = (armor.xyz_in_world - pred.head<3>()).norm();
+        if (dist < min_dist) min_dist = dist;
+      }
+      position_ok = (min_dist < 1.5);
+      if (!position_ok)
+        tools::logger()->debug(
+          "[Tracker] Reject outlier: meas_z={:.2f}m min_dist={:.2f}m",
+          armor.xyz_in_world[2], min_dist);
+    }
+
+    if (!position_ok) continue;
+
     target_.update(armor);
+    last_center_y_ = armor.center.y;
+    any_accepted = true;
+  }
+
+  // 所有匹配的测量都被拒绝 → EKF 可能已发散，强制回到 lost 重来
+  if (!any_accepted) {
+    target_.diverged_count++;
+    if (target_.diverged_count > 20) {
+      tools::logger()->warn(
+        "[Tracker] All measurements rejected for 20 frames, forcing lost to reset EKF.");
+      return false;
+    }
+  } else {
+    target_.diverged_count = 0;
   }
 
   return true;

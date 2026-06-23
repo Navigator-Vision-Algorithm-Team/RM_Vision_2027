@@ -10,6 +10,8 @@ yolov8_model_path: assets/yolov8.xml
 yolov5_model_path: assets/yolov5.xml
 device: GPU
 min_confidence: 0.8
+yolo_score_threshold: 0.8   # YOLO 原始输出置信度阈值（提高可减少误检，默认0.7）
+yolo_nms_threshold: 0.3     # NMS 的 IoU 阈值（默认0.3）
 use_traditional: true
 
 #####-----ROI-----#####
@@ -58,8 +60,8 @@ send_canid: 0xff
 can_interface: "can0"
 
 #####-----tracker参数-----#####
-min_detect_count: 5
-max_temp_lost_count: 25
+min_detect_count: 3
+max_temp_lost_count: 50
 outpost_max_temp_lost_count: 75
 
 #####-----aimer参数-----#####

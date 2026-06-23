@@ -19,6 +19,10 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug)
   device_ = yaml["device"].as<std::string>();
   binary_threshold_ = yaml["threshold"].as<double>();
   min_confidence_ = yaml["min_confidence"].as<double>();
+  if (yaml["yolo_score_threshold"])
+    score_threshold_ = yaml["yolo_score_threshold"].as<double>();
+  if (yaml["yolo_nms_threshold"])
+    nms_threshold_ = yaml["yolo_nms_threshold"].as<double>();
   int x = 0, y = 0, width = 0, height = 0;
   x = yaml["roi"]["x"].as<int>();
   y = yaml["roi"]["y"].as<int>();

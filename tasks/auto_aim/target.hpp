@@ -41,6 +41,9 @@ public:
 
   bool convergened();
 
+  int diverged_count = 0;
+  int update_count_ = 0;
+
   bool isinit = false;
 
   bool checkinit();
@@ -48,7 +51,6 @@ public:
 private:
   int armor_num_;
   int switch_count_;
-  int update_count_;
 
   bool is_switch_, is_converged_;
 
