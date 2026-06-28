@@ -48,8 +48,13 @@ int main(int argc, char * argv[])
   auto yaml = tools::load(config_path);
 
   io::ROS2 ros2;
+  tools::logger()->info("[Main] Initializing SerialBoard...");
   io::SerialBoard serial_board(config_path);
+  tools::logger()->info("[Main] SerialBoard ready.");
+
+  tools::logger()->info("[Main] Opening camera...");
   io::Camera camera(config_path, "main");
+  tools::logger()->info("[Main] Camera ready: {}", camera.device_name());
 
   // 读取全向感知相机配置
   int omni_count = 0;
@@ -95,15 +100,37 @@ int main(int argc, char * argv[])
   std::chrono::steady_clock::time_point timestamp;
   io::Command last_command;
 
+  bool main_loop_started = false;
+  bool game_started_logged = false;
+  int frame_count = 0;
+  bool spin_mode_initialized = false;
+  double spin_yaw_angle = 0.0;
+  std::chrono::steady_clock::time_point last_spin_timestamp;
+
   while (!exiter.exit()) {
     camera.read(img, timestamp);
     Eigen::Quaterniond q = serial_board.imu_at(timestamp - 1ms);
-    recorder.record(img, q, timestamp);
 
+    if (!main_loop_started) {
+      main_loop_started = true;
+      tools::logger()->info("[Main] Main loop started — receiving frames");
+    }
+
+    frame_count++;
     // 比赛未开始时跳过自瞄逻辑（裁判系统控制）
     if (!serial_board.is_game_started()) {
+      if (!game_started_logged) {
+        game_started_logged = true;
+        tools::logger()->info("[Main] Game not started yet — recording raw frames, waiting...");
+      }
+      recorder.record(img, q, timestamp);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
+    }
+
+    if (!game_started_logged) {
+      game_started_logged = true;
+      tools::logger()->info("[Main] Game started! Entering detection & tracking loop");
     }
 
     /// 自瞄核心逻辑
@@ -116,49 +143,99 @@ int main(int argc, char * argv[])
       tracker.reset();
     }
 
+    // 先做一次检测（用于在自旋模式下判断是否应停止自旋）
     auto armors = yolo->detect(img);
-
-    decider.get_invincible_armor(ros2.subscribe_enemy_status());
-
-    decider.armor_filter(armors);
-
-    decider.set_priority(armors);
-
-    auto detection_queue = perceptron.get_detection_queue();
-
-    decider.sort(detection_queue);
-
-    auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp);
 
     io::Command command{false, false, 0, 0};
 
-    /// 全向感知逻辑
-    if (tracker.state() == "switching") {
-      command.control = switch_target.armors.empty() ? false : true;
+    if (omni_count == 0 && !spin_mode_initialized) {
+      spin_mode_initialized = true;
+      last_spin_timestamp = timestamp;
+      tools::logger()->info("[Main] Omni camera count is 0, enabling spin mode after game start");
+    }
+    // 仅当没有全向相机、已经初始化自旋、且当前没有检测到目标、且跟踪器处于丢失状态时才自旋
+    if (omni_count == 0 && spin_mode_initialized && armors.empty() && tracker.state() == "lost") {
+      const double spin_speed = 0.35;  // rad/s，适中且平稳
+      const double dt = std::chrono::duration<double>(timestamp - last_spin_timestamp).count();
+      spin_yaw_angle += spin_speed * dt;
+      last_spin_timestamp = timestamp;
+
+      command.control = true;
       command.shoot = false;
-      command.pitch = tools::limit_rad(switch_target.delta_pitch);
-      command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
+      command.yaw = tools::limit_rad(spin_yaw_angle + gimbal_pos[0]);
+      command.pitch = tools::limit_rad(0.0);
+
+      recorder.record(img, q, timestamp);
+      serial_board.send(command);
+    } else {
+      static bool first_detection_logged = false;
+      if (!first_detection_logged) {
+        first_detection_logged = true;
+        tools::logger()->info("[Main] First detection complete: {} armors found", armors.size());
+      }
+
+      decider.get_invincible_armor(ros2.subscribe_enemy_status());
+
+      decider.armor_filter(armors);
+
+      decider.set_priority(armors);
+
+      auto detection_queue = perceptron.get_detection_queue();
+
+      decider.sort(detection_queue);
+
+      auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp);
+
+      /// 全向感知逻辑
+      if (tracker.state() == "switching") {
+        command.control = switch_target.armors.empty() ? false : true;
+        command.shoot = false;
+        command.pitch = tools::limit_rad(switch_target.delta_pitch);
+        command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
+      }
+
+      else if (tracker.state() == "lost") {
+        command = decider.decide(detection_queue);
+        command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
+      }
+
+      else {
+        command = aimer.aim(targets, timestamp, serial_board.bullet_speed);
+      }
+
+      /// 发射逻辑
+      command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
+      // command.shoot = false;
+
+      // 每 150 帧 (~5 秒) 输出一次跟踪状态
+      if (frame_count % 150 == 0) {
+        tools::logger()->info(
+          "[Main] frame={} state={} armors={} targets={}", frame_count, tracker.state(),
+          armors.size(), targets.size());
+      }
+
+      // 在画面上绘制检测框和跟踪信息
+      for (const auto & armor : armors) {
+        cv::rectangle(img, armor.box, cv::Scalar(0, 255, 0), 2);
+        std::string label = fmt::format("{} {} {:.2f}",
+          auto_aim::COLORS[armor.color], auto_aim::ARMOR_NAMES[armor.name], armor.confidence);
+        cv::putText(img, label, cv::Point(armor.box.x, armor.box.y - 5),
+          cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+        for (const auto & pt : armor.points) {
+          cv::circle(img, pt, 2, cv::Scalar(0, 0, 255), -1);
+        }
+      }
+      cv::putText(img,
+        fmt::format("State: {} | Targets: {}", tracker.state(), targets.size()),
+        cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+
+      recorder.record(img, q, timestamp);
+      serial_board.send(command);
+
+      /// ROS2通信
+      Eigen::Vector4d target_info = decider.get_target_info(armors, targets);
+      ros2.publish(target_info);
     }
-
-    else if (tracker.state() == "lost") {
-      command = decider.decide(detection_queue);
-      command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
-    }
-
-    else {
-      command = aimer.aim(targets, timestamp, serial_board.bullet_speed);
-    }
-
-    /// 发射逻辑
-    command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
-    // command.shoot = false;
-
-    serial_board.send(command);
-
-    /// ROS2通信
-    Eigen::Vector4d target_info = decider.get_target_info(armors, targets);
-
-    ros2.publish(target_info);
   }
 
   return 0;
