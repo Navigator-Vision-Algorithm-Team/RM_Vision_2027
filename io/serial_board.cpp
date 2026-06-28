@@ -8,10 +8,7 @@
 namespace io
 {
 SerialBoard::SerialBoard(const std::string & config_path)
-: mode(Mode::auto_aim),
-  shoot_mode(ShootMode::left_shoot),
-  bullet_speed(28.0),
-  ft_angle(0)
+: bullet_speed(28.0)
 {
   auto yaml = tools::load(config_path);
 
@@ -45,12 +42,13 @@ SerialBoard::SerialBoard(const std::string & config_path)
     "[SerialBoard] Serial port {} opened, baud={}, referee={}",
     device_name_, baud_rate_, use_referee_system_);
 
-  receive_thread_ = std::thread(&SerialBoard::receiveThread, this);
+  // 初始化 IMU 数据为单位四元数，收到真实数据后会被覆盖
+  auto t0 = std::chrono::steady_clock::time_point(std::chrono::seconds(0));
+  data_ahead_ = {Eigen::Quaterniond::Identity(), t0};
+  data_behind_ = {Eigen::Quaterniond::Identity(), t0 + std::chrono::milliseconds(1)};
 
-  tools::logger()->info("[SerialBoard] Waiting for first quaternion...");
-  queue_.pop(data_ahead_);
-  queue_.pop(data_behind_);
-  tools::logger()->info("[SerialBoard] Ready.");
+  receive_thread_ = std::thread(&SerialBoard::receiveThread, this);
+  tools::logger()->info("[SerialBoard] Ready (IMU will update when MCU sends 0x502).");
 }
 
 SerialBoard::~SerialBoard()
@@ -62,13 +60,16 @@ SerialBoard::~SerialBoard()
 
 Eigen::Quaterniond SerialBoard::imu_at(std::chrono::steady_clock::time_point timestamp)
 {
-  if (data_behind_.timestamp < timestamp) data_ahead_ = data_behind_;
-
-  while (true) {
-    queue_.pop(data_behind_);
-    if (data_behind_.timestamp > timestamp) break;
-    data_ahead_ = data_behind_;
+  // 非阻塞地获取最新 IMU 数据
+  IMUData new_data;
+  while (queue_.try_pop(new_data)) {
+    if (new_data.timestamp > data_behind_.timestamp) {
+      data_ahead_ = data_behind_;
+      data_behind_ = new_data;
+    }
   }
+
+  if (data_behind_.timestamp < timestamp) data_ahead_ = data_behind_;
 
   Eigen::Quaterniond q_a = data_ahead_.q.normalized();
   Eigen::Quaterniond q_b = data_behind_.q.normalized();
@@ -77,6 +78,9 @@ Eigen::Quaterniond SerialBoard::imu_at(std::chrono::steady_clock::time_point tim
   auto t_c = timestamp;
   std::chrono::duration<double> t_ab = t_b - t_a;
   std::chrono::duration<double> t_ac = t_c - t_a;
+
+  // 尚无真实 IMU 数据时直接返回单位四元数
+  if (t_ab.count() <= 0) return q_a;
 
   auto k = t_ac / t_ab;
   Eigen::Quaterniond q_c = q_a.slerp(k, q_b).normalized();
@@ -209,10 +213,15 @@ void SerialBoard::receiveThread()
 {
   tools::logger()->info("[SerialBoard] receiveThread started.");
   int error_count = 0;
+  int valid_packet_count = 0;
+  bool first_imu_received = false;
+  bool first_valid_header = false;
 
   std::vector<uint8_t> flag(1);
   std::vector<uint8_t> headdata;
   std::vector<uint8_t> data;
+
+  auto last_status_time = std::chrono::steady_clock::now();
 
   while (!quit_) {
     if (error_count > 5000) {
@@ -220,6 +229,16 @@ void SerialBoard::receiveThread()
       tools::logger()->warn("[SerialBoard] Too many errors, reconnecting...");
       reconnect();
       continue;
+    }
+
+    // 每 10 秒报告一次串口状态（直到收到第一个 IMU 包为止）
+    auto now = std::chrono::steady_clock::now();
+    auto since_last = std::chrono::duration_cast<std::chrono::seconds>(now - last_status_time).count();
+    if (!first_imu_received && since_last >= 10) {
+      tools::logger()->warn(
+        "[SerialBoard] No IMU (0x502) yet — {} packets seen, {} read errors (using identity q)",
+        valid_packet_count, error_count);
+      last_status_time = now;
     }
 
     if (!read(flag.data(), 1)) {
@@ -239,8 +258,16 @@ void SerialBoard::receiveThread()
     Header header = fromVector<Header>(headdata);
 
     if (!crc8::Verify_CRC8_Check_Sum(
-          reinterpret_cast<const uint8_t *>(&header), sizeof(header))) {
+          reinterpret_cast<const uint8_t *>(&header), sizeof(header) - 2)) {
       continue;
+    }
+
+    valid_packet_count++;
+
+    if (!first_valid_header) {
+      first_valid_header = true;
+      uint16_t first_cmd_id = header.cmd_id;
+      tools::logger()->info("[SerialBoard] First valid packet received: cmd_id=0x{:x}", first_cmd_id);
     }
 
     switch (header.cmd_id) {
@@ -253,6 +280,14 @@ void SerialBoard::receiveThread()
         if (!crc16::Verify_CRC16_Check_Sum(
               reinterpret_cast<const uint8_t *>(&imu_packet), sizeof(imu_packet))) {
           break;
+        }
+
+        if (!first_imu_received) {
+          first_imu_received = true;
+          float p = imu_packet.pitch, r = imu_packet.roll, y = imu_packet.yaw;
+          tools::logger()->info(
+            "[SerialBoard] First IMU packet received (pitch={:.2f} roll={:.2f} yaw={:.2f}) — unblocking",
+            p, r, y);
         }
 
         error_count = 0;

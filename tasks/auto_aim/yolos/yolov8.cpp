@@ -289,8 +289,8 @@ void YOLOV8::draw_detections(
     cv::Scalar green(0, 255, 0);
     cv::rectangle(detection, roi_, green, 2);
   }
-  cv::resize(detection, detection, {}, 0.5, 0.5);  // 显示时缩小图片尺寸
-  cv::imshow("detection", detection);
+  cv::resize(detection, detection, {}, 0.5, 0.5);
+  // cv::imshow("detection", detection);  // headless-safe: use recorder instead
 }
 
 void YOLOV8::sort_keypoints(std::vector<cv::Point2f> & keypoints)

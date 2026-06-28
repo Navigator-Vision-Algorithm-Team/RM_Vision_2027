@@ -118,6 +118,7 @@ struct NavigationPacket
 // Parsed game status (extracted from GameStatusPacket)
 struct GameStatus
 {
+  Header header;
   uint8_t game_type;         // 比赛类型
   uint8_t game_progress;     // 比赛阶段 (4 = 比赛中)
   uint16_t stage_remain_time; // 阶段剩余时间
@@ -127,6 +128,7 @@ struct GameStatus
 // Parsed robot status (extracted from GameRobotStatusPacket)
 struct RobotStatus
 {
+  Header header;
   uint8_t robot_id;
   uint8_t robot_level;
   uint16_t remain_hp;
