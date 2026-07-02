@@ -3,11 +3,17 @@
 
 #include <chrono>
 #include <list>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "io/camera.hpp"
 #include "tasks/auto_aim/armor.hpp"
+
+namespace tools
+{
+class Recorder;
+}
 
 namespace omniperception
 {
@@ -15,6 +21,7 @@ namespace omniperception
 struct OmniCameraConfig
 {
   io::Camera * camera;
+  std::shared_ptr<tools::Recorder> recorder;
   double mount_yaw;    // degrees
   double mount_pitch;  // degrees
   double fov_h;        // degrees

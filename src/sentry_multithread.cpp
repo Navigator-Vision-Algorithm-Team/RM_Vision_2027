@@ -36,7 +36,7 @@ int main(int argc, char * argv[])
 {
   tools::Exiter exiter;
   tools::Plotter plotter;
-  tools::Recorder recorder;
+  tools::Recorder main_recorder(30, "main");
 
   cv::CommandLineParser cli(argc, argv, keys);
   if (cli.has("help")) {
@@ -61,14 +61,17 @@ int main(int argc, char * argv[])
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
 
   std::vector<std::unique_ptr<io::Camera>> omni_cameras;
+  std::vector<std::unique_ptr<tools::Recorder>> omni_recorders;
   std::vector<omniperception::OmniCameraConfig> omni_configs;
 
   for (int i = 1; i <= omni_count; i++) {
     auto sursign = "omni" + std::to_string(i);
     auto cam = std::make_unique<io::Camera>(config_path, sursign);
+    auto recorder = std::make_unique<tools::Recorder>(30, sursign);
 
     omniperception::OmniCameraConfig cfg;
     cfg.camera = cam.get();
+    cfg.recorder = std::shared_ptr<tools::Recorder>(std::move(recorder));
     cfg.mount_yaw = yaml["omni_mount_yaw_" + std::to_string(i)]
                       ? yaml["omni_mount_yaw_" + std::to_string(i)].as<double>()
                       : 0.0;
@@ -123,7 +126,7 @@ int main(int argc, char * argv[])
         game_started_logged = true;
         tools::logger()->info("[Main] Game not started yet — recording raw frames, waiting...");
       }
-      recorder.record(img, q, timestamp);
+      main_recorder.record(img, q, timestamp);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
@@ -165,7 +168,7 @@ int main(int argc, char * argv[])
       command.yaw = tools::limit_rad(spin_yaw_angle + gimbal_pos[0]);
       command.pitch = tools::limit_rad(0.0);
 
-      recorder.record(img, q, timestamp);
+      main_recorder.record(img, q, timestamp);
       serial_board.send(command);
     } else {
       static bool first_detection_logged = false;
@@ -229,7 +232,7 @@ int main(int argc, char * argv[])
         fmt::format("State: {} | Targets: {}", tracker.state(), targets.size()),
         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
 
-      recorder.record(img, q, timestamp);
+      main_recorder.record(img, q, timestamp);
       serial_board.send(command);
 
       /// ROS2通信
