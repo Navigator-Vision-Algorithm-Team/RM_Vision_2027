@@ -161,35 +161,27 @@ void HikRobot::capture_start()
       }
 
       auto timestamp = std::chrono::steady_clock::now();
-      cv::Mat img(cv::Size(raw.stFrameInfo.nWidth, raw.stFrameInfo.nHeight), CV_8U, raw.pBufAddr);
-
-      cvt_param.nWidth = raw.stFrameInfo.nWidth;
-      cvt_param.nHeight = raw.stFrameInfo.nHeight;
-
-      cvt_param.pSrcData = raw.pBufAddr;
-      cvt_param.nSrcDataLen = raw.stFrameInfo.nFrameLen;
-      cvt_param.enSrcPixelType = raw.stFrameInfo.enPixelType;
-
-      cvt_param.pDstBuffer = img.data;
-      cvt_param.nDstBufferSize = img.total() * img.elemSize();
-      cvt_param.enDstPixelType = PixelType_Gvsp_BGR8_Packed;
-
-      // ret = MV_CC_ConvertPixelType(handle_, &cvt_param);
       const auto & frame_info = raw.stFrameInfo;
       auto pixel_type = frame_info.enPixelType;
-      cv::Mat dst_image;
-      const static std::unordered_map<MvGvspPixelType, cv::ColorConversionCodes> type_map = {
-        {PixelType_Gvsp_BayerGR8, cv::COLOR_BayerGR2RGB},
-        {PixelType_Gvsp_BayerRG8, cv::COLOR_BayerRG2RGB},
-        {PixelType_Gvsp_BayerGB8, cv::COLOR_BayerGB2RGB},
-        {PixelType_Gvsp_BayerBG8, cv::COLOR_BayerBG2RGB}};
-      auto it = type_map.find(pixel_type);
-      if (it != type_map.end()) {
-        cv::cvtColor(img, dst_image, it->second);
-        img = dst_image;
-      } else if (img.channels() == 1) {
-        cv::cvtColor(img, dst_image, cv::COLOR_GRAY2BGR);
-        img = dst_image;
+      cv::Mat img;
+
+      const static std::unordered_map<MvGvspPixelType, cv::ColorConversionCodes> bayer_map = {
+        {PixelType_Gvsp_BayerGR8, cv::COLOR_BayerGR2BGR},
+        {PixelType_Gvsp_BayerRG8, cv::COLOR_BayerRG2BGR},
+        {PixelType_Gvsp_BayerGB8, cv::COLOR_BayerGB2BGR},
+        {PixelType_Gvsp_BayerBG8, cv::COLOR_BayerBG2BGR}};
+      auto it = bayer_map.find(pixel_type);
+      if (it != bayer_map.end()) {
+        cv::Mat raw_mat(cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC1, raw.pBufAddr);
+        cv::cvtColor(raw_mat, img, it->second);
+      } else if (pixel_type == PixelType_Gvsp_BGR8_Packed) {
+        img = cv::Mat(cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC3, raw.pBufAddr).clone();
+      } else if (pixel_type == PixelType_Gvsp_RGB8_Packed) {
+        cv::Mat raw_mat(cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC3, raw.pBufAddr);
+        cv::cvtColor(raw_mat, img, cv::COLOR_RGB2BGR);
+      } else {
+        cv::Mat raw_mat(cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC1, raw.pBufAddr);
+        cv::cvtColor(raw_mat, img, cv::COLOR_GRAY2BGR);
       }
 
       queue_.push({img, timestamp});
