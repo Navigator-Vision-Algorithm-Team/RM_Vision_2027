@@ -1,12 +1,14 @@
 #include "perceptron.hpp"
 
 #include <chrono>
+#include <fmt/core.h>
 #include <memory>
 #include <thread>
 
 #include "tasks/auto_aim/yolo.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
+#include "tools/recorder.hpp"
 
 namespace omniperception
 {
@@ -84,6 +86,23 @@ void Perceptron::parallel_infer(
       }
 
       auto armors = yolo->detect(img);
+      cv::Mat display_img = img.clone();
+      for (const auto & armor : armors) {
+        cv::rectangle(display_img, armor.box, cv::Scalar(0, 255, 0), 2);
+        std::string label = fmt::format(
+          "{} {} {:.2f}", auto_aim::COLORS[armor.color], auto_aim::ARMOR_NAMES[armor.name],
+          armor.confidence);
+        cv::putText(display_img, label, cv::Point(armor.box.x, armor.box.y - 5),
+          cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
+        for (const auto & pt : armor.points) {
+          cv::circle(display_img, pt, 2, cv::Scalar(0, 0, 255), -1);
+        }
+      }
+
+      if (cfg.recorder && !display_img.empty()) {
+        cfg.recorder->record(display_img, Eigen::Quaterniond::Identity(), ts);
+      }
+
       if (!armors.empty()) {
         auto da = decider_.delta_angle(armors, cfg);
 
