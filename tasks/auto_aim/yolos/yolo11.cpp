@@ -3,6 +3,7 @@
 #include <fmt/chrono.h>
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <filesystem>
 
 #include "tools/img_tools.hpp"
@@ -203,7 +204,9 @@ cv::Point2f YOLO11::get_center_norm(const cv::Mat & bgr_img, const cv::Point2f &
 {
   auto h = bgr_img.rows;
   auto w = bgr_img.cols;
-  return {center.x / w, center.y / h};
+  return {
+    std::clamp(center.x / w, 0.0f, 1.0f),
+    std::clamp(center.y / h, 0.0f, 1.0f)};
 }
 
 void YOLO11::sort_keypoints(std::vector<cv::Point2f> & keypoints)

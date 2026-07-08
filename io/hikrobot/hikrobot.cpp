@@ -92,19 +92,24 @@ void HikRobot::on_frame(unsigned char * pData, MV_FRAME_OUT_INFO_EX * pFrameInfo
 
   // Defensive: SDK may deliver NULL or zero-dimension frames on error
   if (!pData || !pFrameInfo) return;
-  if (pFrameInfo->nWidth == 0 || pFrameInfo->nHeight == 0) return;
 
-  // Verify the delivered buffer is at least as large as expected BGR data.
-  // nFrameLen is the actual payload size — if smaller than W×H×3, the
-  // cv::Mat constructor would overread the buffer.
+  // Sanity-check dimensions — anything exceeding 8K is garbage
+  if (pFrameInfo->nWidth == 0 || pFrameInfo->nHeight == 0) return;
+  if (pFrameInfo->nWidth > 8192 || pFrameInfo->nHeight > 8192) return;
+
+  // Verify the delivered buffer is large enough.  nFrameLen == 0 is also
+  // invalid (can happen on corrupted / status-only frames from SDK).
   unsigned int expected_bytes =
     static_cast<unsigned int>(pFrameInfo->nWidth) *
     static_cast<unsigned int>(pFrameInfo->nHeight) * 3;
-  if (pFrameInfo->nFrameLen < expected_bytes && pFrameInfo->nFrameLen > 0) return;
+  if (pFrameInfo->nFrameLen < expected_bytes) return;
+
+  cv::Mat mat(
+    pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC3, pData);
+  if (mat.empty()) return;
 
   CameraData data;
-  data.img = cv::Mat(
-    pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC3, pData).clone();
+  data.img = mat.clone();
   data.timestamp = std::chrono::steady_clock::now();
 
   if (!first_frame_received_.exchange(true)) {
@@ -114,7 +119,7 @@ void HikRobot::on_frame(unsigned char * pData, MV_FRAME_OUT_INFO_EX * pFrameInfo
       pFrameInfo->nFrameNum, pFrameInfo->nFrameLen);
   }
 
-  queue_.push(data);
+  if (!data.img.empty()) queue_.push(data);
 }
 
 void HikRobot::capture_start()

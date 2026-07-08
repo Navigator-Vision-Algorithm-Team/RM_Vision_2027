@@ -2,6 +2,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <opencv2/opencv.hpp>
 
@@ -65,9 +67,16 @@ io::Command Decider::decide(const std::vector<DetectionResult> & detection_queue
     pop_cooldown_ = 0;
     for (const auto & dr : detection_queue) {
       if (dr.armors.empty()) continue;
+      // Reject garbage angles (YOLO may occasionally produce OOB box coords)
+      double yaw_deg = dr.delta_yaw * 57.3;
+      if (std::abs(yaw_deg) > 360.0) {
+        tools::logger()->warn("omni angle rejected: {:.1f}° out of range", yaw_deg);
+        continue;
+      }
       angle_stack_.push_back({dr.delta_yaw, dr.delta_pitch});
       if (angle_stack_.size() >= 7) break;
     }
+    if (angle_stack_.empty()) return io::Command{false, false, 0, 0};
     current_angle_ = angle_stack_.back();
     tools::logger()->info(
       "omniperceptron find {}, delta yaw {:.2f}°, stack depth {}",
