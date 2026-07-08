@@ -208,6 +208,7 @@ int main(int argc, char * argv[])
         command.shoot = false;
         command.pitch = tools::limit_rad(switch_target.delta_pitch);
         command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
+        decider.clear_angle_stack();
       }
 
       else if (tracker.state() == "lost") {
@@ -217,6 +218,7 @@ int main(int argc, char * argv[])
 
       else {
         command = aimer.aim(targets, timestamp, serial_board.bullet_speed);
+        decider.clear_angle_stack();
       }
 
       /// 发射逻辑
