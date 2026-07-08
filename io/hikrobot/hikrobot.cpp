@@ -140,57 +140,59 @@ void HikRobot::capture_start()
     return;
   }
 
-  capture_thread_ = std::thread{[this] {
+  MVCC_INTVALUE width_info{};
+  MVCC_INTVALUE height_info{};
+  ret = MV_CC_GetIntValue(handle_, "Width", &width_info);
+  if (ret != MV_OK) {
+    tools::logger()->warn("MV_CC_GetIntValue(Width) failed: {:#x}", ret);
+    return;
+  }
+  ret = MV_CC_GetIntValue(handle_, "Height", &height_info);
+  if (ret != MV_OK) {
+    tools::logger()->warn("MV_CC_GetIntValue(Height) failed: {:#x}", ret);
+    return;
+  }
+
+  auto frame_width = width_info.nCurValue;
+  auto frame_height = height_info.nCurValue;
+
+  capture_thread_ = std::thread{[this, frame_width, frame_height] {
     tools::logger()->info("HikRobot's capture thread started.");
 
     capturing_ = true;
 
-    MV_FRAME_OUT raw;
-    MV_CC_PIXEL_CONVERT_PARAM cvt_param;
+    int consecutive_nodata = 0;
 
     while (!capture_quit_) {
       std::this_thread::sleep_for(1ms);
 
       unsigned int ret;
       unsigned int nMsec = 100;
-
-      ret = MV_CC_GetImageBuffer(handle_, &raw, nMsec);
-      if (ret != MV_OK) {
-        tools::logger()->warn("MV_CC_GetImageBuffer failed: {:#x}", ret);
-        break;
-      }
-
-      auto timestamp = std::chrono::steady_clock::now();
-      const auto & frame_info = raw.stFrameInfo;
-      auto pixel_type = frame_info.enPixelType;
+      MV_FRAME_OUT_INFO_EX frame_info;
       cv::Mat img;
 
-      const static std::unordered_map<MvGvspPixelType, cv::ColorConversionCodes> bayer_map = {
-        {PixelType_Gvsp_BayerGR8, cv::COLOR_BayerGR2BGR},
-        {PixelType_Gvsp_BayerRG8, cv::COLOR_BayerRG2BGR},
-        {PixelType_Gvsp_BayerGB8, cv::COLOR_BayerGB2BGR},
-        {PixelType_Gvsp_BayerBG8, cv::COLOR_BayerBG2BGR}};
-      auto it = bayer_map.find(pixel_type);
-      if (it != bayer_map.end()) {
-        cv::Mat raw_mat(cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC1, raw.pBufAddr);
-        cv::cvtColor(raw_mat, img, it->second);
-      } else if (pixel_type == PixelType_Gvsp_BGR8_Packed) {
-        img = cv::Mat(cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC3, raw.pBufAddr).clone();
-      } else if (pixel_type == PixelType_Gvsp_RGB8_Packed) {
-        cv::Mat raw_mat(cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC3, raw.pBufAddr);
-        cv::cvtColor(raw_mat, img, cv::COLOR_RGB2BGR);
-      } else {
-        cv::Mat raw_mat(cv::Size(frame_info.nWidth, frame_info.nHeight), CV_8UC1, raw.pBufAddr);
-        cv::cvtColor(raw_mat, img, cv::COLOR_GRAY2BGR);
-      }
-
-      queue_.push({img, timestamp});
-
-      ret = MV_CC_FreeImageBuffer(handle_, &raw);
+      img.create(frame_height, frame_width, CV_8UC3);
+      ret = MV_CC_GetImageForBGR(handle_, img.data, img.total() * img.elemSize(), &frame_info, nMsec);
       if (ret != MV_OK) {
-        tools::logger()->warn("MV_CC_FreeImageBuffer failed: {:#x}", ret);
+        if (ret == MV_E_NODATA || ret == MV_E_GC_TIMEOUT) {
+          consecutive_nodata++;
+          if (consecutive_nodata % 50 == 1) {
+            tools::logger()->warn(
+              "MV_CC_GetImageBuffer returned transient no-data/timeout: {:#x}", ret);
+          }
+          std::this_thread::sleep_for(5ms);
+          continue;
+        }
+
+        tools::logger()->warn("MV_CC_GetImageForBGR failed: {:#x}", ret);
         break;
       }
+
+      consecutive_nodata = 0;
+
+      auto timestamp = std::chrono::steady_clock::now();
+
+      queue_.push({img, timestamp});
     }
 
     capturing_ = false;
