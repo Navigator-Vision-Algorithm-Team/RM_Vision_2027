@@ -230,7 +230,9 @@ cv::Point2f YOLOV8::get_center_norm(const cv::Mat & bgr_img, const cv::Point2f &
 {
   auto h = bgr_img.rows;
   auto w = bgr_img.cols;
-  return {center.x / w, center.y / h};
+  return {
+    std::clamp(center.x / w, 0.0f, 1.0f),
+    std::clamp(center.y / h, 0.0f, 1.0f)};
 }
 
 cv::Mat YOLOV8::get_pattern(const cv::Mat & bgr_img, const Armor & armor) const
