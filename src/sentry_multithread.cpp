@@ -158,14 +158,11 @@ int main(int argc, char * argv[])
     }
     // 仅当没有全向相机、已经初始化自旋、且当前没有检测到目标、且跟踪器处于丢失状态时才自旋
     if (omni_count == 0 && spin_mode_initialized && armors.empty() && tracker.state() == "lost") {
-      const double spin_speed = 0.35;  // rad/s，适中且平稳
-      const double dt = std::chrono::duration<double>(timestamp - last_spin_timestamp).count();
-      spin_yaw_angle += spin_speed * dt;
-      last_spin_timestamp = timestamp;
+      const double spin_speed = 0.05;  // rad/s，适中且平稳
 
       command.control = true;
       command.shoot = false;
-      command.yaw = tools::limit_rad(spin_yaw_angle + gimbal_pos[0]);
+      command.yaw = tools::limit_rad(spin_speed + gimbal_pos[0]);
       command.pitch = tools::limit_rad(0.0);
 
       main_recorder.record(img, q, timestamp);
