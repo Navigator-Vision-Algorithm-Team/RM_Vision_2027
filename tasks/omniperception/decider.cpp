@@ -58,18 +58,55 @@ io::Command Decider::decide(
 
 io::Command Decider::decide(const std::vector<DetectionResult> & detection_queue)
 {
-  if (detection_queue.empty()) {
-    return io::Command{false, false, 0, 0};
+  // New detections — clear the stack and fill with fresh angles.
+  // Most recent push = back() = most trustworthy.
+  if (!detection_queue.empty()) {
+    angle_stack_.clear();
+    pop_cooldown_ = 0;
+    for (const auto & dr : detection_queue) {
+      if (dr.armors.empty()) continue;
+      angle_stack_.push_back({dr.delta_yaw, dr.delta_pitch});
+      if (angle_stack_.size() >= 7) break;
+    }
+    current_angle_ = angle_stack_.back();
+    tools::logger()->info(
+      "omniperceptron find {}, delta yaw {:.2f}°, stack depth {}",
+      auto_aim::ARMOR_NAMES[detection_queue.front().armors.front().name],
+      current_angle_[0] * 57.3, angle_stack_.size());
+    return io::Command{true, false, current_angle_[0], current_angle_[1]};
   }
 
-  DetectionResult dr = detection_queue.front();
-  if (dr.armors.empty()) return io::Command{false, false, 0, 0};
-  tools::logger()->info(
-    "omniperceptron find {},delta yaw is {:.4f}", auto_aim::ARMOR_NAMES[dr.armors.front().name],
-    dr.delta_yaw * 57.3);
+  // No detections — hold current angle until cooldown expires.
+  // Cooldown is proportional to angular distance, assuming ~250°/s gimbal speed
+  // and ~30 fps main loop (~8°/frame).  Clamped to [5, 40] frames.
+  if (pop_cooldown_ > 0) {
+    --pop_cooldown_;
+    return io::Command{true, false, current_angle_[0], current_angle_[1]};
+  }
 
-  return io::Command{true, false, dr.delta_yaw, dr.delta_pitch};
+  if (!angle_stack_.empty()) {
+    auto next_angle = angle_stack_.back();
+    double angular_dist = std::abs(next_angle[0] - current_angle_[0]);
+    // About 8.3°/frame at 250°/s & 30 fps — compute cooldown in frames
+    int cooldown = static_cast<int>(angular_dist / 0.145);  // 0.145 rad ≈ 8.3°
+    cooldown = std::max(5, std::min(cooldown, 40));
+    pop_cooldown_ = cooldown;
+    current_angle_ = next_angle;
+    angle_stack_.pop_back();
+    tools::logger()->debug(
+      "omni stack pop — yaw {:.1f}° angular_dist {:.1f}° cooldown {} frames, {} remaining",
+      current_angle_[0] * 57.3, angular_dist * 57.3, cooldown, angle_stack_.size());
+    return io::Command{true, false, current_angle_[0], current_angle_[1]};
+  }
+
+  return io::Command{false, false, 0, 0};
 };
+
+void Decider::clear_angle_stack()
+{
+  angle_stack_.clear();
+  pop_cooldown_ = 0;
+}
 
 Eigen::Vector2d Decider::delta_angle(
   const std::list<auto_aim::Armor> & armors, const OmniCameraConfig & cfg)
