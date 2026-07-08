@@ -19,7 +19,8 @@ public:
   HikRobot(
     double exposure_ms, double gain, const std::string & vid_pid,
     const std::string & device_name = "", int device_index = 0,
-    const std::string & serial_number = "");
+    const std::string & serial_number = "", double frame_rate = 30.0,
+    unsigned int grab_timeout_ms = 100, unsigned int transfer_size = 0);
   ~HikRobot() override;
   void read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp) override;
 
@@ -32,6 +33,10 @@ private:
 
   double exposure_us_;
   double gain_;
+  double frame_rate_;
+  unsigned int fetch_interval_ms_;
+  unsigned int grab_timeout_ms_;
+  unsigned int transfer_size_;
 
   std::thread daemon_thread_;
   std::atomic<bool> daemon_quit_;

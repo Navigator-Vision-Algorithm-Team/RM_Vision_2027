@@ -3,6 +3,8 @@
 
 namespace tools
 {
+bool exiting();
+
 class Exiter
 {
 public:

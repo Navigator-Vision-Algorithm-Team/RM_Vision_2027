@@ -112,6 +112,10 @@ int main(int argc, char * argv[])
 
   while (!exiter.exit()) {
     camera.read(img, timestamp);
+    if (img.empty()) {
+      continue;
+    }
+
     Eigen::Quaterniond q = serial_board.imu_at(timestamp - 1ms);
 
     if (!main_loop_started) {

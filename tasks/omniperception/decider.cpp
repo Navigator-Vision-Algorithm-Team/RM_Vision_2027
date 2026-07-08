@@ -33,6 +33,8 @@ io::Command Decider::decide(
   std::chrono::steady_clock::time_point timestamp;
   cfg.camera->read(img, timestamp);
 
+  if (img.empty()) return io::Command{false, false, 0, 0};
+
   auto armors = yolo.detect(img);
   auto empty = armor_filter(armors);
 
