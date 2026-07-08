@@ -18,6 +18,7 @@ camera_name_main: "hikrobot"
 exposure_ms_main: 40.0               # 曝光时间 (ms)
 gain_main: 8.0                     # 增益 (HikRobot 用, MindVision 用 gamma_main)
 serial_number_main: "DA2024629"              # 相机序列号 (唯一匹配方式)
+transfer_size_main: 1048576            # USB 传输大小 (字节, 1MB)
 
 
 # ----- 全向感知相机数量 -----
@@ -29,6 +30,7 @@ camera_name_omni1: "hikrobot"
 exposure_ms_omni1: 50.0
 gain_omni1: 8.0
 serial_number_omni1: "DA6415777"
+transfer_size_omni1: 1048576          # USB 传输大小 (字节, 1MB)
 frame_rate_omni1: 15.0              # 全向相机建议更保守
 grab_timeout_ms_omni1: 500
 omni_mount_yaw_1: 315.0              # 相机光轴相对机器人正前方的 yaw 偏移 (度)
@@ -52,6 +54,7 @@ omni_fov_v_1: 27.60                  # 相机垂直 FOV (度)
 camera_name_omni2: "hikrobot"
 exposure_ms_omni2: 50.0
 serial_number_omni2: "DA6415771"
+transfer_size_omni2: 1048576          # USB 传输大小 (字节, 1MB)
 frame_rate_omni2: 15.0              # 全向相机建议更保守
 grab_timeout_ms_omni2: 500
 gain_omni2: 8.0
@@ -64,6 +67,7 @@ omni_fov_v_2: 27.60                  # 相机垂直 FOV (度)
 camera_name_omni3: "hikrobot"
 exposure_ms_omni3: 50.0
 serial_number_omni3: "DA6242413"
+transfer_size_omni3: 1048576          # USB 传输大小 (字节, 1MB)
 frame_rate_omni3: 15.0              # 全向相机建议更保守
 grab_timeout_ms_omni3: 500
 gain_omni3: 8.0
@@ -76,6 +80,7 @@ omni_fov_v_3: 27.60                  # 相机垂直 FOV (度)
 camera_name_omni4: "hikrobot"
 exposure_ms_omni4: 50.0
 serial_number_omni4: "DA6242418"
+transfer_size_omni4: 1048576          # USB 传输大小 (字节, 1MB)
 frame_rate_omni4: 15.0              # 全向相机建议更保守
 grab_timeout_ms_omni4: 500
 gain_omni4: 8.0

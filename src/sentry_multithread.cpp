@@ -60,6 +60,12 @@ int main(int argc, char * argv[])
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
 
+  // 给主相机的 daemon 线程留出时间完成 SDK 初始化和 StartGrabbing，
+  // 避免与全向相机的 SDK 调用并发（Hik SDK 枚举/打开设备不是完全线程安全的）
+  if (omni_count > 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  }
+
   std::vector<std::unique_ptr<io::Camera>> omni_cameras;
   std::vector<std::unique_ptr<tools::Recorder>> omni_recorders;
   std::vector<omniperception::OmniCameraConfig> omni_configs;
@@ -68,6 +74,12 @@ int main(int argc, char * argv[])
     auto sursign = "omni" + std::to_string(i);
     auto cam = std::make_unique<io::Camera>(config_path, sursign);
     auto recorder = std::make_unique<tools::Recorder>(30, sursign);
+
+    // 每个全向相机初始化后等待 300ms，确保其 daemon 完成 SDK 操作，
+    // 防止下一个相机的枚举/打开与当前相机的 StartGrabbing 竞争 USB 资源
+    if (i < omni_count) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
 
     omniperception::OmniCameraConfig cfg;
     cfg.camera = cam.get();

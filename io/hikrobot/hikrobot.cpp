@@ -1,6 +1,7 @@
 #include "hikrobot.hpp"
 
 #include <cstring>
+#include <mutex>
 
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
@@ -12,20 +13,18 @@ namespace io
 HikRobot::HikRobot(
   double exposure_ms, double gain,
   const std::string & device_name, const std::string & serial_number,
-  double frame_rate, unsigned int grab_timeout_ms, unsigned int transfer_size)
+  double frame_rate, unsigned int transfer_size)
 : exposure_us_(exposure_ms * 1e3), gain_(gain), queue_(1), daemon_quit_(false),
-  capturing_(false), capture_quit_(false),
+  capturing_(false), capture_quit_(false), first_frame_received_(false),
   handle_(nullptr), serial_number_(serial_number), frame_rate_(frame_rate),
-  fetch_interval_ms_(frame_rate > 0.0 ? static_cast<unsigned int>(std::max(1.0, 1000.0 / frame_rate)) : 1),
-  grab_timeout_ms_(grab_timeout_ms),
   transfer_size_(transfer_size)
 {
   device_name_ = device_name;
 
   tools::logger()->info(
-    "[{}] HikRobot config: serial='{}' exposure_ms={} gain={} frame_rate={} fetch_interval_ms={} grab_timeout_ms={} transfer_size={}",
+    "[{}] HikRobot config: serial='{}' exposure_ms={} gain={} frame_rate={} transfer_size={}",
     device_name_, serial_number_.empty() ? std::string("N/A") : serial_number_,
-    exposure_ms, gain_, frame_rate_, fetch_interval_ms_, grab_timeout_ms_, transfer_size_);
+    exposure_ms, gain_, frame_rate_, transfer_size_);
 
   daemon_thread_ = std::thread{[this] {
     tools::logger()->info("[{}] Daemon thread started", device_name_);
@@ -74,10 +73,55 @@ void HikRobot::read(cv::Mat & img, std::chrono::steady_clock::time_point & times
   }
 }
 
+// static — called from SDK internal thread.  Must never throw (__stdcall boundary).
+void __stdcall HikRobot::on_image_callback(
+  unsigned char * pData, MV_FRAME_OUT_INFO_EX * pFrameInfo, void * pUser)
+{
+  if (!pUser) return;
+  try {
+    static_cast<HikRobot *>(pUser)->on_frame(pData, pFrameInfo);
+  } catch (...) {
+    // Absorb any exception — crossing __stdcall with an exception is UB.
+  }
+}
+
+void HikRobot::on_frame(unsigned char * pData, MV_FRAME_OUT_INFO_EX * pFrameInfo)
+{
+  // Bail out if shutdown is in progress (capture_stop already running)
+  if (capture_quit_) return;
+
+  // Defensive: SDK may deliver NULL or zero-dimension frames on error
+  if (!pData || !pFrameInfo) return;
+  if (pFrameInfo->nWidth == 0 || pFrameInfo->nHeight == 0) return;
+
+  // Verify the delivered buffer is at least as large as expected BGR data.
+  // nFrameLen is the actual payload size — if smaller than W×H×3, the
+  // cv::Mat constructor would overread the buffer.
+  unsigned int expected_bytes =
+    static_cast<unsigned int>(pFrameInfo->nWidth) *
+    static_cast<unsigned int>(pFrameInfo->nHeight) * 3;
+  if (pFrameInfo->nFrameLen < expected_bytes && pFrameInfo->nFrameLen > 0) return;
+
+  CameraData data;
+  data.img = cv::Mat(
+    pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC3, pData).clone();
+  data.timestamp = std::chrono::steady_clock::now();
+
+  if (!first_frame_received_.exchange(true)) {
+    tools::logger()->info(
+      "[{}] First frame received: {}x{} frame_num={} len={}",
+      device_name_, pFrameInfo->nWidth, pFrameInfo->nHeight,
+      pFrameInfo->nFrameNum, pFrameInfo->nFrameLen);
+  }
+
+  queue_.push(data);
+}
+
 void HikRobot::capture_start()
 {
   capturing_ = false;
   capture_quit_ = false;
+  first_frame_received_ = false;
 
   unsigned int ret;
   auto log_step = [this](const char * step, unsigned int ret_code) {
@@ -87,51 +131,55 @@ void HikRobot::capture_start()
       tools::logger()->warn("[{}] MV_CC_{} failed: {:#x}, handle={}", device_name_, step, ret_code, fmt::ptr(handle_));
   };
 
-  // Step 1: Enumerate devices
-  MV_CC_DEVICE_INFO_LIST device_list;
-  memset(&device_list, 0, sizeof(MV_CC_DEVICE_INFO_LIST));
-  ret = MV_CC_EnumDevices(MV_USB_DEVICE, &device_list);
-  log_step("EnumDevices", ret);
-  if (ret != MV_OK) return;
+  // Step 1: Enumerate devices — ONCE globally, never while another camera is streaming.
+  // Calling EnumDevices while other cameras are actively streaming can disrupt their
+  // USB transfers (bus scan resets the hub).  MVS enumerates once then opens all cameras.
+  static std::once_flag enum_once;
+  static MV_CC_DEVICE_INFO_LIST cached_list;
+  static unsigned int cached_count = 0;
+  static bool enum_ok = false;
 
-  if (device_list.nDeviceNum == 0) {
-    tools::logger()->warn("[{}] No cameras found during enumeration", device_name_);
+  std::call_once(enum_once, []() {
+    memset(&cached_list, 0, sizeof(cached_list));
+    unsigned int r = MV_CC_EnumDevices(MV_USB_DEVICE, &cached_list);
+    if (r == MV_OK && cached_list.nDeviceNum > 0) {
+      enum_ok = true;
+      cached_count = cached_list.nDeviceNum;
+      for (unsigned int i = 0; i < cached_list.nDeviceNum; i++) {
+        auto * info = &cached_list.pDeviceInfo[i]->SpecialInfo.stUsb3VInfo;
+        tools::logger()->info("[Global] Found camera [{}]: serial='{}' model='{}'", i,
+                              reinterpret_cast<char *>(info->chSerialNumber),
+                              reinterpret_cast<char *>(info->chModelName));
+      }
+    } else {
+      tools::logger()->warn("[Global] MV_CC_EnumDevices failed or no cameras: {:#x}", r);
+    }
+  });
+
+  if (!enum_ok) {
+    tools::logger()->warn("[{}] Device enumeration failed or no cameras", device_name_);
     return;
   }
 
-  // Log all found cameras every time (helps diagnose enumeration races)
-  for (unsigned int i = 0; i < device_list.nDeviceNum; i++) {
-    auto * usb_info = &device_list.pDeviceInfo[i]->SpecialInfo.stUsb3VInfo;
-    tools::logger()->info("[{}] Found camera [{}]: serial='{}' model='{}'", device_name_, i,
-                          reinterpret_cast<char *>(usb_info->chSerialNumber),
-                          reinterpret_cast<char *>(usb_info->chModelName));
+  // Step 2: Match camera by serial number in the cached list
+  int target_index = -1;
+  for (unsigned int i = 0; i < cached_count; i++) {
+    auto * usb_info = &cached_list.pDeviceInfo[i]->SpecialInfo.stUsb3VInfo;
+    std::string sn(reinterpret_cast<char *>(usb_info->chSerialNumber));
+    if (sn == serial_number_) {
+      target_index = static_cast<int>(i);
+      break;
+    }
   }
-
-  // Step 2: Match camera by serial number, or use first camera if not configured
-  int target_index = 0;
-  if (!serial_number_.empty()) {
-    target_index = -1;
-    for (unsigned int i = 0; i < device_list.nDeviceNum; i++) {
-      auto * usb_info = &device_list.pDeviceInfo[i]->SpecialInfo.stUsb3VInfo;
-      std::string sn(reinterpret_cast<char *>(usb_info->chSerialNumber));
-      if (sn == serial_number_) {
-        target_index = static_cast<int>(i);
-        break;
-      }
-    }
-    if (target_index < 0) {
-      tools::logger()->warn(
-        "[{}] Camera with serial '{}' not found ({} device(s) enumerated)", device_name_,
-        serial_number_, device_list.nDeviceNum);
-      return;
-    }
-  } else {
+  if (target_index < 0) {
     tools::logger()->warn(
-      "[{}] No serial_number configured — using first enumerated camera (index 0)", device_name_);
+      "[{}] Camera with serial '{}' not found ({} device(s) in cache)", device_name_,
+      serial_number_, cached_count);
+    return;
   }
 
-  // Step 3: Create handle
-  ret = MV_CC_CreateHandle(&handle_, device_list.pDeviceInfo[target_index]);
+  // Step 3: Create handle from cached device info
+  ret = MV_CC_CreateHandle(&handle_, cached_list.pDeviceInfo[target_index]);
   log_step("CreateHandle", ret);
   if (ret != MV_OK) return;
 
@@ -144,22 +192,24 @@ void HikRobot::capture_start()
     return;
   }
 
-  // Step 5: Set critical capture mode parameters BEFORE StartGrabbing
-  // Must explicitly set TriggerMode=OFF — if camera was left in triggered mode
-  // by MVS, StartGrabbing succeeds but no frames arrive (MV_E_NODATA forever).
+  // Step 5: Set capture mode parameters
   ret = MV_CC_SetEnumValue(handle_, "TriggerMode", MV_TRIGGER_MODE_OFF);
   log_step("SetEnumValue(TriggerMode=OFF)", ret);
 
   ret = MV_CC_SetEnumValue(handle_, "AcquisitionMode", MV_ACQ_MODE_CONTINUOUS);
   log_step("SetEnumValue(AcquisitionMode=CONTINUOUS)", ret);
 
-  // Explicitly set pixel format so we don't depend on camera's saved state.
-  // PixelType_Gvsp_BayerRG8 = 0x01080009 — the camera's native Bayer format,
-  // which GetImageForBGR converts to BGR in software.
-  ret = MV_CC_SetEnumValue(handle_, "PixelFormat", PixelType_Gvsp_BayerRG8);
-  log_step("SetEnumValue(PixelFormat=BayerRG8)", ret);
+  // Reduce USB transfer channels per camera.  Default is 8 for our camera
+  // model, but with 5 cameras that's 40 concurrent USB transfers competing
+  // for xHCI scheduling.  2 channels × 5 cameras = 10 total — much more
+  // manageable while still providing enough throughput for 15 fps Bayer data.
+  ret = MV_USB_SetTransferWays(handle_, 2);
+  log_step("SetTransferWays(2)", ret);
 
-  // Set image parameters
+  // Let the camera use its default pixel format rather than forcing BayerRG8.
+  // The SDK's BGR callback handles conversion regardless of source format.
+  // Different camera revisions may prefer different native formats.
+
   set_enum_value("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS);
   set_enum_value("ExposureAuto", MV_EXPOSURE_AUTO_MODE_OFF);
   set_enum_value("GainAuto", MV_GAIN_MODE_OFF);
@@ -184,102 +234,59 @@ void HikRobot::capture_start()
     }
   }
 
-  // Step 6: Start grabbing
+  // Step 6: Set internal buffer depth BEFORE registering callback.
+  // SDK default is only 1 image node per camera — with N cameras streaming
+  // simultaneously, a single buffer per camera is not enough to absorb USB
+  // transfer jitter.  MVS typically uses 4-8 nodes per camera.
+  ret = MV_CC_SetImageNodeNum(handle_, 5);
+  log_step("SetImageNodeNum(5)", ret);
+
+  // Step 7: Register BGR callback BEFORE StartGrabbing.
+  // In callback mode, the SDK manages its own USB transfer threads and delivers
+  // frames via this callback — no polling threads compete for shared USB state.
+  ret = MV_CC_RegisterImageCallBackForBGR(handle_, on_image_callback, this);
+  log_step("RegisterImageCallBackForBGR", ret);
+  if (ret != MV_OK) return;
+
+  // Step 8: Start grabbing
   ret = MV_CC_StartGrabbing(handle_);
   log_step("StartGrabbing", ret);
   if (ret != MV_OK) return;
 
-  // Step 7: Verify frame dimensions
-  MVCC_INTVALUE width_info{};
-  MVCC_INTVALUE height_info{};
-  ret = MV_CC_GetIntValue(handle_, "Width", &width_info);
-  log_step("GetIntValue(Width)", ret);
-  if (ret != MV_OK) return;
-  ret = MV_CC_GetIntValue(handle_, "Height", &height_info);
-  log_step("GetIntValue(Height)", ret);
-  if (ret != MV_OK) return;
-
-  auto frame_width = width_info.nCurValue;
-  auto frame_height = height_info.nCurValue;
-
-  capture_thread_ = std::thread{[this, frame_width, frame_height] {
-    tools::logger()->info("[{}] Capture thread started", device_name_);
+  // Step 9: Spawn a lightweight watch thread (no polling — frames arrive via callback)
+  capture_thread_ = std::thread{[this] {
+    tools::logger()->info("[{}] Capture thread started (callback mode)", device_name_);
 
     capturing_ = true;
 
-    auto log_mode_snapshot = [this] {
-      MVCC_ENUMVALUE trigger_mode{};
-      MVCC_ENUMVALUE trigger_source{};
-      MVCC_ENUMVALUE acquisition_mode{};
-      MVCC_ENUMVALUE pixel_format{};
-
-      auto log_enum = [this](const char * key, MVCC_ENUMVALUE & value) {
-        unsigned int ret = MV_CC_GetEnumValue(handle_, key, &value);
-        if (ret != MV_OK) {
-          tools::logger()->warn("[{}] MV_CC_GetEnumValue({}) failed: {:#x}", device_name_, key, ret);
-        }
-      };
-
-      log_enum("TriggerMode", trigger_mode);
-      log_enum("TriggerSource", trigger_source);
-      log_enum("AcquisitionMode", acquisition_mode);
-      log_enum("PixelFormat", pixel_format);
-
-      tools::logger()->warn(
-        "[{}] No frame received yet — serial='{}' trigger_mode={} trigger_source={} acquisition_mode={} pixel_format={} frame_rate={} grab_timeout_ms={} fetch_interval_ms={}",
-        device_name_, serial_number_.empty() ? std::string("N/A") : serial_number_,
-        trigger_mode.nCurValue, trigger_source.nCurValue, acquisition_mode.nCurValue,
-        pixel_format.nCurValue, frame_rate_, grab_timeout_ms_, fetch_interval_ms_);
-    };
-
-    int consecutive_nodata = 0;
-    bool has_last_frame_num = false;
-    unsigned int last_frame_num = 0;
+    // Diagnostic: if no frame arrives within 3 seconds, dump camera config
+    auto start = std::chrono::steady_clock::now();
+    bool warned = false;
 
     while (!capture_quit_) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(fetch_interval_ms_));
+      std::this_thread::sleep_for(500ms);
 
-      unsigned int ret;
-      unsigned int nMsec = grab_timeout_ms_;
-      MV_FRAME_OUT_INFO_EX frame_info;
-      memset(&frame_info, 0, sizeof(frame_info));
-      cv::Mat img;
+      if (!warned && !first_frame_received_ &&
+          std::chrono::steady_clock::now() - start > 3s) {
+        warned = true;
 
-      img.create(frame_height, frame_width, CV_8UC3);
-      ret = MV_CC_GetImageForBGR(handle_, img.data, img.total() * img.elemSize(), &frame_info, nMsec);
-      if (ret != MV_OK) {
-        if (ret == MV_E_NODATA || ret == MV_E_GC_TIMEOUT) {
-          consecutive_nodata++;
-          if (!has_last_frame_num && consecutive_nodata == 1) {
-            log_mode_snapshot();
-          }
-          if (consecutive_nodata % 50 == 1) {
-            tools::logger()->warn(
-              "[{}] GetImageForBGR transient no-data/timeout: {:#x}, last frame num={}",
-              device_name_, ret, has_last_frame_num ? std::to_string(last_frame_num) : std::string("N/A"));
-          }
-          std::this_thread::sleep_for(5ms);
-          continue;
-        }
+        MVCC_ENUMVALUE trigger_mode{};
+        MVCC_ENUMVALUE trigger_source{};
+        MVCC_ENUMVALUE acquisition_mode{};
+        MVCC_ENUMVALUE pixel_format{};
 
-        tools::logger()->warn("[{}] MV_CC_GetImageForBGR fatal error: {:#x}", device_name_, ret);
-        break;
-      }
+        MV_CC_GetEnumValue(handle_, "TriggerMode", &trigger_mode);
+        MV_CC_GetEnumValue(handle_, "TriggerSource", &trigger_source);
+        MV_CC_GetEnumValue(handle_, "AcquisitionMode", &acquisition_mode);
+        MV_CC_GetEnumValue(handle_, "PixelFormat", &pixel_format);
 
-      consecutive_nodata = 0;
-
-      if (has_last_frame_num && frame_info.nFrameNum != last_frame_num + 1) {
         tools::logger()->warn(
-          "[{}] Frame jump: last={} current={} delta={}", device_name_, last_frame_num,
-          frame_info.nFrameNum, frame_info.nFrameNum - last_frame_num);
+          "[{}] No frame received within 3s — serial='{}' trigger_mode={} trigger_source={} "
+          "acquisition_mode={} pixel_format={:#x} frame_rate={}",
+          device_name_, serial_number_.empty() ? std::string("N/A") : serial_number_,
+          trigger_mode.nCurValue, trigger_source.nCurValue, acquisition_mode.nCurValue,
+          pixel_format.nCurValue, frame_rate_);
       }
-
-      last_frame_num = frame_info.nFrameNum;
-      has_last_frame_num = true;
-
-      auto timestamp = std::chrono::steady_clock::now();
-
-      queue_.push({img, timestamp});
     }
 
     capturing_ = false;

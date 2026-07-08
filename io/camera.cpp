@@ -41,13 +41,11 @@ Camera::Camera(const std::string & config_path, std::string sursign)
     auto exposure_ms = tools::read<double>(yaml, key("exposure_ms"));
     std::string serial_number = yaml[key("serial_number")] ? yaml[key("serial_number")].as<std::string>() : "";
     double frame_rate = yaml[key("frame_rate")] ? yaml[key("frame_rate")].as<double>() : 30.0;
-    unsigned int grab_timeout_ms =
-      yaml[key("grab_timeout_ms")] ? yaml[key("grab_timeout_ms")].as<unsigned int>() : 100;
     unsigned int transfer_size =
       yaml[key("transfer_size")] ? yaml[key("transfer_size")].as<unsigned int>() : 0;
     camera_ = std::make_unique<HikRobot>(
       exposure_ms, gain, device_name, serial_number, frame_rate,
-      grab_timeout_ms, transfer_size);
+      transfer_size);
   }
 
   else if (camera_name == "Usbcamera") {
