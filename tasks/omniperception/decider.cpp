@@ -108,7 +108,9 @@ io::Command Decider::decide(const std::vector<DetectionResult> & detection_queue
     return io::Command{true, false, current_angle_[0], current_angle_[1]};
   }
 
-  return io::Command{false, false, 0, 0};
+  // Stack exhausted — hold last known position.
+  // NEVER send yaw=0 — the MCU drives to yaw regardless of control flag.
+  return io::Command{false, false, current_angle_[0], current_angle_[1]};
 };
 
 void Decider::clear_angle_stack()

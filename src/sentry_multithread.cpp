@@ -122,6 +122,11 @@ int main(int argc, char * argv[])
   double spin_yaw_angle = 0.0;
   std::chrono::steady_clock::time_point last_spin_timestamp;
 
+  // IMU zero ≠ MCU encoder zero at power-on.  Record the offset once
+  // so we can convert IMU yaw → MCU-relative yaw.
+  double gimbal_offset = 0.0;
+  bool offset_captured = false;
+
   while (!exiter.exit()) {
     camera.read(img, timestamp);
     if (img.empty()) {
@@ -157,6 +162,14 @@ int main(int argc, char * argv[])
 
     Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
+    // Capture IMU-to-MCU offset once at startup (IMU zero ≠ MCU encoder zero)
+    if (!offset_captured) {
+      gimbal_offset = gimbal_pos[0];
+      offset_captured = true;
+      tools::logger()->info("[Main] IMU-MCU offset captured: {:.1f}°", gimbal_offset * 57.3);
+    }
+    double mcu_yaw = gimbal_pos[0] - gimbal_offset;  // MCU-encoder-relative yaw
+
     // MCU 复位信号 → 重置跟踪器
     if (serial_board.reset_pending()) {
       tracker.reset();
@@ -178,7 +191,7 @@ int main(int argc, char * argv[])
 
       command.control = true;
       command.shoot = false;
-      command.yaw = tools::limit_rad(spin_speed + gimbal_pos[0]);
+      command.yaw = tools::limit_rad(spin_speed + mcu_yaw);
       command.pitch = tools::limit_rad(0.0);
 
       main_recorder.record(img, q, timestamp);
@@ -207,13 +220,13 @@ int main(int argc, char * argv[])
         command.control = switch_target.armors.empty() ? false : true;
         command.shoot = false;
         command.pitch = tools::limit_rad(switch_target.delta_pitch);
-        command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
-        decider.clear_angle_stack();
+        command.yaw = tools::limit_rad(switch_target.delta_yaw + mcu_yaw);
       }
 
       else if (tracker.state() == "lost") {
         command = decider.decide(detection_queue);
-        command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
+        // da_yaw is robot-body-relative → add MCU yaw for absolute target
+        command.yaw = tools::limit_rad(command.yaw + mcu_yaw);
       }
 
       else {
