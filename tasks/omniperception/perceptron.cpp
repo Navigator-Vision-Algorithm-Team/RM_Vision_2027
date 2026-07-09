@@ -106,6 +106,16 @@ void Perceptron::parallel_infer(
       if (!armors.empty()) {
         auto da = decider_.delta_angle(armors, cfg);
 
+        // Calibration diagnostic: log raw detection data for each detection.
+        // centre_norm (0=left, 1=right), pixel centre, and computed yaw.
+        auto & a = armors.front();
+        tools::logger()->info(
+          "[{}] detect {}: centre_norm=({:.3f},{:.3f}) px=({:.0f},{:.0f}) "
+          "da_yaw={:.2f}° da_pitch={:.2f}°",
+          cfg.camera->device_name(), auto_aim::ARMOR_NAMES[a.name],
+          a.center_norm.x, a.center_norm.y, a.center.x, a.center.y,
+          da[0], da[1]);
+
         DetectionResult dr;
         dr.armors = std::move(armors);
         dr.timestamp = ts;
