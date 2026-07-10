@@ -43,10 +43,11 @@ target_link_libraries(io MvCameraControl MVSDK usb-1.0 yaml-cpp serial)
 find_package(ament_cmake QUIET)
 find_package(rclcpp QUIET)
 find_package(std_msgs QUIET)
+find_package(geometry_msgs QUIET)
 find_package(rosidl_typesupport_cpp QUIET)
 find_package(sp_msgs QUIET)
 # 如果找不到 ROS 环境，则跳过 ROS 相关的部分
-if(NOT ament_cmake_FOUND OR NOT rclcpp_FOUND OR NOT std_msgs_FOUND OR NOT rosidl_typesupport_cpp_FOUND OR NOT sp_msgs_FOUND)
+if(NOT ament_cmake_FOUND OR NOT rclcpp_FOUND OR NOT std_msgs_FOUND OR NOT geometry_msgs_FOUND OR NOTrosidl_typesupport_cpp_FOUND OR NOT sp_msgs_FOUND)
     message(WARNING "ROS2 not found, skipping ROS2 specific code.")
 else()
     message(STATUS "ROS2 environment found, compiling ROS2-related code.")
@@ -58,12 +59,14 @@ else()
     target_include_directories(io PUBLIC
       ${rclcpp_INCLUDE_DIRS}
       ${std_msgs_INCLUDE_DIRS}
+      ${geometry_msgs_INCLUDE_DIRS}
       ${sp_msgs_INCLUDE_DIRS}
       ${rosidl_typesupport_cpp_INCLUDE_DIRS}
     )
     target_link_libraries(io
       ${rclcpp_LIBRARIES}
       ${std_msgs_LIBRARIES}
+      ${geometry_msgs_LIBRARIES}
       ${sp_msgs_LIBRARIES}
       ${rosidl_typesupport_cpp_LIBRARIES}
     )

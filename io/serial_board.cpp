@@ -114,6 +114,31 @@ void SerialBoard::send(Command command) const
   }
 }
 
+void SerialBoard::send(NavCommand command) const
+{
+  NavigationPacket packet;
+  packet.header.header = 0xA5;
+  packet.header.data_length = sizeof(SendPacket) - sizeof(Header) - 2;
+  packet.header.seq = 0;
+  packet.header.cmd_id = 0x0405;
+  crc8::Append_CRC8_Check_Sum(
+    reinterpret_cast<uint8_t *>(&packet.header), sizeof(Header) - 2);
+
+  packet.vx = static_cast<float>(command.vx);
+  packet.vy = static_cast<float>(command.vy);
+  packet.wz = static_cast<float>(command.wz);
+
+  crc16::Append_CRC16_Check_Sum(
+    reinterpret_cast<uint8_t *>(&packet), sizeof(SendPacket));
+
+  try {
+    std::lock_guard<std::mutex> lock(send_mutex_);
+    serial_.write(reinterpret_cast<const uint8_t *>(&packet), sizeof(SendPacket));
+  } catch (const std::exception & e) {
+    tools::logger()->warn("[SerialBoard] Failed to write serial: {}", e.what());
+  }
+}
+
 GameStatus SerialBoard::game_status() const
 {
   std::lock_guard<std::mutex> lock(status_mutex_);

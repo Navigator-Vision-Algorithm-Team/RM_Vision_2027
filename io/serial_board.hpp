@@ -27,6 +27,7 @@ public:
 
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
   void send(Command command) const;
+  void send(NavCommand command) const;
 
   // Game / match state from MCU
   GameStatus game_status() const;

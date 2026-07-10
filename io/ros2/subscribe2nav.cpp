@@ -11,7 +11,9 @@ Subscribe2Nav::Subscribe2Nav()
   enemy_statue_queue_(1),
   autoaim_target_queue_(1),
   enemy_status_counter_(0),
-  autoaim_target_counter_(0)
+  autoaim_target_counter_(0),
+  move_info_queue_(1),
+  move_info_counter_(0)
 {
   enemy_status_subscription_ = this->create_subscription<sp_msgs::msg::EnemyStatusMsg>(
     "enemy_status", 10,
@@ -20,6 +22,12 @@ Subscribe2Nav::Subscribe2Nav()
   autoaim_target_subscription_ = this->create_subscription<sp_msgs::msg::AutoaimTargetMsg>(
     "autoaim_target", 10,
     std::bind(&Subscribe2Nav::autoaim_target_callback, this, std::placeholders::_1));
+
+  move_info_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
+    "/red_standard_robot1/cmd_vel",
+    10,
+    std::bind(&Subscribe2Nav::move_info_callback, this, std::placeholders::_1)
+  );
 
   RCLCPP_INFO(this->get_logger(), "nav_subscriber node initialized.");
 }
@@ -69,6 +77,25 @@ void Subscribe2Nav::autoaim_target_callback(const sp_msgs::msg::AutoaimTargetMsg
   }
 }
 
+void Subscribe2Nav::move_info_callback(const geometry_msgs::msg::Twist::SharedPtr msg){
+  move_info_queue_.clear();
+  move_info_queue_.push(*msg);
+
+  move_info_counter_++;
+
+  if (move_info_counter_ >= 2){
+    if(move_info_timer_){
+      move_info_timer_->cancel();
+    }
+  move_info_timer_ = this->create_wall_timer(std::chrono::milliseconds(1500), [this](){
+    move_info_queue_.clear();
+    move_info_counter_ = 0;
+    RCLCPP_INFO(
+      this->get_logger(), "move info queue cleared due to inactivity after two messages.");
+    });
+  }
+}
+
 void Subscribe2Nav::start()
 {
   RCLCPP_INFO(this->get_logger(), "nav_subscriber node Starting to spin...");
@@ -103,6 +130,26 @@ std::vector<int8_t> Subscribe2Nav::subscribe_autoaim_target()
     msg.timestamp.nanosec);
 
   return msg.target_ids;
+}
+
+NavCommand Subscribe2Nav::subscribe_move_info(){
+  if (move_info_queue_.empty()) {
+    return NavCommand();
+  }
+  geometry_msgs::msg::Twist msg;
+
+  move_info_queue_.back(msg);
+  RCLCPP_INFO(
+    this->get_logger(), "Subscribe move info at: %d.%09u", msg.timestamp.sec,
+    msg.timestamp.nanosec);
+
+  NavCommand nav_command;
+
+  nav_command.vx = msg.linear.x;
+  nav_command.vy = msg.linear.y;
+  nav_command.wz = msg.linear.z;
+
+  return nav_command;
 }
 
 }  // namespace io

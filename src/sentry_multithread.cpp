@@ -203,7 +203,7 @@ int main(int argc, char * argv[])
         tools::logger()->info("[Main] First detection complete: {} armors found", armors.size());
       }
 
-      decider.get_invincible_armor(ros2.subscribe_enemy_status());
+      // decider.get_invincible_armor(ros2.subscribe_enemy_status());
 
       decider.armor_filter(armors);
 
@@ -262,10 +262,16 @@ int main(int argc, char * argv[])
 
       main_recorder.record(img, q, timestamp);
       serial_board.send(command);
+      
+      // TODO: 加上一个导航信息传输，还是使用某种并行的方式来send这个数据？
 
-      /// ROS2通信
-      Eigen::Vector4d target_info = decider.get_target_info(armors, targets);
-      ros2.publish(target_info);
+      io::NavCommand nav_command = ros2.subscribe_get_data();
+
+      serial_board.send(nav_command);
+
+      // /// ROS2通信
+      // Eigen::Vector4d target_info = decider.get_target_info(armors, targets);
+      // ros2.publish(target_info);
     }
   }
 

@@ -3,6 +3,7 @@
 
 #include "publish2nav.hpp"
 #include "subscribe2nav.hpp"
+#include "command.hpp"
 
 namespace io
 {
@@ -18,6 +19,8 @@ public:
   std::vector<int8_t> subscribe_enemy_status();
 
   std::vector<int8_t> subscribe_autoaim_target();
+
+  NavCommand subscribe_get_data();
 
   template <typename T>
   std::shared_ptr<rclcpp::Publisher<T>> create_publisher(
