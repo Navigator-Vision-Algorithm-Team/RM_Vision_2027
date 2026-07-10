@@ -262,8 +262,6 @@ int main(int argc, char * argv[])
 
       main_recorder.record(img, q, timestamp);
       serial_board.send(command);
-      
-      // TODO: 加上一个导航信息传输，还是使用某种并行的方式来send这个数据？
 
       io::NavCommand nav_command = ros2.subscribe_get_data();
 
