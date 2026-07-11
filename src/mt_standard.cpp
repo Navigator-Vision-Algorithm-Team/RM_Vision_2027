@@ -3,18 +3,21 @@
 #include <thread>
 
 #include "io/camera.hpp"
-#include "io/dm_imu/dm_imu.hpp"
+// #include "io/dm_imu/dm_imu.hpp"  // [CAN] 已切换为串口通信
+#include "io/serial_board.hpp"
 #include "tasks/auto_aim/aimer.hpp"
-#include "tasks/auto_aim/multithread/commandgener.hpp"
-#include "tasks/auto_aim/multithread/mt_detector.hpp"
+// #include "tasks/auto_aim/multithread/commandgener.hpp"  // [CAN] CommandGener 依赖 CBoard
+// #include "tasks/auto_aim/multithread/mt_detector.hpp"   // [CAN] 多线程检测器
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
-#include "tasks/auto_buff/buff_aimer.hpp"
-#include "tasks/auto_buff/buff_detector.hpp"
-#include "tasks/auto_buff/buff_solver.hpp"
-#include "tasks/auto_buff/buff_target.hpp"
-#include "tasks/auto_buff/buff_type.hpp"
+#include "tasks/auto_aim/yolo.hpp"
+// [CAN] 打符模块，串口协议暂不支持模式切换
+// #include "tasks/auto_buff/buff_aimer.hpp"
+// #include "tasks/auto_buff/buff_detector.hpp"
+// #include "tasks/auto_buff/buff_solver.hpp"
+// #include "tasks/auto_buff/buff_target.hpp"
+// #include "tasks/auto_buff/buff_type.hpp"
 #include "tools/exiter.hpp"
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
@@ -42,97 +45,53 @@ int main(int argc, char * argv[])
   tools::Recorder recorder;
 
   io::Camera camera(config_path);
-  io::CBoard cboard(config_path);
 
-  auto_aim::multithread::MultiThreadDetector detector(config_path);
+  // [CAN] 已切换为串口通信
+  // io::CBoard cboard(config_path);
+
+  io::SerialBoard serial_board(config_path);
+
+  // [CAN] 多线程检测器，已改为单线程 YOLO
+  // auto_aim::multithread::MultiThreadDetector detector(config_path);
+
+  auto_aim::YOLO detector(config_path, false);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
 
-  auto_buff::Buff_Detector buff_detector(config_path);
-  auto_buff::Solver buff_solver(config_path);
-  auto_buff::SmallTarget buff_small_target;
-  auto_buff::BigTarget buff_big_target;
-  auto_buff::Aimer buff_aimer(config_path);
+  // [CAN] 打符模块，串口协议暂不支持模式切换
+  // auto_buff::Buff_Detector buff_detector(config_path);
+  // auto_buff::Solver buff_solver(config_path);
+  // auto_buff::SmallTarget buff_small_target;
+  // auto_buff::BigTarget buff_big_target;
+  // auto_buff::Aimer buff_aimer(config_path);
 
-  auto_aim::multithread::CommandGener commandgener(shooter, aimer, cboard, plotter);
+  // [CAN] CommandGener 依赖 CBoard，串口版在内联完成
+  // auto_aim::multithread::CommandGener commandgener(shooter, aimer, cboard, plotter);
 
-  std::atomic<io::Mode> mode{io::Mode::idle};
-  auto last_mode{io::Mode::idle};
-
-  auto detect_thread = std::thread([&]() {
-    cv::Mat img;
-    std::chrono::steady_clock::time_point t;
-
-    while (!exiter.exit()) {
-      if (mode.load() == io::Mode::auto_aim) {
-        camera.read(img, t);
-        detector.push(img, t);
-      } else
-        continue;
-    }
-  });
+  cv::Mat img;
+  Eigen::Quaterniond q;
+  std::chrono::steady_clock::time_point t;
 
   while (!exiter.exit()) {
-    mode = cboard.mode;
+    camera.read(img, t);
+    q = serial_board.imu_at(t - 1ms);
 
-    if (last_mode != mode) {
-      tools::logger()->info("Switch to {}", io::MODES[mode]);
-      last_mode = mode.load();
-    }
+    solver.set_R_gimbal2world(q);
 
-    /// 自瞄
-    if (mode.load() == io::Mode::auto_aim) {
-      auto [img, armors, t] = detector.debug_pop();
-      Eigen::Quaterniond q = cboard.imu_at(t - 1ms);
+    Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
-      // recorder.record(img, q, t);
+    auto armors = detector.detect(img);
 
-      solver.set_R_gimbal2world(q);
+    auto targets = tracker.track(armors, t);
 
-      Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
+    auto command = aimer.aim(targets, t, serial_board.bullet_speed);
 
-      auto targets = tracker.track(armors, t);
+    command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
 
-      commandgener.push(targets, t, cboard.bullet_speed, ypr);  // 发送给决策线程
-
-    }
-
-    /// 打符
-    else if (mode.load() == io::Mode::small_buff || mode.load() == io::Mode::big_buff) {
-      cv::Mat img;
-      Eigen::Quaterniond q;
-      std::chrono::steady_clock::time_point t;
-
-      camera.read(img, t);
-      q = cboard.imu_at(t - 1ms);
-
-      // recorder.record(img, q, t);
-
-      buff_solver.set_R_gimbal2world(q);
-
-      auto power_runes = buff_detector.detect(img);
-
-      buff_solver.solve(power_runes);
-
-      io::Command buff_command;
-      if (mode.load() == io::Mode::small_buff) {
-        buff_small_target.get_target(power_runes, t);
-        auto target_copy = buff_small_target;
-        buff_command = buff_aimer.aim(target_copy, t, cboard.bullet_speed, true);
-      } else if (mode.load() == io::Mode::big_buff) {
-        buff_big_target.get_target(power_runes, t);
-        auto target_copy = buff_big_target;
-        buff_command = buff_aimer.aim(target_copy, t, cboard.bullet_speed, true);
-      }
-      cboard.send(buff_command);
-
-    } else
-      continue;
+    serial_board.send(command);
   }
-
-  detect_thread.join();
 
   return 0;
 }
