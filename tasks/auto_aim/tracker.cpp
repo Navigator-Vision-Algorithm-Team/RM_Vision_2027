@@ -84,7 +84,7 @@ std::list<Target> Tracker::track(
 
   // 发散检测
   if (state_ != "lost" && target_.diverged()) {
-    tools::logger()->debug("[Tracker] Target diverged!");
+    // tools::logger()->debug("[Tracker] Target diverged!");
     state_ = "lost";
     return {};
   }
@@ -94,7 +94,7 @@ std::list<Target> Tracker::track(
     std::accumulate(
       target_.ekf().recent_nis_failures.begin(), target_.ekf().recent_nis_failures.end(), 0) >=
     (0.4 * target_.ekf().window_size)) {
-    tools::logger()->debug("[Target] Bad Converge Found!");
+    // tools::logger()->debug("[Target] Bad Converge Found!");
     state_ = "lost";
     return {};
   }

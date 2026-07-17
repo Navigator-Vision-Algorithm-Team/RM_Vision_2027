@@ -16,12 +16,12 @@ Recorder::Recorder(double fps, const std::string & file_name)
   start_time_ = std::chrono::steady_clock::now();
   last_time_ = start_time_;
 
-  auto folder_path = "records";
+  auto datetime = fmt::format("{:%Y-%m-%d_%H-%M-%S}", std::chrono::system_clock::now());
+  auto folder_path = "records/" + file_name;
   std::filesystem::create_directories(folder_path);
 
-  auto record_name = file_name.empty() ? fmt::format("{:%Y-%m-%d_%H-%M-%S}", std::chrono::system_clock::now()) : file_name;
-  text_path_ = fmt::format("{}/{}.txt", folder_path, record_name);
-  video_path_ = fmt::format("{}/{}.avi", folder_path, record_name);
+  text_path_ = fmt::format("{}/{}.txt", folder_path, datetime);
+  video_path_ = fmt::format("{}/{}.avi", folder_path, datetime);
 }
 
 Recorder::~Recorder()

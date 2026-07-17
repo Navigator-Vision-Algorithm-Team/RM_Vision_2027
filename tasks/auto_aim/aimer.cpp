@@ -71,8 +71,8 @@ io::Command Aimer::aim(
   auto d0 = std::sqrt(xyz0[0] * xyz0[0] + xyz0[1] * xyz0[1]);
   tools::Trajectory trajectory0(bullet_speed, d0, xyz0[2]);
   if (trajectory0.unsolvable) {
-    tools::logger()->debug(
-      "[Aimer] Unsolvable trajectory0: {:.2f} {:.2f} {:.2f}", bullet_speed, d0, xyz0[2]);
+    // tools::logger()->debug(
+    //   "[Aimer] Unsolvable trajectory0: {:.2f} {:.2f} {:.2f}", bullet_speed, d0, xyz0[2]);
     debug_aim_point.valid = false;
     return {false, false, 0, 0};
   }
@@ -102,9 +102,9 @@ io::Command Aimer::aim(
 
     // 检查弹道是否可解
     if (current_traj.unsolvable) {
-      tools::logger()->debug(
-        "[Aimer] Unsolvable trajectory in iter {}: speed={:.2f}, d={:.2f}, z={:.2f}", iter + 1,
-        bullet_speed, d, xyz.z());
+      // tools::logger()->debug(
+      //   "[Aimer] Unsolvable trajectory in iter {}: speed={:.2f}, d={:.2f}, z={:.2f}", iter + 1,
+      //   bullet_speed, d, xyz.z());
       debug_aim_point.valid = false;
       return {false, false, 0, 0};
     }
@@ -121,6 +121,14 @@ io::Command Aimer::aim(
   Eigen::Vector3d final_xyz = debug_aim_point.xyza.head(3);
   double yaw = std::atan2(final_xyz.y(), final_xyz.x()) + yaw_offset_;
   double pitch = -(current_traj.pitch + pitch_offset_);  //世界坐标系下pitch向上为负
+
+  // PnP 诊断：xyz_in_gimbal 的符号决定目标在云台哪个方向
+  tools::logger()->info(
+    "[Aimer] xyz_gimbal=({:.2f},{:.2f},{:.2f}) d={:.2f}m raw_yaw={:.1f}° final_yaw={:.1f}°",
+    final_xyz.x(), final_xyz.y(), final_xyz.z(),
+    std::sqrt(final_xyz.x() * final_xyz.x() + final_xyz.y() * final_xyz.y()),
+    std::atan2(final_xyz.y(), final_xyz.x()) * 57.3, yaw * 57.3);
+
   return {true, false, yaw, pitch};
 }
 

@@ -2,7 +2,6 @@
 #define OMNIPERCEPTION__DECIDER_HPP
 
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
-#include <deque>
 #include <iostream>
 #include <list>
 #include <unordered_map>
@@ -55,14 +54,6 @@ private:
 
   auto_aim::Color enemy_color_;
   std::vector<auto_aim::ArmorName> invincible_armor_;  //无敌状态机器人编号,英雄为1，哨兵为6
-
-  // Bounded LIFO stack of angles from omni cameras (max 7 entries).
-  // When a new detection arrives the stack is cleared and refilled; when no
-  // detection is available the top entry is popped to hold the last known
-  // position, giving the gimbal time to rotate before the target moves on.
-  std::deque<Eigen::Vector2d> angle_stack_;  // (yaw, pitch) in radians
-  Eigen::Vector2d current_angle_{0, 0};
-  int pop_cooldown_ = 0;
 
   // 定义ArmorName到ArmorPriority的映射类型
   using PriorityMap = std::unordered_map<auto_aim::ArmorName, auto_aim::ArmorPriority>;

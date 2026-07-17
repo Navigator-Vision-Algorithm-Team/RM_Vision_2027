@@ -14,9 +14,9 @@ struct Command
 
 struct NavCommand
 {
-  double vx;
-  double vy;
-  double wz;
+  double vx = 0;
+  double vy = 0;
+  double wz = 0;
 };
 
 

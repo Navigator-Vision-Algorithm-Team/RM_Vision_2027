@@ -26,8 +26,8 @@
 #include "tools/recorder.hpp"
 
 const std::string keys =
-  "{help h usage ? | | 输出命令行参数说明}"
-  "{@config-path   | | yaml配置文件路径 }";
+  "{help h usage ? |                        | 输出命令行参数说明}"
+  "{@config-path   | configs/mtstandard.yaml | 位置参数，yaml配置文件路径 }";
 
 using namespace std::chrono_literals;
 
@@ -87,6 +87,9 @@ int main(int argc, char * argv[])
     auto targets = tracker.track(armors, t);
 
     auto command = aimer.aim(targets, t, serial_board.bullet_speed);
+
+    // aimer 返回云台坐标系的相对偏移，MCU 需要绝对位置
+    command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
 
     command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
 
