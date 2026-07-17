@@ -140,8 +140,7 @@ NavCommand Subscribe2Nav::subscribe_move_info(){
 
   move_info_queue_.back(msg);
   RCLCPP_INFO(
-    this->get_logger(), "Subscribe move info at: %d.%09u", msg.timestamp.sec,
-    msg.timestamp.nanosec);
+    this->get_logger(), "Subscribe move");
 
   NavCommand nav_command;
 

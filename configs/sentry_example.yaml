@@ -23,7 +23,7 @@ transfer_size_main: 1048576            # USB 传输大小 (字节, 1MB)
 
 # ----- 全向感知相机数量 -----
 # 0 = 不启用全向感知 (等价于普通自瞄)
-omni_camera_count: 2
+omni_camera_count: 4
 
 # ----- 全向相机 1 (sursign="omni1") -----
 camera_name_omni1: "hikrobot"

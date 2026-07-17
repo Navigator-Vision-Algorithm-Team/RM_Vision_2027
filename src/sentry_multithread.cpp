@@ -65,6 +65,7 @@ int main(int argc, char * argv[])
   for (int i = 1; i <= omni_count; i++) {
     auto sursign = "omni" + std::to_string(i);
     auto cam = std::make_unique<io::Camera>(config_path, sursign);
+    auto recorder = std::make_unique<tools::Recorder>(30, sursign);
 
     if (i < omni_count) {
       std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -72,6 +73,7 @@ int main(int argc, char * argv[])
 
     omniperception::OmniCameraConfig cfg;
     cfg.camera = cam.get();
+    cfg.recorder = std::shared_ptr<tools::Recorder>(std::move(recorder));
     cfg.mount_yaw = yaml["omni_mount_yaw_" + std::to_string(i)]
                       ? yaml["omni_mount_yaw_" + std::to_string(i)].as<double>()
                       : 0.0;
@@ -106,8 +108,10 @@ int main(int argc, char * argv[])
   bool spin_mode_initialized = false;
   std::chrono::steady_clock::time_point last_spin_timestamp;
 
-  double gimbal_offset = 0.0;
-  bool offset_captured = false;
+    // 全向感知缓存：全向发现目标后的 yaw/pitch，主相机锁定前反复播报
+  bool has_omni_cache = false;
+  double cached_omni_yaw = 0;
+  double cached_omni_pitch = 0;
 
   while (!exiter.exit()) {
     camera.read(img, timestamp);
@@ -137,13 +141,6 @@ int main(int argc, char * argv[])
 
     Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
-    if (!offset_captured) {
-      gimbal_offset = gimbal_pos[0];
-      offset_captured = true;
-      tools::logger()->info("[Main] IMU-MCU offset captured: {:.1f}°", gimbal_offset * 57.3);
-    }
-    double mcu_yaw = gimbal_pos[0] - gimbal_offset;
-
     if (serial_board.reset_pending()) {
       tracker.reset();
     }
@@ -162,7 +159,7 @@ int main(int argc, char * argv[])
 
       command.control = true;
       command.shoot = false;
-      command.yaw = tools::limit_rad(spin_speed + mcu_yaw);
+      command.yaw = tools::limit_rad(spin_speed + gimbal_pos[0]);
       command.pitch = tools::limit_rad(0.0);
 
       main_recorder.record(img, q, timestamp);
@@ -182,17 +179,33 @@ int main(int argc, char * argv[])
         command.control = switch_target.armors.empty() ? false : true;
         command.shoot = false;
         command.pitch = tools::limit_rad(switch_target.delta_pitch);
-        command.yaw = tools::limit_rad(switch_target.delta_yaw + mcu_yaw);
+        command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
       }
 
       else if (tracker.state() == "lost") {
         command = decider.decide(detection_queue);
-        command.yaw = tools::limit_rad(command.yaw + mcu_yaw);
+        if (command.control) {
+          // 全向有新检测：更新缓存，发送新值
+          command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
+          cached_omni_yaw = command.yaw;
+          cached_omni_pitch = command.pitch;
+          has_omni_cache = true;
+        } else if (has_omni_cache) {
+          // 全向暂时丢失：回放缓存值，保持云台继续转向目标
+          command.control = true;
+          command.shoot = false;
+          command.yaw = cached_omni_yaw;
+          command.pitch = cached_omni_pitch;
+        }
       }
 
       else {
         command = aimer.aim(targets, timestamp, serial_board.bullet_speed);
-        decider.clear_angle_stack();
+        // aimer 返回云台坐标系的相对偏移，MCU 需要绝对位置
+        // if (command.control) {
+        //   command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
+        // }
+        has_omni_cache = false;
       }
 
       command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
@@ -213,11 +226,21 @@ int main(int argc, char * argv[])
         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
 
       main_recorder.record(img, q, timestamp);
+
+      tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
+  command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);
       serial_board.send(command);
 
       io::NavCommand nav_command = ros2.subscribe_get_data();
 
       serial_board.send(nav_command);
+
+      // //test//
+
+      // sleep(5);
+      // tools::logger()->info("sleeping```````");
+
+      // //test//
     }
   }
 

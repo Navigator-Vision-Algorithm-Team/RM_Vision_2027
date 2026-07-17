@@ -65,6 +65,14 @@ void Solver::solve(Armor & armor) const
   Eigen::Vector3d xyz_in_camera;
   cv::cv2eigen(tvec, xyz_in_camera);
   armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
+
+  // // IPPE 可能选到后方解（x<0），翻转以保证目标在云台前方
+  // if (armor.xyz_in_gimbal.x() < 0) {
+  //   // xyz_in_camera = -xyz_in_camera;
+  //   // armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
+  //   armor.xyz_in_gimbal = -armor.xyz_in_gimbal;
+  // }
+
   armor.xyz_in_world = R_gimbal2world_ * armor.xyz_in_gimbal;
 
   cv::Mat rmat;
@@ -140,6 +148,13 @@ double Solver::oupost_reprojection_error(Armor armor, const double & pitch)
   Eigen::Vector3d xyz_in_camera;
   cv::cv2eigen(tvec, xyz_in_camera);
   armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
+
+  // if (armor.xyz_in_gimbal.x() < 0) {
+  //   // xyz_in_camera = -xyz_in_camera;
+  //   // armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
+  //   armor.xyz_in_gimbal = -armor.xyz_in_gimbal;
+  // }
+
   armor.xyz_in_world = R_gimbal2world_ * armor.xyz_in_gimbal;
 
   cv::Mat rmat;

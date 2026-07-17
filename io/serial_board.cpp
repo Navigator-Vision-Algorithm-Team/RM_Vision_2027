@@ -186,9 +186,9 @@ void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
     }
   }
 
-  tools::logger()->debug(
-    "[SerialBoard] GameStatus: type={} progress={} remain={} sync={}",
-    gs.game_type, gs.game_progress, gs.stage_remain_time, gs.sync_timestamp);
+  // tools::logger()->debug(
+  //   "[SerialBoard] GameStatus: type={} progress={} remain={} sync={}",
+  //   gs.game_type, gs.game_progress, gs.stage_remain_time, gs.sync_timestamp);
 }
 
 void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
@@ -210,11 +210,11 @@ void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
     robot_status_ = rs;
   }
 
-  tools::logger()->debug(
-    "[SerialBoard] RobotStatus: id={} lv={} hp={}/{} cool={} heat={} power={} mains=g{}c{}s{}",
-    rs.robot_id, rs.robot_level, rs.remain_hp, rs.max_hp,
-    rs.shooter_cooling_rate, rs.shooter_heat_limit, rs.chassis_power_limit,
-    rs.mains_power_gimbal, rs.mains_power_chassis, rs.mains_power_shooter);
+  // tools::logger()->debug(
+  //   "[SerialBoard] RobotStatus: id={} lv={} hp={}/{} cool={} heat={} power={} mains=g{}c{}s{}",
+  //   rs.robot_id, rs.robot_level, rs.remain_hp, rs.max_hp,
+  //   rs.shooter_cooling_rate, rs.shooter_heat_limit, rs.chassis_power_limit,
+  //   rs.mains_power_gimbal, rs.mains_power_chassis, rs.mains_power_shooter);
 }
 
 void SerialBoard::handleBass(const bassPacket & pkt)
