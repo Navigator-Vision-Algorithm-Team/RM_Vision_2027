@@ -3,11 +3,11 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/timer.hpp>
-#include <sp_msgs/msg/detail/autoaim_target_msg__struct.hpp>
+// #include <sp_msgs/msg/detail/autoaim_target_msg__struct.hpp>
 #include <vector>
 
-#include "sp_msgs/msg/autoaim_target_msg.hpp"
-#include "sp_msgs/msg/enemy_status_msg.hpp"
+// #include "sp_msgs/msg/autoaim_target_msg.hpp"
+// #include "sp_msgs/msg/enemy_status_msg.hpp"
 #include "tools/thread_safe_queue.hpp"
 
 #include "command.hpp"
@@ -31,8 +31,8 @@ public:
 
 
 private:
-  void enemy_status_callback(const sp_msgs::msg::EnemyStatusMsg::SharedPtr msg);
-  void autoaim_target_callback(const sp_msgs::msg::AutoaimTargetMsg::SharedPtr msg);
+  // void enemy_status_callback(const sp_msgs::msg::EnemyStatusMsg::SharedPtr msg);
+  // void autoaim_target_callback(const sp_msgs::msg::AutoaimTargetMsg::SharedPtr msg);
 
   void move_info_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
 
@@ -46,13 +46,13 @@ private:
 
   rclcpp::TimerBase::SharedPtr move_info_timer_;
 
-  rclcpp::Subscription<sp_msgs::msg::EnemyStatusMsg>::SharedPtr enemy_status_subscription_;
-  rclcpp::Subscription<sp_msgs::msg::AutoaimTargetMsg>::SharedPtr autoaim_target_subscription_;
+  // rclcpp::Subscription<sp_msgs::msg::EnemyStatusMsg>::SharedPtr enemy_status_subscription_;
+  // rclcpp::Subscription<sp_msgs::msg::AutoaimTargetMsg>::SharedPtr autoaim_target_subscription_;
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr move_info_subscription_;
 
-  tools::ThreadSafeQueue<sp_msgs::msg::EnemyStatusMsg> enemy_statue_queue_;
-  tools::ThreadSafeQueue<sp_msgs::msg::AutoaimTargetMsg> autoaim_target_queue_;
+  // tools::ThreadSafeQueue<sp_msgs::msg::EnemyStatusMsg> enemy_statue_queue_;
+  // tools::ThreadSafeQueue<sp_msgs::msg::AutoaimTargetMsg> autoaim_target_queue_;
 
   tools::ThreadSafeQueue<geometry_msgs::msg::Twist> move_info_queue_;
 };

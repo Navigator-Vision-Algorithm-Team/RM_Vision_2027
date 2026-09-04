@@ -16,9 +16,9 @@ public:
 
   void publish(const Eigen::Vector4d & target_pos);
 
-  std::vector<int8_t> subscribe_enemy_status();
+  // std::vector<int8_t> subscribe_enemy_status();
 
-  std::vector<int8_t> subscribe_autoaim_target();
+  // std::vector<int8_t> subscribe_autoaim_target();
 
   NavCommand subscribe_get_data();
 
