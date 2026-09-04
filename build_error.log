@@ -1,0 +1,113 @@
+-- --------------------CMAKE_BUILD_TYPE: Debug--------------------
+-- Found rosidl_generator_c: 5.2.1 (/opt/ros/lyrical/share/rosidl_generator_c/cmake)
+-- Found rosidl_generator_cpp: 5.2.1 (/opt/ros/lyrical/share/rosidl_generator_cpp/cmake)
+-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+-- Found rmw_implementation_cmake: 7.10.1 (/opt/ros/lyrical/share/rmw_implementation_cmake/cmake)
+-- Found rmw_fastrtps_cpp: 9.4.8 (/opt/ros/lyrical/share/rmw_fastrtps_cpp/cmake)
+-- Using RMW implementation 'rmw_fastrtps_cpp' as default
+-- ROS2 environment found, compiling ROS2-related code.
+-- Found AMD headers in: /usr/include/suitesparse
+-- Found AMD library: /usr/lib/x86_64-linux-gnu/libamd.so
+-- Found CAMD headers in: /usr/include/suitesparse
+-- Found CAMD library: /usr/lib/x86_64-linux-gnu/libcamd.so
+-- Found CCOLAMD headers in: /usr/include/suitesparse
+-- Found CCOLAMD library: /usr/lib/x86_64-linux-gnu/libccolamd.so
+-- Found CHOLMOD headers in: /usr/include/suitesparse
+-- Found CHOLMOD library: /usr/lib/x86_64-linux-gnu/libcholmod.so
+-- Found COLAMD headers in: /usr/include/suitesparse
+-- Found COLAMD library: /usr/lib/x86_64-linux-gnu/libcolamd.so
+-- Found SPQR headers in: /usr/include/suitesparse
+-- Found SPQR library: /usr/lib/x86_64-linux-gnu/libspqr.so
+-- Found Config headers in: /usr/include/suitesparse
+-- Found Config library: /usr/lib/x86_64-linux-gnu/libsuitesparseconfig.so
+-- Found Intel Thread Building Blocks (TBB) library (2022.3 / ) include location: . Assuming SuiteSparseQR was compiled with TBB.
+-- Adding librt to SuiteSparse_config libraries (required on Linux & Unix [not OSX] if SuiteSparse is compiled with timing).
+-- Could NOT find METIS (missing: METIS_INCLUDE_DIR METIS_LIBRARY) 
+-- Found required Ceres dependency: Eigen version 3.4.0 in /usr/share/eigen3/cmake
+-- Found required Ceres dependency: glog
+-- Found required Ceres dependency: gflags
+-- Found Ceres version: 2.2.0 installed in: /usr with components: [EigenSparse, SparseLinearAlgebraLibrary, LAPACK, SuiteSparse, SchurSpecializations]
+-- Found rosidl_generator_c: 5.2.1 (/opt/ros/lyrical/share/rosidl_generator_c/cmake)
+-- Found rosidl_generator_cpp: 5.2.1 (/opt/ros/lyrical/share/rosidl_generator_cpp/cmake)
+-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+-- Found rmw_implementation_cmake: 7.10.1 (/opt/ros/lyrical/share/rmw_implementation_cmake/cmake)
+-- Found rmw_fastrtps_cpp: 9.4.8 (/opt/ros/lyrical/share/rmw_fastrtps_cpp/cmake)
+-- Using RMW implementation 'rmw_fastrtps_cpp' as default
+-- Configuring done (1.2s)
+-- Generating done (0.4s)
+-- Build files have been written to: /home/ubuntu/code/backup/sp_vision_25/build
+[  4%] Built target tinympcstatic
+[  5%] Building CXX object io/serial/CMakeFiles/serial.dir/src/serial.cc.o
+[  6%] Building CXX object io/serial/CMakeFiles/serial.dir/src/impl/unix.cc.o
+[  7%] Building CXX object io/serial/CMakeFiles/serial.dir/src/impl/list_ports/list_ports_linux.cc.o
+[  7%] Linking CXX shared library libserial.so
+[  7%] Built target serial
+[ 18%] Built target io
+[ 31%] Built target auto_aim
+[ 36%] Built target auto_buff
+[ 45%] Built target tools
+[ 46%] Linking CXX executable standard
+[ 47%] Built target standard
+[ 48%] Linking CXX executable mt_standard
+[ 49%] Built target mt_standard
+[ 50%] Linking CXX executable standard_mpc
+[ 50%] Built target standard_mpc
+[ 51%] Linking CXX executable auto_aim_debug_mpc
+[ 51%] Built target auto_aim_debug_mpc
+[ 52%] Linking CXX executable mt_auto_aim_debug
+[ 53%] Built target mt_auto_aim_debug
+[ 54%] Linking CXX executable auto_buff_debug
+[ 54%] Built target auto_buff_debug
+[ 55%] Linking CXX executable auto_buff_debug_mpc
+[ 56%] Built target auto_buff_debug_mpc
+[ 57%] Linking CXX executable capture
+[ 58%] Built target capture
+[ 59%] Built target calibrate_camera
+[ 61%] Built target calibrate_handeye
+[ 62%] Built target calibrate_robotworld_handeye
+[ 64%] Built target split_video
+[ 65%] Linking CXX executable auto_aim_test
+[ 66%] Built target auto_aim_test
+[ 67%] Linking CXX executable auto_buff_test
+[ 68%] Built target auto_buff_test
+[ 69%] Linking CXX executable camera_detect_test
+[ 70%] Built target camera_detect_test
+[ 71%] Linking CXX executable camera_test
+[ 72%] Built target camera_test
+[ 73%] Linking CXX executable camera_thread_test
+[ 73%] Built target camera_thread_test
+[ 74%] Linking CXX executable cboard_test
+[ 75%] Built target cboard_test
+[ 75%] Linking CXX executable fire_test
+[ 76%] Built target fire_test
+[ 77%] Linking CXX executable detector_video_test
+[ 77%] Built target detector_video_test
+[ 78%] Linking CXX executable gimbal_response_test
+[ 79%] Built target gimbal_response_test
+[ 79%] Linking CXX executable multi_usbcamera_test
+[ 80%] Built target multi_usbcamera_test
+[ 81%] Linking CXX executable usbcamera_detect_test
+[ 82%] Built target usbcamera_detect_test
+[ 83%] Linking CXX executable usbcamera_test
+[ 84%] Built target usbcamera_test
+[ 85%] Linking CXX executable handeye_test
+[ 85%] Built target handeye_test
+[ 86%] Linking CXX executable dm_test
+[ 87%] Built target dm_test
+[ 87%] Linking CXX executable minimum_vision_system
+[ 88%] Built target minimum_vision_system
+[ 89%] Linking CXX executable gimbal_test
+[ 90%] Built target gimbal_test
+[ 91%] Linking CXX executable planner_test
+[ 92%] Built target planner_test
+[ 93%] Linking CXX executable planner_test_offline
+[ 93%] Built target planner_test_offline
+[ 95%] Built target omniperception
+[ 95%] Linking CXX executable sentry_multithread
+[ 96%] Built target sentry_multithread
+[ 97%] Linking CXX executable sentry_multithread_debug
+[ 98%] Built target sentry_multithread_debug
+[ 99%] Linking CXX executable publish_test
+[100%] Built target publish_test
