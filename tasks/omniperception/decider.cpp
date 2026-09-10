@@ -83,6 +83,10 @@ void Decider::clear_angle_stack()
 {
 }
 
+/*
+  根据配置文件中的全向相机的角度来计算目标装甲板相较于主相机的位置。
+  部分约定，向左yaw是正的。
+*/
 Eigen::Vector2d Decider::delta_angle(
   const std::list<auto_aim::Armor> & armors, const OmniCameraConfig & cfg)
 {
@@ -92,6 +96,10 @@ Eigen::Vector2d Decider::delta_angle(
   return da;
 }
 
+/*
+  装甲板的过滤，我们打3V3未必会遇见这么多的车，所以需要更改的处理。
+  TODO: 这里的过滤逻辑需要根据实际比赛情况进行调整，确保不会误伤队友或忽略敌方目标。
+*/
 bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
 {
   if (armors.empty()) return true;
@@ -115,6 +123,10 @@ bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
   return armors.empty();
 }
 
+/*
+  设置装甲板的优先级。
+  TODO: 这里的优先级逻辑需要根据实际比赛情况进行调整，确保优先攻击最有价值的目标。
+*/
 void Decider::set_priority(std::list<auto_aim::Armor> & armors)
 {
   if (armors.empty()) return;

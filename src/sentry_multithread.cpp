@@ -135,6 +135,7 @@ int main(int argc, char * argv[])
         game_started_logged = true;
         tools::logger()->info("[Main] Game not started yet, waiting...");
       }
+      //注意这个地方的功耗···检查之后似乎没有很多
       main_recorder.record(img, q, timestamp);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
@@ -153,28 +154,35 @@ int main(int argc, char * argv[])
       tracker.reset();
     }
 
+    //yolo推理
     auto armors = yolo->detect(img);
 
     io::Command command{false, false, 0, 0};
 
+    // 如果发现全向相机是0，就打开开始旋转的那个标签。
     if (omni_count == 0 && !spin_mode_initialized) {
       spin_mode_initialized = true;
       last_spin_timestamp = timestamp;
       tools::logger()->info("[Main] Omni camera count is 0, enabling spin mode");
     }
+    // 如果全向是0，且已经初始化了旋转模式，且全向相机没有检测到目标，且自瞄状态是丢失，那么就让云台以固定速度旋转
+    // 只是这个一个自旋的逻辑
     if (omni_count == 0 && spin_mode_initialized && armors.empty() && tracker.state() == "lost") {
-      const double spin_speed = 0.05;
+      const double spin_speed = 0.2;
 
       command.control = true;
       command.shoot = false;
+      // 这个limite_rad是为了防止yaw超过pi或者小于-pi，导致云台旋转过度
       command.yaw = tools::limit_rad(spin_speed + gimbal_pos[0]);
       command.pitch = tools::limit_rad(0.0);
 
       main_recorder.record(img, q, timestamp);
       serial_board.send(command);
     } else {
+      // 过滤敌人
       decider.armor_filter(armors);
 
+      // 设置优先级
       decider.set_priority(armors);
 
       auto detection_queue = perceptron.get_detection_queue();
