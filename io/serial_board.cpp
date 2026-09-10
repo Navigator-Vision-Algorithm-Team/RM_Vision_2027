@@ -60,7 +60,14 @@ SerialBoard::~SerialBoard()
 
 Eigen::Quaterniond SerialBoard::imu_at(std::chrono::steady_clock::time_point timestamp)
 {
-  // 非阻塞地获取最新 IMU 数据
+  /*
+    非阻塞地获取最新 IMU 数据
+    并且对需要查找的IMU四元数数据进行线性的插值
+    我们使用现在的时间进行查找。得到两个四元数变量，三个时间变量：
+    q_a, q_b, t_a, t_b, t_c
+    我们的目的是找到t_c的Q，使用的是slerp方法。球面线形插值，对多维数据特攻
+  */
+
   IMUData new_data;
   while (queue_.try_pop(new_data)) {
     if (new_data.timestamp > data_behind_.timestamp) {

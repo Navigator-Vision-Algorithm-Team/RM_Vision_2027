@@ -45,20 +45,24 @@ int main(int argc, char * argv[])
 
   io::ROS2 ros2;
   tools::logger()->info("[Main] Initializing SerialBoard...");
+  // 串口初始化
   io::SerialBoard serial_board(config_path);
   tools::logger()->info("[Main] SerialBoard ready.");
 
   tools::logger()->info("[Main] Opening camera...");
+  // 相机初始化
   io::Camera camera(config_path, "main");
   tools::logger()->info("[Main] Camera ready: {}", camera.device_name());
 
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
 
-  if (omni_count > 0) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  }
+  // 缓冲时间， 确保全向相机初始化完成，避免出现空帧，但是我们的全向相机和主相机并不在同一个物理链路上，所以这个sleep并没有非常的必要
+  // if (omni_count > 0) {
+  //   std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  // }
 
+  // 初始化全向相机
   std::vector<std::unique_ptr<io::Camera>> omni_cameras;
   std::vector<omniperception::OmniCameraConfig> omni_configs;
 
@@ -67,10 +71,12 @@ int main(int argc, char * argv[])
     auto cam = std::make_unique<io::Camera>(config_path, sursign);
     auto recorder = std::make_unique<tools::Recorder>(30, sursign);
 
+    //缓冲时间
     if (i < omni_count) {
       std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
 
+    //配置设置
     omniperception::OmniCameraConfig cfg;
     cfg.camera = cam.get();
     cfg.recorder = std::shared_ptr<tools::Recorder>(std::move(recorder));
@@ -91,6 +97,7 @@ int main(int argc, char * argv[])
     omni_cameras.push_back(std::move(cam));
   }
 
+  // 初始化其他组件
   auto yolo = std::make_shared<auto_aim::YOLO>(config_path, false);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
@@ -119,6 +126,7 @@ int main(int argc, char * argv[])
       continue;
     }
 
+    // 获取IMU数据，一个四元数，表示这个时候云台的朝向
     Eigen::Quaterniond q = serial_board.imu_at(timestamp - 1ms);
 
     // 比赛未开始时跳过自瞄逻辑（裁判系统控制）

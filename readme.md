@@ -40,3 +40,7 @@
     
     cmake --build build -j1 2>&1 | tee build_error.log
     ```
+
+### 支持兵种并维护
+
+哨兵，步兵，英雄
