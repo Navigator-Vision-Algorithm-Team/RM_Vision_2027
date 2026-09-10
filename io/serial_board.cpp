@@ -263,15 +263,15 @@ void SerialBoard::receiveThread()
       continue;
     }
 
-    // 每 10 秒报告一次串口状态（直到收到第一个 IMU 包为止）
+    // 每 10 秒报告一次串口状态（直到收到第一个 IMU 包为止） -- 该功能废止
     auto now = std::chrono::steady_clock::now();
     auto since_last = std::chrono::duration_cast<std::chrono::seconds>(now - last_status_time).count();
-    if (!first_imu_received && since_last >= 10) {
-      tools::logger()->warn(
-        "[SerialBoard] No IMU (0x502) yet — {} packets seen, {} read errors (using identity q)",
-        valid_packet_count, error_count);
-      last_status_time = now;
-    }
+    // if (!first_imu_received && since_last >= 10) {
+    //   tools::logger()->warn(
+    //     "[SerialBoard] No IMU (0x502) yet — {} packets seen, {} read errors (using identity q)",
+    //     valid_packet_count, error_count);
+    //   last_status_time = now;
+    // }
 
     if (!read(flag.data(), 1)) {
       error_count++;
@@ -299,7 +299,7 @@ void SerialBoard::receiveThread()
     if (!first_valid_header) {
       first_valid_header = true;
       uint16_t first_cmd_id = header.cmd_id;
-      tools::logger()->info("[SerialBoard] First valid packet received: cmd_id=0x{:x}", first_cmd_id);
+      // tools::logger()->info("[SerialBoard] First valid packet received: cmd_id=0x{:x}", first_cmd_id);
     }
 
     switch (header.cmd_id) {

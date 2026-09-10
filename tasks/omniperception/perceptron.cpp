@@ -85,6 +85,7 @@ void Perceptron::parallel_infer(
         continue;
       }
 
+      //得到一个img，然后使用yolo推理，这个时候yolo是提供出来的了一个框的，这个时候我们把原图和框放在一起保存起来。
       auto armors = yolo->detect(img);
       cv::Mat display_img = img.clone();
       for (const auto & armor : armors) {
@@ -102,6 +103,7 @@ void Perceptron::parallel_infer(
       if (cfg.recorder && !display_img.empty()) {
         cfg.recorder->record(display_img, Eigen::Quaterniond::Identity(), ts);
       }
+      //至此，都是记录。
 
       if (!armors.empty()) {
         auto da = decider_.delta_angle(armors, cfg);
