@@ -144,6 +144,7 @@ void HikRobot::capture_start()
   static unsigned int cached_count = 0;
   static bool enum_ok = false;
 
+  //枚举相机，并且缓存相机信息，避免多次枚举相机导致的USB总线竞争
   std::call_once(enum_once, []() {
     memset(&cached_list, 0, sizeof(cached_list));
     unsigned int r = MV_CC_EnumDevices(MV_USB_DEVICE, &cached_list);
@@ -208,6 +209,7 @@ void HikRobot::capture_start()
   // model, but with 5 cameras that's 40 concurrent USB transfers competing
   // for xHCI scheduling.  2 channels × 5 cameras = 10 total — much more
   // manageable while still providing enough throughput for 15 fps Bayer data.
+  //出现usb通道爆炸的时候就设置这个地方。
   ret = MV_USB_SetTransferWays(handle_, 2);
   log_step("SetTransferWays(2)", ret);
 
