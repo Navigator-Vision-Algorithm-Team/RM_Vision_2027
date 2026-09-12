@@ -100,6 +100,15 @@ std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
   return parse(scale, output, raw_img, frame_count);
 }
 
+/* 
+  这个地方将会通过解析来从yolo的输出中得到数据。
+  yolo的输出是【1， 25200， 22】
+  这意味着yolo会输出25200个候选，而其中一个候选会有22个浮点数来表明一些数据。
+  1. 0 - 7: 目标框的坐标信息 (x1, y1, x2, y2)
+  2. 8: 置信度
+  3. 9 - 12: 颜色
+  4. 13 - 21: 类别
+*/
 std::list<Armor> YOLOV5::parse(
   double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count)
 {
@@ -122,10 +131,16 @@ std::list<Armor> YOLOV5::parse(
     cv::Point class_id, color_id;
     int _class_id, _color_id;
     double score_color, score_num;
+    // 至此到这个地方，我们的_class_id 都有着0 to 7，也就是八个类别，但是我们是需要3个，1， 3， 哨兵，所以我们需要在一个地方过滤，而这个地方是刚拿到yolo的结果，并且处理的地方，我们在这个地方做一次过滤是最合理的。
     cv::minMaxLoc(classes_scores, NULL, &score_num, NULL, &class_id);
     cv::minMaxLoc(color_scores, NULL, &score_color, NULL, &color_id);
     _class_id = class_id.x;
     _color_id = color_id.x;
+
+    // 过滤掉不想要的类别
+    if (_class_id != 1 && _class_id != 3 && _class_id != 0) {
+      continue;
+    }
 
     armor_key_points.push_back(
       cv::Point2f(output.at<float>(r, 0) / scale, output.at<float>(r, 1) / scale));
