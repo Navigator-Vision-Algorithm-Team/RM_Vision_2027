@@ -163,10 +163,11 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   // 此时主相机画面中出现了优先级更高的装甲板，切换目标
   else if (state_ == "tracking" && !armors.empty() && armors.front().priority < target_.priority) {
     found = set_target(armors, t);
-    tools::logger()->debug("auto_aim switch target to {}", ARMOR_NAMES[armors.front().name]);
+    // tools::logger()->debug("auto_aim switch target to {}", ARMOR_NAMES[armors.front().name]);
   }
 
   // 此时全向感知相机画面中出现了优先级更高的装甲板，切换目标
+  // 全向感知中的目标优先级排序并不完善似乎。
   else if (
     state_ == "tracking" && !temp_target.armors.empty() &&
     temp_target.armors.front().priority < target_.priority && target_.convergened()) {
@@ -269,28 +270,45 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   solver_.solve(armor);
 
   // 根据兵种优化初始化参数
-  auto is_balance = (armor.type == ArmorType::big) &&
-                    (armor.name == ArmorName::three || armor.name == ArmorName::four ||
-                     armor.name == ArmorName::five);  // 知道兵种，并使用对应的卡尔曼参数。
+  //TODO:这个地方的决策要改，在之前的armers的构建通路中已经将装甲板约束在了0 1 3 之中
+  // 并且这里很多的配置都是为了旧的兵种和7V7中的一些设施准备的。
+  // auto is_balance = (armor.type == ArmorType::big) &&
+  //                   (armor.name == ArmorName::three || armor.name == ArmorName::four ||
+  //                    armor.name == ArmorName::five);  // 知道兵种，并使用对应的卡尔曼参数。
 
-  if (is_balance) {
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
-    target_ = Target(armor, t, 0.2, 2, P0_dig);
-  }
+  // if (is_balance) {
+  //   Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
+  //   target_ = Target(armor, t, 0.2, 2, P0_dig);
+  // }
 
-  else if (armor.name == ArmorName::outpost) {
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0}};
-    target_ = Target(armor, t, 0.2765, 3, P0_dig);
-  }
+  // else if (armor.name == ArmorName::outpost) {
+  //   Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0}};
+  //   target_ = Target(armor, t, 0.2765, 3, P0_dig);
+  // }
 
-  else if (armor.name == ArmorName::base) {
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0}};
-    target_ = Target(armor, t, 0.3205, 3, P0_dig);
-  }
+  // else if (armor.name == ArmorName::base) {
+  //   Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1e-4, 0, 0}};
+  //   target_ = Target(armor, t, 0.3205, 3, P0_dig);
+  // }
 
-  else {
-    Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
-    target_ = Target(armor, t, 0.2, 4, P0_dig);
+  // else {
+  //   Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
+  //   target_ = Target(armor, t, 0.2, 4, P0_dig);
+  // }
+  switch (armor.name) {
+    case ArmorName::sentry:
+      target_ = Target(armor, t, 0.2, 4, Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}});
+      break;
+    case ArmorName::one:
+      target_ = Target(armor, t, 0.2, 4, Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}});
+      break;
+    case ArmorName::three:
+      target_ = Target(armor, t, 0.2, 4, Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}});
+      break;
+    
+    default:
+      target_ = Target(armor, t, 0.2, 4, Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}});
+      break;
   }
 
   return true;

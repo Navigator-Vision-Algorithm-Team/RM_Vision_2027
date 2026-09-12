@@ -119,6 +119,8 @@ void Perceptron::parallel_infer(
           a.center_norm.x, a.center_norm.y, a.center.x, a.center.y,
           da[0], da[1]);
 
+        
+        //TODO:这个动作将会有隐藏的隐患，这个地方会直接将全向感知到的内容全部丢到queue中，这意味着我们也许会出现时间的问题---因为相机出现的一些问题，后续的处理中应当有对全向相机中的时间进行排查，不然会出现取得延迟等一系列严肃的问题。
         DetectionResult dr;
         dr.armors = std::move(armors);
         dr.timestamp = ts;
