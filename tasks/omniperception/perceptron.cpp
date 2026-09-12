@@ -25,6 +25,7 @@ Perceptron::Perceptron(
   std::this_thread::sleep_for(std::chrono::seconds(2));
 
   // 创建线程进行并行推理，所有相机共享同一个 YOLO
+  //在这个parallelinfer函数中，读取了目标的信息在detector_queue中
   for (size_t i = 0; i < omni_configs.size(); i++) {
     threads_.emplace_back(
       [this, cfg = omni_configs[i]] { parallel_infer(cfg, yolo_); });

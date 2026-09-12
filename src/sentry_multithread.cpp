@@ -179,16 +179,21 @@ int main(int argc, char * argv[])
       main_recorder.record(img, q, timestamp);
       serial_board.send(command);
     } else {
+      //这是主相机的处理，立马处理的目标
       // 过滤敌人
       decider.armor_filter(armors);
 
       // 设置优先级
       decider.set_priority(armors);
 
+      //全向相机中拿出装甲板的候选
       auto detection_queue = perceptron.get_detection_queue();
 
       decider.sort(detection_queue);
 
+      // 传入的是全向相机中的装甲板候选，和主相机中的装甲板候选，为什么两个不放在同一个queue中传入给tracker呢？
+      // 因为我们认为在主相机发现的相机的优先级会天然的大于全向相机中发现的
+      // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
       auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp);
 
       if (tracker.state() == "switching") {

@@ -104,17 +104,18 @@ std::list<Target> Tracker::track(
   std::list<Target> targets = {target_};
   return targets;
 
-// 预测的位置和速度：(x, vx, y, vy, z, vz)
-// 预测的角度和角速度：(a, w)
-// 几何参数：半径 r、长短轴差 l、高度差 h
-// 目标类型信息：机器人名称、装甲板类型、优先级等
-// 卡尔曼滤波器状态：完整的 EKF 状态向量和协方差矩阵
-// 收敛状态：是否已经稳定跟踪
-// ````
-
-
+  // 预测的位置和速度：(x, vx, y, vy, z, vz)
+  // 预测的角度和角速度：(a, w)
+  // 几何参数：半径 r、长短轴差 l、高度差 h
+  // 目标类型信息：机器人名称、装甲板类型、优先级等
+  // 卡尔曼滤波器状态：完整的 EKF 状态向量和协方差矩阵
+  // 收敛状态：是否已经稳定跟踪
+  // ````
 }
 
+/*
+  这个方法用来挑选最应该攻击的装甲板，并且得出结算
+*/
 std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   const std::vector<omniperception::DetectionResult> & detection_queue, std::list<Armor> & armors,
   std::chrono::steady_clock::time_point t, bool use_enemy_color)
@@ -122,9 +123,11 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   omniperception::DetectionResult switch_target{std::list<Armor>(), t, 0, 0};
   omniperception::DetectionResult temp_target{std::list<Armor>(), t, 0, 0};
   if (!detection_queue.empty()) {
+    // 拿去临时的全向相机中的目标
     temp_target = detection_queue.front();
   }
 
+  //这个时间来自于上一次相机的读取的时间
   auto dt = tools::delta_time(t, last_timestamp_);
   last_timestamp_ = t;
 
@@ -134,20 +137,27 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
     state_ = "lost";
   }
 
-  // 优先选择靠近图像中心的装甲板
-  armors.sort([](const Armor & a, const Armor & b) {
-    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO
-    auto distance_1 = cv::norm(a.center - img_center);
-    auto distance_2 = cv::norm(b.center - img_center);
-    return distance_1 < distance_2;
-  });
+  // 施工脚手架：： 
+  // 并且有一个致命的问题，这个的地方写死了图像的大小就是（1440, 1080），这显然是有一些不合理的。
 
-  // 按优先级排序，优先级最高在首位(优先级越高数字越小，1的优先级最高)
-  armors.sort([](const Armor & a, const Armor & b) { return a.priority < b.priority; });
+  // 优先选择靠近图像中心的装甲板
+  const cv::Point2f img_center(1440.f, 1080.f);  // 后期有精力可以吧这个东西写在config文件中，因为后期我希望大改动一下现在的config文件的读取统一的问题，所以这个先不该动 TODO:
+
+  armors.sort([&](const Armor & a, const Armor & b) {
+    if (a.priority != b.priority) return a.priority < b.priority;
+
+    auto da = a.center - img_center;
+    auto db = b.center - img_center;
+
+    float dist2_a = da.x * da.x + da.y * da.y;
+    float dist2_b = db.x * db.x + db.y * db.y;
+
+    return dist2_a < dist2_b;
+  });
 
   bool found;
   if (state_ == "lost") {
-    found = set_target(armors, t);
+    found = set_target(armors, t);  // 这个armors是已经排好序了的
   }
 
   // 此时主相机画面中出现了优先级更高的装甲板，切换目标
@@ -248,6 +258,9 @@ void Tracker::state_machine(bool found)
   }
 }
 
+/*
+  使用已经排好序的armors来设置目标targe
+*/
 bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
 {
   if (armors.empty()) return false;
@@ -258,7 +271,7 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   // 根据兵种优化初始化参数
   auto is_balance = (armor.type == ArmorType::big) &&
                     (armor.name == ArmorName::three || armor.name == ArmorName::four ||
-                     armor.name == ArmorName::five);// 知道兵种，并使用对应的卡尔曼参数。
+                     armor.name == ArmorName::five);  // 知道兵种，并使用对应的卡尔曼参数。
 
   if (is_balance) {
     Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
