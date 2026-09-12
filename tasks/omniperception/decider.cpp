@@ -101,7 +101,7 @@ Eigen::Vector2d Decider::delta_angle(
 
 /*
   装甲板的过滤，我们打3V3未必会遇见这么多的车，所以需要更改的处理。
-  TODO: 这里的过滤逻辑需要根据实际比赛情况进行调整，确保不会误伤队友或忽略敌方目标。
+  TODO: 里面的的得到无敌装甲板的逻辑并不明确，需要在后期更改。
 */
 bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
 {
