@@ -8,6 +8,13 @@
 #include "math_tools.hpp"
 #include "tools/logger.hpp"
 
+#include <cerrno>
+#include <cstring>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
+
 namespace tools
 {
 Recorder::Recorder(double fps, const std::string & file_name)
@@ -38,6 +45,15 @@ Recorder::~Recorder()
 
 void Recorder::save_to_file()
 {
+  // (cyz)降低录像保存线程的 CPU 调度优先级
+  pid_t tid = static_cast<pid_t>(::syscall(SYS_gettid));
+
+  if (::setpriority(PRIO_PROCESS, tid, 10) != 0) {
+    tools::logger()->warn(
+      "[Recorder] Failed to lower saving thread priority: {}",
+      std::strerror(errno));
+  }
+
   while (!stop_thread_) {
     FrameData frame;
     queue_.pop(frame);  // 从队列中取出帧数据
