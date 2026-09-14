@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <thread>
@@ -35,20 +36,29 @@ private:
   double frame_rate_;
   unsigned int transfer_size_;
 
-  std::thread daemon_thread_;
-  std::atomic<bool> daemon_quit_;
-
-  void * handle_;
-  std::thread capture_thread_;
-  std::atomic<bool> capturing_;
-  std::atomic<bool> capture_quit_;
-  std::atomic<bool> first_frame_received_;
-  tools::ThreadSafeQueue<CameraData> queue_;
-
   std::string serial_number_;
 
-  void capture_start();
+  // 相机生命周期（打开、参数下发、掉流巡检、停流、重启）全部由这一个线程负责，
+  // 海康 SDK 回调线程只处理帧数据，两者通过下面的原子量与队列通信。
+  std::thread daemon_thread_;
+  std::atomic<bool> daemon_quit_{false};
+
+  void * handle_{nullptr};              // 仅守护线程访问
+  std::atomic<bool> opened_{false};     // MV_CC_OpenDevice 是否成功
+  std::atomic<bool> grabbing_{false};   // MV_CC_StartGrabbing 是否成功
+  std::atomic<bool> stopping_{false};   // 相机正在 shutdown，回调应立即返回
+  std::atomic<bool> first_frame_received_{false};
+  std::atomic<uint64_t> frame_counter_{0};  // 真实掉流检测：每收到一帧自增
+  std::atomic<uint64_t> restart_count_{0};  // 重启次数，用于排查 USB 稳定性
+
+  // healthy 状态不单独保存，直接由 frame_counter_ 推导。
+  // 队列满时丢弃旧帧、保留最新帧，回调线程永不阻塞。
+  tools::ThreadSafeQueue<CameraData, true> queue_;
+
+  bool capture_start();
   void capture_stop();
+  void watchdog_frames();
+  void dump_camera_config();
 
   void set_float_value(const std::string & name, double value);
   void set_enum_value(const std::string & name, unsigned int value);
