@@ -106,6 +106,15 @@ void Perceptron::parallel_infer(
       }
       //至此，都是记录。
 
+      // 先按主循环完全一致的规则做过滤、定优先级、按优先级排序，再计算 delta_yaw/delta_pitch，
+      // 保证它们描述的始终是 armors.front() 这块装甲板。
+      // （若先算角度再过滤/排序，角度会与最终 front() 指向的目标不一致。）
+      decider_.armor_filter(armors);
+      decider_.set_priority(armors);
+      armors.sort([](const auto_aim::Armor & a, const auto_aim::Armor & b) {
+        return a.priority < b.priority;
+      });
+
       if (!armors.empty()) {
         auto da = decider_.delta_angle(armors, cfg);
 

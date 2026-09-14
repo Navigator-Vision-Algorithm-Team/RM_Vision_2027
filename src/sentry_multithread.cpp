@@ -107,13 +107,11 @@ int main(int argc, char * argv[])
   omniperception::Decider decider(config_path);
   omniperception::Perceptron perceptron(omni_configs, config_path, yolo);
 
-  omniperception::DetectionResult switch_target;
   cv::Mat img;
   std::chrono::steady_clock::time_point timestamp;
 
   bool game_started_logged = false;
   bool spin_mode_initialized = false;
-  std::chrono::steady_clock::time_point last_spin_timestamp;
 
     // 全向感知缓存：全向发现目标后的 yaw/pitch，主相机锁定前反复播报
   bool has_omni_cache = false;
@@ -162,18 +160,19 @@ int main(int argc, char * argv[])
     // 如果发现全向相机是0，就打开开始旋转的那个标签。
     if (omni_count == 0 && !spin_mode_initialized) {
       spin_mode_initialized = true;
-      last_spin_timestamp = timestamp;
       tools::logger()->info("[Main] Omni camera count is 0, enabling spin mode");
     }
     // 如果全向是0，且已经初始化了旋转模式，且全向相机没有检测到目标，且自瞄状态是丢失，那么就让云台以固定速度旋转
     // 只是这个一个自旋的逻辑
     if (omni_count == 0 && spin_mode_initialized && armors.empty() && tracker.state() == "lost") {
-      const double spin_speed = 0.2;
+      // 云台自旋的角度增量（不是角速度）：实际转速 ≈ 该增量 × 帧率
+      const double spin_yaw_step = 0.2;
 
       command.control = true;
       command.shoot = false;
+      // gimbal_pos[0] 是云台当前的世界系绝对 yaw，叠加增量后即为世界系绝对目标角
       // 这个limite_rad是为了防止yaw超过pi或者小于-pi，导致云台旋转过度
-      command.yaw = tools::limit_rad(spin_speed + gimbal_pos[0]);
+      command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
       command.pitch = tools::limit_rad(0.0);
 
       main_recorder.record(img, q, timestamp);
@@ -196,19 +195,21 @@ int main(int argc, char * argv[])
       // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
       auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp);
       
-      //这个地方的detlayaw是相较于云台0位置的绝对角度。
+      // 全向相机的 delta_yaw 是"云台系"绝对角（零点 = 云台正前方、向左为正，
+      // 由 Decider::delta_angle 用固定的安装角 mount_yaw 算出），
+      // 必须加上云台当前的世界系 yaw 才是下位机要求的 IMU 世界系绝对角。
       if (tracker.state() == "switching") {
         command.control = switch_target.armors.empty() ? false : true;
         command.shoot = false;
         command.pitch = tools::limit_rad(switch_target.delta_pitch);
-        // command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
-        command.yaw = tools::limit_rad(switch_target.delta_yaw);
+        command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
       }
 
       else if (tracker.state() == "lost") {
         command = decider.decide(detection_queue);
         if (command.control) {
           // 全向有新检测：更新缓存，发送新值
+          // decide() 返回的同样是云台系绝对角，需转成世界系绝对角后再下发
           command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
           cached_omni_yaw = command.yaw;
           cached_omni_pitch = command.pitch;
@@ -223,11 +224,9 @@ int main(int argc, char * argv[])
       }
 
       else {
+        // aimer 输出的 yaw 已是 IMU 世界系绝对角（Aimer 内部对世界系 armor_xyza_list 取 atan2），
+        // 与下位机的要求一致，直接下发，绝不能再叠加 gimbal_pos[0]。
         command = aimer.aim(targets, timestamp, serial_board.bullet_speed);
-        // aimer 返回云台坐标系的相对偏移，MCU 需要绝对位置
-        // if (command.control) {
-        //   command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
-        // }
         has_omni_cache = false;
       }
 
@@ -250,8 +249,8 @@ int main(int argc, char * argv[])
 
       main_recorder.record(img, q, timestamp);
 
-      tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
-  command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);
+  //     tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
+  // command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);
       serial_board.send(command);
 
       io::NavCommand nav_command = ros2.subscribe_get_data();

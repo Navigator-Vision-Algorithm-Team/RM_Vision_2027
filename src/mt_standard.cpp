@@ -86,10 +86,9 @@ int main(int argc, char * argv[])
 
     auto targets = tracker.track(armors, t);
 
+    // aimer 输出的 yaw 已是 IMU 世界系绝对角（Aimer 内部对世界系 armor_xyza_list 取 atan2），
+    // 与下位机的要求一致，直接下发，绝不能再叠加 gimbal_pos[0]。
     auto command = aimer.aim(targets, t, serial_board.bullet_speed);
-
-    // aimer 返回云台坐标系的相对偏移，MCU 需要绝对位置
-    command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
 
     command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
 

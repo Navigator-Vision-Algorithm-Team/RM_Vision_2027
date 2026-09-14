@@ -143,25 +143,19 @@ void Decider::set_priority(std::list<auto_aim::Armor> & armors)
   }
 }
 
+// armors 的过滤、优先级设置与排序已在 Perceptron 内完成（那里才有相机几何参数，
+// 才能保证 delta_yaw/delta_pitch 与 armors.front() 始终指同一块装甲板；
+// 若在这里再过滤一次，front() 可能被移除而使角度失效）。
+// 这里只做两件事：丢弃空结果（否则下面的比较器会对空 list 取 front，属于未定义行为），
+// 并按优先级对队列本身排序。
 void Decider::sort(std::vector<DetectionResult> & detection_queue)
 {
-  if (detection_queue.empty()) return;
+  detection_queue.erase(
+    std::remove_if(
+      detection_queue.begin(), detection_queue.end(),
+      [](const DetectionResult & dr) { return dr.armors.empty(); }),
+    detection_queue.end());
 
-  // 对每个 DetectionResult 调用 armor_filter 和 set_priority
-  for (auto & dr : detection_queue) {
-    armor_filter(dr.armors);
-    set_priority(dr.armors);
-
-    if (dr.armors.empty()) continue;
-
-    // 对每个 DetectionResult 中的 armors 进行排序
-    dr.armors.sort(
-      [](const auto_aim::Armor & a, const auto_aim::Armor & b) { return a.priority < b.priority; });
-  }
-
-  if (detection_queue.empty()) return;
-
-  // 根据优先级对 DetectionResult 进行排序
   std::sort(
     detection_queue.begin(), detection_queue.end(),
     [](const DetectionResult & a, const DetectionResult & b) {
