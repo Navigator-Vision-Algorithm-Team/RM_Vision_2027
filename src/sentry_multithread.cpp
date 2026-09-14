@@ -195,12 +195,14 @@ int main(int argc, char * argv[])
       // 因为我们认为在主相机发现的相机的优先级会天然的大于全向相机中发现的
       // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
       auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp);
-
+      
+      //这个地方的detlayaw是相较于云台0位置的绝对角度。
       if (tracker.state() == "switching") {
         command.control = switch_target.armors.empty() ? false : true;
         command.shoot = false;
         command.pitch = tools::limit_rad(switch_target.delta_pitch);
-        command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
+        // command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
+        command.yaw = tools::limit_rad(switch_target.delta_yaw);
       }
 
       else if (tracker.state() == "lost") {

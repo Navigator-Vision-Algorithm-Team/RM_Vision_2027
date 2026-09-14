@@ -9,6 +9,8 @@
 
 namespace auto_aim
 {
+
+// 如果有赛季会改变大装甲板的宽度和长度，就在这个地方改变参数
 constexpr double LIGHTBAR_LENGTH = 56e-3;     // m
 constexpr double BIG_ARMOR_WIDTH = 230e-3;    // m
 constexpr double SMALL_ARMOR_WIDTH = 135e-3;  // m
@@ -58,6 +60,15 @@ void Solver::solve(Armor & armor) const
     (armor.type == ArmorType::big) ? BIG_ARMOR_POINTS : SMALL_ARMOR_POINTS;
 
   cv::Vec3d rvec, tvec;
+  /*
+  object_points 装甲板在3D中的点（并非在相机坐标系下的3D坐标，而是只有装甲板的，装甲板的6个点的坐标）
+  armor.points 装甲板仔2D中的点
+  camera_matrix_ 相机内参
+  distort_coeffs_ 畸变
+  rvec output：旋转量
+  rvec 平移量
+  SOLVEPNP_IPPE 
+  */
   cv::solvePnP(
     object_points, armor.points, camera_matrix_, distort_coeffs_, rvec, tvec, false,
     cv::SOLVEPNP_IPPE);

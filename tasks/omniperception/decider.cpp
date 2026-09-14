@@ -64,15 +64,15 @@ io::Command Decider::decide(const std::vector<DetectionResult> & detection_queue
 
   for (const auto & dr : detection_queue) {
     if (dr.armors.empty()) continue;
-    double yaw_deg = dr.delta_yaw * 57.3;
-    if (std::abs(yaw_deg) > 360.0) {
-      tools::logger()->warn("omni angle rejected: {:.1f}° out of range", yaw_deg);
-      continue;
-    }
+    double yaw_deg = tools::limit_rad(dr.delta_yaw * 57.3);
+    // if (std::abs(yaw_deg) > 360.0) {
+    //   tools::logger()->warn("omni angle rejected: {:.1f}° out of range", yaw_deg);
+    //   continue;
+    // }
     tools::logger()->info(
       "omniperceptron find {}, delta yaw {:.2f}°",
       auto_aim::ARMOR_NAMES[dr.armors.front().name],
-      dr.delta_yaw * 57.3);
+      tools::limit_rad(dr.delta_yaw * 57.3));
     return io::Command{true, false, dr.delta_yaw, dr.delta_pitch};
   }
 
@@ -152,10 +152,14 @@ void Decider::sort(std::vector<DetectionResult> & detection_queue)
     armor_filter(dr.armors);
     set_priority(dr.armors);
 
+    if (dr.armors.empty()) continue;
+
     // 对每个 DetectionResult 中的 armors 进行排序
     dr.armors.sort(
       [](const auto_aim::Armor & a, const auto_aim::Armor & b) { return a.priority < b.priority; });
   }
+
+  if (detection_queue.empty()) return;
 
   // 根据优先级对 DetectionResult 进行排序
   std::sort(

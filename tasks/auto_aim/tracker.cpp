@@ -168,6 +168,7 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
 
   // 此时全向感知相机画面中出现了优先级更高的装甲板，切换目标
   // 全向感知中的目标优先级排序并不完善似乎。
+  // 如果在全向的目标会比主相机找到的更佳的好，并不是直接替换目标，而是吧这个全向中的目标标记称为switch_target，进入switching状态，等待主相机的目标切换
   else if (
     state_ == "tracking" && !temp_target.armors.empty() &&
     temp_target.armors.front().priority < target_.priority && target_.convergened()) {
@@ -314,21 +315,27 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   return true;
 }
 
+/*
+  在目标装甲板的基础上，使用卡尔曼滤波器来预测目标和更新目标的状态，返回是否找到了目标
+*/
 bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
 {
+  // 卡尔曼滤波器找到目标
   target_.predict(t);
 
   int found_count = 0;
   double min_x = 1e10;  // 画面最左侧
+  // 在相机中找到和target，也就是目标一样的装甲板，并且累计找寻次数。
   for (const auto & armor : armors) {
     if (armor.name != target_.name || armor.type != target_.armor_type) continue;
     found_count++;
     min_x = armor.center.x < min_x ? armor.center.x : min_x;
   }
 
-  if (found_count == 0) return false;
+  if (found_count == 0) return false;// 发现没有找到，就返回false，说明目标丢失了
 
-  for (auto & armor : armors) {
+  // TODO: 理论上有问题，因为在这个地方我们会更新卡尔曼滤波器两次，如果这里面的armer确实同一个的话，是没有问题的，但是我们的敌人是有四个装甲板的，这意味着同一个armors中的检测到的同一个装甲板可能是同一个目标的两个装甲板，这样左边右边的装甲板对卡尔曼滤波器的更新有十分危险的影响。但是无论是实际的测试还是什么的情况下，这个预测都十分的稳定，并没有出现「看起来像是错误的情况」所以具体是否要改正还是要后续的实验的决策。
+  for (auto & armor : armors) {// 依旧找到了目标，开始新的结算和更新（相较于之前的卡尔曼滤波器和目标的位置）
     if (
       armor.name != target_.name || armor.type != target_.armor_type
       //  || armor.center.x != min_x
