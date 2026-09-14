@@ -122,11 +122,6 @@ int main(int argc, char * argv[])
   double spin_yaw_angle = 0.0;
   std::chrono::steady_clock::time_point last_spin_timestamp;
 
-  // IMU zero ≠ MCU encoder zero at power-on.  Record the offset once
-  // so we can convert IMU yaw → MCU-relative yaw.
-  double gimbal_offset = 0.0;
-  bool offset_captured = false;
-
   while (!exiter.exit()) {
     camera.read(img, timestamp);
     if (img.empty()) {
@@ -162,14 +157,6 @@ int main(int argc, char * argv[])
 
     Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
-    // Capture IMU-to-MCU offset once at startup (IMU zero ≠ MCU encoder zero)
-    if (!offset_captured) {
-      gimbal_offset = gimbal_pos[0];
-      offset_captured = true;
-      tools::logger()->info("[Main] IMU-MCU offset captured: {:.1f}°", gimbal_offset * 57.3);
-    }
-    double mcu_yaw = gimbal_pos[0] - gimbal_offset;  // MCU-encoder-relative yaw
-
     // MCU 复位信号 → 重置跟踪器
     if (serial_board.reset_pending()) {
       tracker.reset();
@@ -187,11 +174,13 @@ int main(int argc, char * argv[])
     }
     // 仅当没有全向相机、已经初始化自旋、且当前没有检测到目标、且跟踪器处于丢失状态时才自旋
     if (omni_count == 0 && spin_mode_initialized && armors.empty() && tracker.state() == "lost") {
-      const double spin_speed = 0.05;  // rad/s，适中且平稳
+      // 云台自旋的角度增量（不是角速度）：实际转速 ≈ 该增量 × 帧率
+      const double spin_yaw_step = 0.05;
 
       command.control = true;
       command.shoot = false;
-      command.yaw = tools::limit_rad(spin_speed + mcu_yaw);
+      // gimbal_pos[0] 是云台当前的世界系绝对 yaw，叠加增量后即为世界系绝对目标角
+      command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
       command.pitch = tools::limit_rad(0.0);
 
       main_recorder.record(img, q, timestamp);
@@ -216,20 +205,23 @@ int main(int argc, char * argv[])
       auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp);
 
       /// 全向感知逻辑
+      // delta_yaw / decide() 的 yaw 都是"云台系"绝对角（零点 = 云台正前方），
+      // 必须加上云台当前的世界系 yaw，才是下位机要求的 IMU 世界系绝对角。
       if (tracker.state() == "switching") {
         command.control = switch_target.armors.empty() ? false : true;
         command.shoot = false;
         command.pitch = tools::limit_rad(switch_target.delta_pitch);
-        command.yaw = tools::limit_rad(switch_target.delta_yaw + mcu_yaw);
+        command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
       }
 
       else if (tracker.state() == "lost") {
         command = decider.decide(detection_queue);
-        // da_yaw is robot-body-relative → add MCU yaw for absolute target
-        command.yaw = tools::limit_rad(command.yaw + mcu_yaw);
+        // decide() 返回的同样是云台系绝对角，需转成世界系绝对角后再下发
+        command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
       }
 
       else {
+        // aimer 输出的 yaw 已是 IMU 世界系绝对角，与下位机要求一致，直接下发
         command = aimer.aim(targets, timestamp, serial_board.bullet_speed);
         decider.clear_angle_stack();
       }
