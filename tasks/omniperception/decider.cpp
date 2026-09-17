@@ -88,7 +88,8 @@ void Decider::clear_angle_stack()
   部分约定，向左yaw是正的。
   TODO: 这个地方的算法有问题，我们使用简单的FOV和像素距离之间的比并不能很准确的做到角度的计算，至少需要使用arctan或者是使用标定之后的相机参数来计算角度。
 
-  Tips：不紧急的任务，因为我们的全向相机并不打算提供准确的位置，只是提供一个大概的方向而已。
+  Tips：不紧急的任务，因为我们的全向相机并不打算提供准确的位置，只是提供一个大概的方向而已。 --> 更新：可做任务，我们已经得到了相机的内参矩阵和畸变参数。
+  我们可以试图去调用slover中的PnP解算方案，然后得到结果
 */
 Eigen::Vector2d Decider::delta_angle(
   const std::list<auto_aim::Armor> & armors, const OmniCameraConfig & cfg)
