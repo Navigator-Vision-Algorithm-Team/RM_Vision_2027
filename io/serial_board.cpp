@@ -97,7 +97,7 @@ Eigen::Quaterniond SerialBoard::imu_at(std::chrono::steady_clock::time_point tim
 
 void SerialBoard::send(Command command) const
 {
-  SendPacket packet;
+  SendPacket packet{};
   packet.header.header = 0xA5;
   packet.header.data_length = sizeof(SendPacket) - sizeof(Header) - 2;
   packet.header.seq = 0;
@@ -109,6 +109,7 @@ void SerialBoard::send(Command command) const
   packet.yaw = static_cast<float>(command.yaw);
   packet.shoot = (command.control && command.shoot) ? 1 : 0;
   packet.robo_id = 0;
+  packet.timeseries = 0;  // 占位（接收方不使用）
 
   crc16::Append_CRC16_Check_Sum(
     reinterpret_cast<uint8_t *>(&packet), sizeof(SendPacket));
@@ -123,11 +124,12 @@ void SerialBoard::send(Command command) const
 
 void SerialBoard::send(NavCommand command) const
 {
-  NavigationPacket packet;
+  NavigationPacket packet{};
   packet.header.header = 0xA5;
-  packet.header.data_length = sizeof(SendPacket) - sizeof(Header) - 2;
+  packet.header.data_length = sizeof(NavigationPacket) - sizeof(Header) - 2;
   packet.header.seq = 0;
   packet.header.cmd_id = 0x0405;
+  // 导航 0x0405 与自瞄 0x0402 共用同一套 RM 标准 CRC（init 0xFF / 0xFFFF）
   crc8::Append_CRC8_Check_Sum(
     reinterpret_cast<uint8_t *>(&packet.header), sizeof(Header) - 2);
 
@@ -136,11 +138,11 @@ void SerialBoard::send(NavCommand command) const
   packet.wz = static_cast<float>(command.wz);
 
   crc16::Append_CRC16_Check_Sum(
-    reinterpret_cast<uint8_t *>(&packet), sizeof(SendPacket));
+    reinterpret_cast<uint8_t *>(&packet), sizeof(NavigationPacket));
 
   try {
     std::lock_guard<std::mutex> lock(send_mutex_);
-    serial_.write(reinterpret_cast<const uint8_t *>(&packet), sizeof(SendPacket));
+    serial_.write(reinterpret_cast<const uint8_t *>(&packet), sizeof(NavigationPacket));
   } catch (const std::exception & e) {
     tools::logger()->warn("[SerialBoard] Failed to write serial: {}", e.what());
   }

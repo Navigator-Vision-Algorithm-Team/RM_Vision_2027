@@ -98,11 +98,12 @@ struct SendPacket
   Header header;
   uint8_t id = 0;
   uint8_t robo_id = 0;
-  float pitch;
-  float yaw;
+  float pitch = 0.0f;
+  float yaw = 0.0f;
   uint8_t accuracy = 50;
-  uint8_t shoot;
-  uint16_t checksum = 0;
+  uint8_t shoot = 0;
+  uint8_t timeseries = 0;  // 时间戳低 8 位（接收方不使用，占位 0）
+  uint16_t crc16 = 0;
 } __attribute__((packed));
 
 // cmd_id 0x0405 — vision → MCU navigation command

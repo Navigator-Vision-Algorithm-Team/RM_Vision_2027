@@ -146,7 +146,7 @@ NavCommand Subscribe2Nav::subscribe_move_info(){
 
   nav_command.vx = msg.linear.x;
   nav_command.vy = msg.linear.y;
-  nav_command.wz = msg.linear.z;
+  nav_command.wz = msg.angular.z;  // 与 Python serial_node / 导航规范一致：旋转角速度在 angular.z
 
   return nav_command;
 }

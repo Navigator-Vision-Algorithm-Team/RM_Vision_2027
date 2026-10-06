@@ -47,8 +47,10 @@
 
 | 校验 | 初始值 | 覆盖范围 | 存放位置 | 实现 |
 | --- | --- | --- | --- | --- |
-| CRC8 | `0xFF` | 帧头前 5 字节（偏移 0~4） | 偏移 4（`header.crc8`） | `crc8::Append_CRC8_Check_Sum` |
-| CRC16 | `0xFFFF` | 除最后 2 字节外的整包 | 最后 2 字节，小端 | `crc16::Append_CRC16_Check_Sum` |
+| CRC8 | `0xFF`（poly `0x2F`，RoboMaster 标准） | 帧头前 4 字节（偏移 0~3） | 偏移 4（`header.crc8`） | `crc8::Append_CRC8_Check_Sum` |
+| CRC16 | `0xFFFF`（poly `0x1021`，RoboMaster 标准 / CCITT） | 除最后 2 字节外的整包 | 最后 2 字节，小端 | `crc16::Append_CRC16_Check_Sum` |
+
+> 导航命令 `0x0405` 与自瞄 `0x0402`、遥测回传（0x502 等）**共用同一套 RM 标准 CRC**（init `0xFF` / `0xFFFF`），不存在特例。`SerialBoard::send(NavCommand)` 同样调用上面的 `crc8::Append_CRC8_Check_Sum` / `crc16::Append_CRC16_Check_Sum`。
 
 CRC 表与算法见 `io/gimbal/protocol_crc.cpp`。接收端解析流程（`SerialBoard::receiveThread`）：读取 `0xA5` → 读帧头剩余 6 字节 → 校验 CRC8 → 按 `cmd_id` 读取定长 payload → 校验 CRC16。
 
@@ -189,16 +191,17 @@ Eigen::Quaterniond q =
 
 | 偏移 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 12` |
+| 0 | `header` | Header | `data_length = 13` |
 | 7 | `id` | uint8 | 恒为 0 |
 | 8 | `robo_id` | uint8 | 恒为 0 |
 | 9 | `pitch` | float | 目标俯仰**世界系绝对角**（rad） |
 | 13 | `yaw` | float | 目标偏航**世界系绝对角**（rad） |
 | 17 | `accuracy` | uint8 | 恒为 50 |
 | 18 | `shoot` | uint8 | `(control && shoot) ? 1 : 0` |
-| 19 | `checksum` | uint16 | CRC16 |
+| 19 | `timeseries` | uint8 | 时间戳低 8 位（接收方不使用，占位 0） |
+| 20 | `crc16` | uint16 | CRC16 |
 
-总长 **21 字节**。
+总长 **22 字节**。
 
 > 关键约定：`yaw` / `pitch` 为 **IMU 世界系绝对角**，与 `0x502` 的 yaw 同一定义。入口中 `aimer.aim()` 输出已满足该定义直接下发；`decider.decide()` 与全向切换的 `delta_yaw/delta_pitch` 为云台系角，需叠加 `gimbal_pos[0]` 后下发。`control` 为假时 `shoot` 强制为 0。
 
@@ -234,9 +237,9 @@ Eigen::Quaterniond q =
 | --- | --- |
 | `vx` | `linear.x` |
 | `vy` | `linear.y` |
-| `wz` | `linear.z` |
+| `wz` | `angular.z` |
 
-> 注意：`wz` 当前取自 `linear.z`（代码原样如此），接入时需与导航侧确认。
+> 旋转角速度取自 `angular.z`（与导航规范 `cmd_vel.angular.z` 一致，且已含 `fake_vel_transform` 叠加的自旋分量）。
 
 ---
 
