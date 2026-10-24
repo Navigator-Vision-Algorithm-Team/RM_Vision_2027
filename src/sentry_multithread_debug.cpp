@@ -9,7 +9,7 @@
 #include <thread>
 
 #include "io/camera.hpp"
-#include "io/serial_board.hpp"
+#include "io/serial/serial_board.hpp"
 #include "io/ros2/ros2.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/shooter.hpp"

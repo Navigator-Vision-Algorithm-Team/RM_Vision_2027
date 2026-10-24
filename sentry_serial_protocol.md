@@ -11,10 +11,10 @@
 
 | 链路 | 载体 | 用途 | 代码 |
 | --- | --- | --- | --- |
-| 串口 | `io::SerialBoard` | 与 MCU（云台/底盘主控）互发数据帧 | `io/serial_board.cpp` |
+| 串口 | `io::SerialBoard` | 与 MCU（云台/底盘主控）互发数据帧 | `io/serial/serial_board.cpp` |
 | ROS2 | `io::ROS2` | 订阅导航速度指令 | `io/ros2/subscribe2nav.cpp` |
 
-串口参数（`configs/sentry.yaml` + `io/serial_board.cpp`）：
+串口参数（`configs/sentry.yaml` + `io/serial/serial_board.cpp`）：
 
 | 参数 | 值 | 配置项 |
 | --- | --- | --- |
@@ -31,7 +31,7 @@
 
 ## 2. 帧结构（串口）
 
-所有串口数据包都以统一的 `Header` 开头，结构体按 `__attribute__((packed))` 紧凑排列，**多字节字段为小端序（Little-Endian）**。定义见 `io/gimbal/packet.hpp`。
+所有串口数据包都以统一的 `Header` 开头，结构体按 `__attribute__((packed))` 紧凑排列，**多字节字段为小端序（Little-Endian）**。定义见 `io/serial/gimbal/packet.hpp`。
 
 ### 2.1 通用帧头 Header（7 字节）
 
@@ -52,7 +52,7 @@
 
 > 导航命令 `0x0405` 与自瞄 `0x0402`、遥测回传（0x502 等）**共用同一套 RM 标准 CRC**（init `0xFF` / `0xFFFF`），不存在特例。`SerialBoard::send(NavCommand)` 同样调用上面的 `crc8::Append_CRC8_Check_Sum` / `crc16::Append_CRC16_Check_Sum`。
 
-CRC 表与算法见 `io/gimbal/protocol_crc.cpp`。接收端解析流程（`SerialBoard::receiveThread`）：读取 `0xA5` → 读帧头剩余 6 字节 → 校验 CRC8 → 按 `cmd_id` 读取定长 payload → 校验 CRC16。
+CRC 表与算法见 `io/serial/gimbal/protocol_crc.cpp`。接收端解析流程（`SerialBoard::receiveThread`）：读取 `0xA5` → 读帧头剩余 6 字节 → 校验 CRC8 → 按 `cmd_id` 读取定长 payload → 校验 CRC16。
 
 ---
 
@@ -77,7 +77,7 @@ CRC 表与算法见 `io/gimbal/protocol_crc.cpp`。接收端解析流程（`Seri
 
 总长 **24 字节**。
 
-**视觉侧使用**（`io/serial_board.cpp`）：
+**视觉侧使用**（`io/serial/serial_board.cpp`）：
 
 ```cpp
 Eigen::Quaterniond q =
@@ -259,8 +259,8 @@ Eigen::Quaterniond q =
 
 | 结构体 | 文件 |
 | --- | --- |
-| `Header` / 所有 Packet | `io/gimbal/packet.hpp` |
+| `Header` / 所有 Packet | `io/serial/gimbal/packet.hpp` |
 | `Command` / `NavCommand` | `io/command.hpp` |
-| CRC 算法 | `io/gimbal/protocol_crc.cpp` / `protocol_crc.hpp` |
-| 串口收发与解析 | `io/serial_board.cpp` / `serial_board.hpp` |
+| CRC 算法 | `io/serial/gimbal/protocol_crc.cpp` / `protocol_crc.hpp` |
+| 串口收发与解析 | `io/serial/serial_board.cpp` / `serial_board.hpp` |
 | ROS2 订阅 | `io/ros2/subscribe2nav.cpp` |

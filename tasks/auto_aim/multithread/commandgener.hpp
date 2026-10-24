@@ -3,7 +3,7 @@
 
 #include <optional>
 
-#include "io/cboard.hpp"
+#include "io/can/cboard.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/tracker.hpp"
 #include "tasks/omniperception/decider.hpp"

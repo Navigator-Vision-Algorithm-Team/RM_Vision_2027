@@ -7,7 +7,7 @@
 #include <thread>
 
 #include "io/camera.hpp"
-#include "io/gimbal/gimbal.hpp"
+#include "io/serial/gimbal/gimbal.hpp"
 #include "tasks/auto_aim/planner/planner.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"

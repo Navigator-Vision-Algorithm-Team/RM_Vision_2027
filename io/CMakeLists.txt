@@ -2,7 +2,10 @@ cmake_minimum_required(VERSION 3.16)
 
 find_package(yaml-cpp REQUIRED)
 
-add_subdirectory(serial)
+add_subdirectory(3rdparty/serial)
+
+# CAN 通信部分独立成库（io_can），与串口部分分开维护
+add_subdirectory(can)
 
 # 创建目标 io
 add_library(io STATIC
@@ -11,11 +14,11 @@ add_library(io STATIC
     mindvision/mindvision.cpp
     usbcamera/usbcamera.cpp
     camera.cpp
-    cboard.cpp
     dm_imu/dm_imu.cpp
-    gimbal/gimbal.cpp
-    gimbal/protocol_crc.cpp
-    serial_board.cpp
+    # ---- 串口通信（io/serial/）----
+    serial/serial_board.cpp
+    serial/gimbal/gimbal.cpp
+    serial/gimbal/protocol_crc.cpp
 )
 
 target_include_directories(io

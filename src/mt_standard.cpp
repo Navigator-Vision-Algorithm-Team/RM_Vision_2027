@@ -4,7 +4,7 @@
 
 #include "io/camera.hpp"
 // #include "io/dm_imu/dm_imu.hpp"  // [CAN] 已切换为串口通信
-#include "io/serial_board.hpp"
+#include "io/serial/serial_board.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 // #include "tasks/auto_aim/multithread/commandgener.hpp"  // [CAN] CommandGener 依赖 CBoard
 // #include "tasks/auto_aim/multithread/mt_detector.hpp"   // [CAN] 多线程检测器

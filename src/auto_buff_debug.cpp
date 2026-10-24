@@ -3,7 +3,7 @@
 #include <string>
 
 #include "io/camera.hpp"
-#include "io/cboard.hpp"
+#include "io/can/cboard.hpp"
 #include "tasks/auto_buff/buff_aimer.hpp"
 #include "tasks/auto_buff/buff_detector.hpp"
 #include "tasks/auto_buff/buff_solver.hpp"
