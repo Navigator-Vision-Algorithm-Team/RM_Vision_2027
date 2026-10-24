@@ -161,9 +161,7 @@ std::list<Armor> YOLOV8::parse(
 
   for (auto it = armors.begin(); it != armors.end();) {
     it->pattern = get_pattern(bgr_img, *it);
-    // 【不判兵种】name 已不参与优先级与过滤（decider.set_priority 已停用），
-    // 跳过 tiny_resnet 推理；此处 name 仍由 Armor(class_id,...) 的类别映射给出，不会未定义。
-    // classifier_.classify(*it);
+    classifier_.classify(*it);
 
     if (!check_name(*it)) {
       it = armors.erase(it);
