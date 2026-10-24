@@ -4,6 +4,7 @@
 #include <Eigen/Geometry>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -48,6 +49,12 @@ public:
   void send(Command command) const;
   void send(NavCommand command) const;
 
+  // 云台关节反馈回调：收到一帧 CRC 正确的 0x502 就回调一次（yaw_rad 为已转成
+  // (-π, π] 的关节角，pitch_rad 恒为 0，因为大yaw 轴没有俯仰自由度）。
+  // 回调发生在接收线程内，按真实帧率触发；不会把上一帧旧值重复喂给上层。
+  using GimbalJointCallback = std::function<void(double yaw_rad, double pitch_rad)>;
+  void set_gimbal_joint_callback(GimbalJointCallback callback);
+
   // Game / match state from MCU
   GameStatus game_status() const;
   RobotStatus robot_status() const;
@@ -78,6 +85,10 @@ private:
   std::atomic<bool> quit_ = false;
   mutable std::mutex send_mutex_;
   mutable std::mutex status_mutex_;
+
+  // 关节反馈订阅方（目前是 io::ROS2 的 JointState 发布节点）
+  mutable std::mutex joint_callback_mutex_;
+  GimbalJointCallback joint_callback_;
 
   tools::ThreadSafeQueue<IMUData> queue_{1000};
   IMUData data_ahead_;
