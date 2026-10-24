@@ -402,15 +402,18 @@ bool FakeCameraSource::read(Frame & out, int timeout_ms)
         if (remain < slice) slice = remain;
       }
 
-      holder_cv_.wait_for(lock, slice, [this] { return holder_idx_ >= 0 || quit_; });
+      holder_cv_.wait_for(lock, slice, [this] { return !holder_.data.empty() || quit_; });
       if (quit_) break;
 
-      if (holder_idx_ >= 0) {
+      // 池化路径(synth)的 pool_idx >= 0，非池化路径(video/sequence)为 -1，
+      // 因此“是否有新帧”只能看 holder_.data，不能用 holder_idx_ 判断
+      if (!holder_.data.empty()) {
         // 关键：把池内缓冲换成本次独占的克隆。
         // 只有真正被消费的帧付这一次全帧拷贝，产帧端 1500fps 的路径上没有全帧写入。
         out = holder_;
         out.data = out.data.clone();
-        pool_free_[static_cast<size_t>(holder_idx_)] = true;
+        // 只有池化路径持有的缓冲才需要归还，-1 时归还会造成越界写
+        if (holder_idx_ >= 0) pool_free_[static_cast<size_t>(holder_idx_)] = true;
         holder_idx_ = -1;
         holder_ = Frame{};
         delivered_++;
