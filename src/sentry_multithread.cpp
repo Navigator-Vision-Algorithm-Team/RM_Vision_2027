@@ -270,8 +270,8 @@ int main(int argc, char * argv[])
       // 过滤敌人
       decider.armor_filter(armors);
 
-      // 设置优先级
-      decider.set_priority(armors);
+      // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级
+      // decider.set_priority(armors);
 
       //全向相机中拿出装甲板的候选
       auto detection_queue = perceptron.get_detection_queue();

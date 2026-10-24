@@ -115,7 +115,9 @@ void Perceptron::parallel_infer(
       // 保证它们描述的始终是 armors.front() 这块装甲板。
       // （若先算角度再过滤/排序，角度会与最终 front() 指向的目标不一致。）
       decider_.armor_filter(armors);
-      decider_.set_priority(armors);
+      // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级；
+      // 此时下面按 priority 的排序所有元素相等，退化为稳定排序（保持原顺序）
+      // decider_.set_priority(armors);
       armors.sort([](const auto_aim::Armor & a, const auto_aim::Armor & b) {
         return a.priority < b.priority;
       });
