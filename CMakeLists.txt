@@ -63,17 +63,9 @@ target_link_libraries(soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io
 target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 
 ##################calibration################
-add_executable(capture calibration/capture.cpp)
-add_executable(calibrate_camera calibration/calibrate_camera.cpp)
-add_executable(calibrate_handeye calibration/calibrate_handeye.cpp)
-add_executable(calibrate_robotworld_handeye calibration/calibrate_robotworld_handeye.cpp)
-add_executable(split_video calibration/split_video.cpp)
-
-target_link_libraries(capture ${OpenCV_LIBS} fmt::fmt tools io io_can)
-target_link_libraries(calibrate_camera ${OpenCV_LIBS} fmt::fmt yaml-cpp tools)
-target_link_libraries(calibrate_handeye ${OpenCV_LIBS} fmt::fmt yaml-cpp tools)
-target_link_libraries(calibrate_robotworld_handeye ${OpenCV_LIBS} fmt::fmt yaml-cpp tools)
-target_link_libraries(split_video ${OpenCV_LIBS} fmt::fmt tools)
+# 旧的标定工具（capture / calibrate_camera / calibrate_handeye /
+# calibrate_robotworld_handeye / split_video）已清空，标定方案见 calibration/README.md，
+# 新的采集/解算工具按该方案重写后再加回这里。
 
 # 检查 ROS 环境
 find_package(ament_cmake QUIET)
@@ -104,7 +96,6 @@ endif()
 # 1) 可执行文件（if(TARGET) 保证只在对应目标被生成时安装；sentry 仅在找到 ROS2 时存在）
 set(ALL_EXES
     mt_standard soldier virtual_run
-    capture calibrate_camera calibrate_handeye calibrate_robotworld_handeye split_video
     sentry_multithread)
 foreach(ex ${ALL_EXES})
     if(TARGET ${ex})

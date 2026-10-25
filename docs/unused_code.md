@@ -10,8 +10,9 @@
 - **C 类**：留在仓库里，但当前入口不会读取（配置、参数）
 
 > 判断依据是当前 `develop` 分支上仍然会生成的入口：
-> `mt_standard`、`soldier`、`sentry_multithread`（需 ROS2）、`virtual_run`，
-> 以及 `capture` / `calibrate_*` / `split_video` 五个标定工具。
+> `mt_standard`、`soldier`、`sentry_multithread`（需 ROS2）、`virtual_run`。
+> `calibration/` 下的旧标定工具已全部清空，方案见
+> [calibration/README.md](../calibration/README.md)，新工具按该方案重写。
 
 ---
 
@@ -192,7 +193,7 @@ fire_thresh / yaw_offset`（可直接参考 `configs/standard3.yaml`）。
 | `io/sim/` | 虚拟数据源（`VirtualMcu`、伪相机、录制/回放），`virtual_run` 和 `source_mode: fake/replay` 都依赖它 |
 | `sim/virtual_mcu.py` | 可选的**外部**虚拟下位机（pty 伪串口），`fake_serial_external: true` 时使用；不做真机也能联调 |
 | `tools/trajectory.hpp` | 弹道解算（飞行时间、下坠），`aimer.cpp` 在用 |
-| `calibration/` | 5 个标定工具，都在构建并安装 |
+| `calibration/` | 旧工具已清空，只剩标定方案 `README.md`；新工具待按方案重写 |
 | `3rd_part/openvino_2024.6.0/` | 两套内置 OpenVINO 运行库，构建时按架构取用 |
 
 ---
