@@ -207,7 +207,7 @@ Eigen::Quaterniond q =
 
 ### 4.2 `0x0405` 导航控制指令（NavigationPacket）
 
-由 `SerialBoard::send(NavCommand)` 下发，来源为 ROS2 订阅。
+由 `SerialBoard::send(NavCommand)` 下发，来源为 ROS2 订阅（独立线程收包即发，与主循环解耦）。
 
 | 偏移 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- |
@@ -223,7 +223,7 @@ Eigen::Quaterniond q =
 
 ## 5. ROS2 输入：导航速度
 
-入口 `ros2.subscribe_get_data()` → `Subscribe2Nav::subscribe_move_info()`（`io/ros2/subscribe2nav.cpp`）。
+入口：`ROS2` 构造时传入发送回调（`SerialBoard::send`），`Subscribe2Nav` 内部启动独立线程 `nav_forward_loop`，阻塞等待 `move_info_queue_`，收到 `Twist` 后立即转换为 `NavCommand` 并经串口下发——不经过主循环，避免被视觉主链路延迟（`io/ros2/subscribe2nav.cpp`）。
 
 | 项 | 值 |
 | --- | --- |
