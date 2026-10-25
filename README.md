@@ -14,6 +14,9 @@
 > （`io/hikrobot/lib/{amd64,arm64}/libMvCameraControl.so`、`io/mindvision/lib/{amd64,arm64}/libMVSDK.so`），
 > OpenVINO 2024.6.0 也提供 aarch64 与 x86_64 两套运行库，均随仓库分发，**两个平台都无需系统安装**。
 > 以下安装步骤以 **Ubuntu 26.04 LTS arm64（全新系统）** 为例；x86 开发机见 2.0 / 2.2。
+>
+> **保留但未参与构建的代码**（打符 `auto_buff`、`uav`、MPC `planner`/`tinympc` 等）
+> 的作用、停用原因与恢复方法，见 [docs/unused_code.md](docs/unused_code.md)。
 
 1. 安装依赖项：
 

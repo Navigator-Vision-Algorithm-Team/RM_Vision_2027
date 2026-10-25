@@ -3,7 +3,10 @@ cmake_minimum_required(VERSION 3.16)
 # OpenVINO 的查找路径由顶层 cmake/platform.cmake 统一决定，这里只管使用
 find_package(OpenVINO REQUIRED COMPONENTS Runtime)
 
-add_subdirectory(planner/tinympc)
+# planner/（MPC 云台平滑）与 planner/tinympc/（CMU TinyMPC 求解器）不参与构建：
+# 唯一会实例化 Planner 的 *_mpc 入口已删除，详见 docs/unused_code.md。
+# 恢复时取消下一行注释，并把 planner/planner.cpp 与 tinympcstatic 加回本文件。
+# add_subdirectory(planner/tinympc)
 
 add_library(auto_aim OBJECT 
     armor.cpp
@@ -25,7 +28,8 @@ add_library(auto_aim OBJECT
     yolos/yolo11.cpp
     multithread/commandgener.cpp
     multithread/mt_detector.cpp
-    planner/planner.cpp
+    # planner/planner.cpp            # MPC，暂不编译，见 docs/unused_code.md
 )
 
-target_link_libraries(auto_aim io openvino::runtime tinympcstatic)
+target_link_libraries(auto_aim io openvino::runtime)
+# target_link_libraries(auto_aim io openvino::runtime tinympcstatic)  # 随 planner 恢复
