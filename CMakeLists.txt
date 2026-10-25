@@ -44,9 +44,10 @@ include_directories(${PROJECT_SOURCE_DIR})
 add_subdirectory(tools)
 add_subdirectory(io)
 add_subdirectory(tasks/auto_aim)
-# 打符模块：原先只被 auto_buff_debug* 与 uav 使用，这些入口已删除，目前无目标链接它。
-# 保留在构建中以便代码继续参与编译检查；若确定长期不用，可删掉本行。
-add_subdirectory(tasks/auto_buff)
+# tasks/auto_buff（打符）与 src/uav.cpp 均不参与构建：
+# 打符入口 auto_buff_debug* 已删除，uav 目标暂不启用。
+# 需要时把 `add_subdirectory(tasks/auto_buff)` 与 uav 的
+# add_executable / target_link_libraries 两行恢复即可。
 add_subdirectory(tasks/omniperception)
 
 ####################src###################
@@ -56,13 +57,10 @@ add_executable(mt_standard src/mt_standard.cpp)
 add_executable(soldier src/soldier.cpp)
 # 虚拟数据源运行器（无硬件可跑通 real / fake / replay）
 add_executable(virtual_run src/virtual_run.cpp)
-# uav 目标暂未启用：依赖 tasks/auto_buff，启用时一并打开下面的链接行
-# add_executable(uav src/uav.cpp)
 
 target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 target_link_libraries(soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
-# target_link_libraries(uav ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 
 ##################calibration################
 add_executable(capture calibration/capture.cpp)
