@@ -15,6 +15,8 @@ add_library(io STATIC
     usbcamera/usbcamera.cpp
     camera.cpp
     dm_imu/dm_imu.cpp
+    # ---- 坐标变换树（io/tf/）：标定值 -> 各坐标系之间的刚体变换 ----
+    tf/tf_tree.cpp
     # ---- 串口通信（io/serial/）----
     serial/serial_board.cpp
     serial/gimbal/gimbal.cpp

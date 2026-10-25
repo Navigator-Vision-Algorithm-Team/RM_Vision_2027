@@ -8,6 +8,7 @@
 #include "io/camera.hpp"
 #include "io/serial/serial_board.hpp"
 #include "io/ros2/ros2.hpp"
+#include "io/tf/tf_tree.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
@@ -44,6 +45,18 @@ int main(int argc, char * argv[])
   auto config_path = cli.get<std::string>(0);
 
   auto yaml = tools::load(config_path);
+
+  // 坐标变换树：所有几何量（每个相机相对旋转轴的位置/姿态）都来自配置 tf.frames，
+  // 代码里不写死任何安装尺寸。大yaw 与小yaw 作为两个动态关节，每帧由 0x502 刷新。
+  io::tf::Tree tf_tree = io::tf::load_tree(yaml);
+  if (tf_tree.empty()) {
+    tools::logger()->warn(
+      "[Main] 配置里没有 tf.frames：主相机/全向相机将使用各自的回退外参（未标定则为安装角近似）");
+  } else {
+    std::string frames;
+    for (const auto & f : tf_tree.frames()) frames += f + " ";
+    tools::logger()->info("[Main] tf frames: {}", frames);
+  }
 
   tools::logger()->info("[Main] Initializing SerialBoard...");
   // 串口初始化
@@ -110,6 +123,22 @@ int main(int argc, char * argv[])
     // =====================================================================
     omniperception::load_omni_pnp_config(cfg, yaml, i);
 
+    // tf 树优先：omni_cam_i -> yaw_axis 给出「相机 -> 大yaw」的完整位姿（含平移）。
+    // 这一步很关键：全向相机的光心不在大yaw 转轴上，只用旋转会带来视差误差。
+    {
+      io::tf::Transform T_cam2yaw;
+      const std::string frame = io::tf::Tree::OMNI_CAM_PREFIX + std::to_string(i);
+      if (tf_tree.lookup(frame, io::tf::Tree::YAW_AXIS, T_cam2yaw)) {
+        cfg.R_camera2gimbal = T_cam2yaw.R;
+        cfg.t_camera2gimbal = T_cam2yaw.t;
+        cfg.has_extrinsic = true;
+      } else if (cfg.has_extrinsic) {
+        tools::logger()->warn(
+          "[Main] tf 里没有 {} -> {}，沿用 omni_R/t_camera2gimbal_{}", frame,
+          io::tf::Tree::YAW_AXIS, i);
+      }
+    }
+
     omni_configs.push_back(cfg);
     omni_cameras.push_back(std::move(cam));
   }
@@ -124,11 +153,15 @@ int main(int argc, char * argv[])
   omniperception::Decider decider(config_path);
   omniperception::Perceptron perceptron(omni_configs, config_path, yolo);
 
-  // 主相机手眼标定时小yaw 相对大yaw 的转角；标定时小yaw 在零位则填 0。
-  // 配置里与 yaw_offset 一样用「度」，这里转成弧度。只有哨兵是双yaw 平台，
-  // 所以这个修正只在哨兵入口启用（单yaw 兵种 upper_yaw 不使用）。
-  const double small_yaw_calib =
-    (yaml["small_yaw_calib"] ? yaml["small_yaw_calib"].as<double>() : 0.0) / 57.3;
+  // 主相机外参：tf 树里有 main_cam -> small_yaw 就用标定值，否则沿用 yaml 里的
+  // R_camera2gimbal / t_camera2gimbal（语义同样是「相机 -> 小yaw 板」）。
+  {
+    io::tf::Transform T_cam2plate;
+    if (tf_tree.lookup(io::tf::Tree::MAIN_CAM, io::tf::Tree::SMALL_YAW, T_cam2plate)) {
+      solver.set_extrinsic(T_cam2plate.R, T_cam2plate.t);
+      tools::logger()->info("[Main] main_cam extrinsic <- tf tree");
+    }
+  }
 
   cv::Mat img;
   std::chrono::steady_clock::time_point timestamp;
@@ -147,8 +180,14 @@ int main(int argc, char * argv[])
       continue;
     }
 
-    // 获取IMU数据，一个四元数，表示这个时候云台的朝向
-    Eigen::Quaterniond q = serial_board.imu_at(timestamp - 1ms);
+    // 双yaw 姿态：大yaw 只有 yaw，pitch/roll 属于小yaw（主相机所在板）
+    const io::ImuState imu = serial_board.imu_state_at(timestamp - 1ms);
+
+    // 主相机 = 小yaw 板：Rz(upper)·Ry(pitch)·Rx(roll)
+    const Eigen::Quaterniond q_main(
+      Eigen::AngleAxisd(imu.upper_yaw, Eigen::Vector3d::UnitZ()) *
+      Eigen::AngleAxisd(imu.pitch, Eigen::Vector3d::UnitY()) *
+      Eigen::AngleAxisd(imu.roll, Eigen::Vector3d::UnitX()));
 
     // 比赛未开始时跳过自瞄逻辑（裁判系统控制）
     if (!serial_board.is_game_started()) {
@@ -157,7 +196,7 @@ int main(int argc, char * argv[])
         tools::logger()->info("[Main] Game not started yet, waiting...");
       }
       //注意这个地方的功耗···检查之后似乎没有很多
-      main_recorder.record(img, q, timestamp);
+      main_recorder.record(img, q_main, timestamp);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
@@ -167,34 +206,12 @@ int main(int argc, char * argv[])
       tools::logger()->info("[Main] Game started! Entering detection & tracking loop");
     }
 
-    solver.set_R_gimbal2world(q);
+    // 主相机在小yaw 上，Solver 的 "gimbal" 就是小yaw 板
+    solver.set_R_gimbal2world(q_main);
 
-    // =====================================================================
-    //  大小yaw结构下主相机的小yaw 修正。
-    //
-    //  结构：大yaw 承载 IMU + 四个全向相机；小yaw 在大yaw 之上，承载主相机。
-    //  而 R_camera2gimbal 是参考 IMU(大yaw) 做手眼标定得到的，所以小yaw 一旦
-    //  离开标定位置，主相机的解算就会偏一个 psi（小yaw 相对大yaw 的转角）。
-    //  0x502 现在同时上报 upper_yaw / lower_yaw，psi = upper - lower 直接可得。
-    //
-    //  psi_calib：做手眼标定时小yaw 相对大yaw 的转角，标定时小yaw 在零位则为 0
-    //  （配置键 small_yaw_calib，单位弧度）。
-    //
-    //  注意：四个全向相机与 IMU 同在大yaw 上，**不需要**这个修正，
-    //        全向链路直接沿用 gimbal_pos(=大yaw 的世界系 yaw) 即可。
-    // =====================================================================
-    {
-      const double psi_now = serial_board.small_yaw_at(timestamp - 1ms);
-      solver.set_small_yaw_offset(tools::limit_rad(psi_now - small_yaw_calib));
-
-      static bool psi_logged = false;
-      if (!psi_logged) {
-        psi_logged = true;
-        tools::logger()->info(
-          "[Main] small yaw (psi) correction ON: psi_calib={:.3f} rad, first psi={:.3f} rad",
-          small_yaw_calib, psi_now);
-      }
-    }
+    // 大yaw（全向相机所在轴）只有 yaw，作为 tf 树的动态关节
+    tf_tree.set_imu(imu.pitch, imu.roll, imu.upper_yaw, imu.lower_yaw);
+    const double omni_base_yaw = imu.lower_yaw;
 
     Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
@@ -225,7 +242,7 @@ int main(int argc, char * argv[])
       command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
       command.pitch = tools::limit_rad(0.0);
 
-      main_recorder.record(img, q, timestamp);
+      main_recorder.record(img, q_main, timestamp);
       serial_board.send(command);
     } else {
       //这是主相机的处理，立马处理的目标
@@ -245,22 +262,23 @@ int main(int argc, char * argv[])
       // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
       auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp);
       
-      // 全向相机的 delta_yaw 是"云台系"绝对角（零点 = 云台正前方、向左为正，
-      // 由 Decider::delta_angle 用固定的安装角 mount_yaw 算出），
-      // 必须加上云台当前的世界系 yaw 才是下位机要求的 IMU 世界系绝对角。
+      // 全向相机的 delta_yaw 是「大yaw 系」角（零点 = 大yaw 正前方、向左为正，
+      // 由 Decider::delta_angle 用 tf 给的「相机 -> 大yaw」位姿算出），
+      // 必须加大yaw 当前的世界系 yaw 才是下位机要求的世界系绝对角。
+      // 注意：这里不能用 gimbal_pos[0]——那是小yaw 的 yaw，两个轴是独立的。
       if (tracker.state() == "switching") {
         command.control = switch_target.armors.empty() ? false : true;
         command.shoot = false;
         command.pitch = tools::limit_rad(switch_target.delta_pitch);
-        command.yaw = tools::limit_rad(switch_target.delta_yaw + gimbal_pos[0]);
+        command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
       }
 
       else if (tracker.state() == "lost") {
         command = decider.decide(detection_queue);
         if (command.control) {
           // 全向有新检测：更新缓存，发送新值
-          // decide() 返回的同样是云台系绝对角，需转成世界系绝对角后再下发
-          command.yaw = tools::limit_rad(command.yaw + gimbal_pos[0]);
+          // decide() 返回的同样是大yaw 系角，需转成世界系绝对角后再下发
+          command.yaw = tools::limit_rad(command.yaw + omni_base_yaw);
           cached_omni_yaw = command.yaw;
           cached_omni_pitch = command.pitch;
           has_omni_cache = true;
@@ -297,7 +315,7 @@ int main(int argc, char * argv[])
         fmt::format("State: {} | Targets: {}", tracker.state(), targets.size()),
         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
 
-      main_recorder.record(img, q, timestamp);
+      main_recorder.record(img, q_main, timestamp);
 
   //     tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
   // command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);

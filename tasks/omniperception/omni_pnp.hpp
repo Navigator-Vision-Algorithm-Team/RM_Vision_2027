@@ -87,19 +87,17 @@ cv::Mat approximate_camera_matrix(
 //  如果你在标定时习惯用「抬头为正」，请在这里取负号。
 //
 //  ⚠ 关于哨兵的「大yaw + 小yaw」结构（重要，别搞反）：
-//    · 本项目里 "gimbal"（云台）系 = **大yaw 系**：IMU 与四个全向相机都刚性
-//      安装在 大yaw 上，所以 R_gimbal2world 是「大yaw -> 世界」。
-//    · 因此全向相机的外参应标成「相机 -> 大yaw（即 IMU 参考系）」。标定方法
-//      可直接复用 calibration/calibrate_robotworld_handeye.cpp：它用 IMU 四元数
-//      构造 R_world2gimbal，解出来的正是 相机 -> 大yaw。
-//    · 这样 xyz_world = R_gimbal2world * xyz_bigyaw 严格成立，
-//      **全向路径完全不需要小yaw相对角 psi**（全向相机与 IMU 同在一根连杆上）。
-//    · 真正需要 psi 的是主相机：它装在小yaw上，而它的 R_camera2gimbal 标到了
-//      大yaw系。修正接口见 auto_aim::Solver::set_small_yaw_offset()。
-//    · 必须遵守的耦合：本模块返回的角度是「大yaw系」。入口里给全向角度叠加的
-//      gimbal_pos = eulers(Solver::R_gimbal2world()) 也正是大yaw的世界系 yaw，
-//      两者同系，所以 "delta + gimbal_pos" 才成立。若以后把 Solver 的 "gimbal"
-//      改成小yaw系，这里必须相应减去 psi，否则全向方向会整体偏一个 psi。
+//    · 大yaw 是下面那根轴，**只有 yaw**；四个全向相机挂在它的支架上，
+//      主相机与 IMU 在它上面的小yaw 板上（小yaw 带 yaw + pitch + roll）。
+//    · 因此全向相机的外参应标成「相机 -> 大yaw」，并包含平移（光心不在转轴上）。
+//      这些标定值统一放在配置的 tf.frames.omni_cam_N，由 io/tf/tf_tree 查表得到。
+//    · 于是 xyz_world = Rz(lower_yaw) * xyz_bigyaw 严格成立，全向链路与 pitch/roll
+//      无关（大yaw 不会因为小yaw 俯仰而俯仰）。
+//    · 必须遵守的耦合：本模块返回的角度是「大yaw 系」，入口叠加的必须是
+//      大yaw 的世界系 yaw（= 0x502 的 lower_yaw），**不能用** Solver 的
+//      R_gimbal2world（那是小yaw 板的姿态）。
+//    · 主相机在小yaw 板上，直接用 Rz(upper)·Ry(pitch)·Rx(roll) 作为基座姿态，
+//      外参标成「相机 -> 小yaw」，不需要任何附加修正角。
 //
 //  做完标定后请填 omni_R_camera2gimbal_N / omni_t_camera2gimbal_N
 //  （名字沿用工程里 "camera2gimbal" = 相机->大yaw 的叫法）。

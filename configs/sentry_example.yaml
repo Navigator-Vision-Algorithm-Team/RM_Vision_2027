@@ -214,9 +214,6 @@ outpost_max_temp_lost_count: 75     # 前哨站目标最大临时丢失帧数
 # ----- 瞄准器 (Aimer) -----
 yaw_offset: -0.8                    # yaw 整体偏移 (度)，单枪管只调这一个
 pitch_offset: -1.0                  # pitch 整体偏移 (度)
-# 小yaw（主相机所在轴）相对大yaw 的转角，单位：度。
-# 做手眼标定主相机时小yaw 的读数；标定时小yaw 在零位就填 0。仅哨兵（双yaw）生效。
-small_yaw_calib: 0.0
 comming_angle: 60                   # 陀螺旋转 coming angle 阈值 (度)
 leaving_angle: 20                   # 陀螺旋转 leaving angle 阈值 (度)
 decision_speed: 10                  # 高速/低速判定阈值 (rad/s)
@@ -231,6 +228,62 @@ judge_distance: 3                   # 近/远距离判断阈值 (m)
 
 # ----- 决策器 (Decider) -----
 mode: 1                             # 决策模式 (影响全向感知的搜索行为)
+
+# =============================================================================
+#  坐标变换树 tf
+#
+#  作用：把「每个元件相对旋转轴的位置 + 姿态」变成配置里的标定值，
+#        代码里不再出现任何安装尺寸/安装角。等同 nav2 里的 tf 树。
+#
+#  机械链（与实车一一对应）：
+#      world
+#      ├── yaw_axis      大yaw 旋转轴（只有 yaw）——全向相机都挂在这上面
+#      │   ├── omni_cam_1 … omni_cam_4
+#      └── small_yaw     小yaw 板（yaw + pitch + roll）——主相机挂在这上面
+#          └── main_cam
+#
+#  · yaw_axis / small_yaw 是**动态关节**，每帧由 0x502 刷新，不要填数值：
+#        yaw_axis  = Rz(lower_yaw)
+#        small_yaw = Rz(upper_yaw)·Ry(pitch)·Rx(roll)
+#  · omni_cam_i / main_cam 是**静态边**，填标定结果：
+#        写法一：xyz: [x,y,z] 米   + rpy_deg: [roll, pitch, yaw] 度（Z-Y-X）
+#        写法二：R: [9个数,行优先] + t: [x,y,z]
+#    含义是 p_parent = R * p_camera + t，即「相机 -> 父帧」。
+#  · 没填数值的静态边会被忽略（回退到下面的 omni_*_N / R_camera2gimbal），
+#    所以标定完成前保持注释即可，不影响现有行为。
+# =============================================================================
+tf:
+  frames:
+    yaw_axis:
+      parent: world
+      joint: lower_yaw
+    small_yaw:
+      parent: world
+      joint: upper_pitch_roll
+
+    # ---- 四个全向相机：相机 -> 大yaw 旋转轴（含光心到转轴的距离，解决视差）----
+    omni_cam_1:
+      parent: yaw_axis
+      # xyz: [0.0, 0.0, 0.0]
+      # rpy_deg: [0.0, 0.0, 0.0]
+    omni_cam_2:
+      parent: yaw_axis
+      # xyz: [0.0, 0.0, 0.0]
+      # rpy_deg: [0.0, 0.0, 0.0]
+    omni_cam_3:
+      parent: yaw_axis
+      # xyz: [0.0, 0.0, 0.0]
+      # rpy_deg: [0.0, 0.0, 0.0]
+    omni_cam_4:
+      parent: yaw_axis
+      # xyz: [0.0, 0.0, 0.0]
+      # rpy_deg: [0.0, 0.0, 0.0]
+
+    # ---- 主相机：相机 -> 小yaw 板（板子的参考系即 0x502 的 pitch/roll/upper_yaw）----
+    main_cam:
+      parent: small_yaw
+      # xyz: [0.0, 0.0, 0.0]
+      # rpy_deg: [0.0, 0.0, 0.0]
 
 # ----- 相机标定 -----
 # 云台旋转矩阵 → IMU 本体坐标系 (3x3 行优先, 通常为单位阵)

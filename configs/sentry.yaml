@@ -65,9 +65,6 @@ outpost_max_temp_lost_count: 75
 #####-----aimer参数-----#####
 yaw_offset: -0.8 # degree -2.5
 pitch_offset: -1  # degree 2
-# 小yaw（主相机所在轴）相对大yaw 的转角，单位：度。
-# 做手眼标定主相机时小yaw 的读数；标定时小yaw 在零位就填 0。仅哨兵（双yaw）生效。
-small_yaw_calib: 0.0
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
 left_yaw_offset: -1

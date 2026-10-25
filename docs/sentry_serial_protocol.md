@@ -85,36 +85,34 @@ CRC 表与算法见 `io/serial/gimbal/protocol_crc.cpp`。接收端解析流程�
 **机械结构对应的坐标系**
 
 ```
-底盘 ── 大yaw(lower) ── 小yaw(upper)
-         │                  └─ 主相机
-         ├─ IMU
-         └─ 4 个全向相机
+底盘 ── 大yaw(lower) ── 小yaw(upper，yaw + pitch + roll)
+         │                  ├─ 主相机
+         └─ 4 个全向相机      └─ IMU
 ```
 
-- `lower_yaw` + `pitch` + `roll` → **R_gimbal2world**（大yaw → 世界）。全向相机与 IMU 同在大yaw 上，
-  所以全向链路用它就够了，**不需要** psi。
-- 主相机在小yaw 上，而 `R_camera2gimbal` 是参考 IMU（大yaw）标定的，因此必须补 psi，
-  见 `auto_aim::Solver::set_small_yaw_offset()`（哨兵入口每帧调用）。
+- **大yaw 只有 yaw**：`R_大yaw2world = Rz(lower_yaw)`。四个全向相机挂在这根旋转轴的支架上，
+  各自相对大yaw 的位姿是标定值（见配置文件 `tf.frames.omni_cam_N`）。
+- **pitch / roll 属于小yaw 板**：`R_小yaw2world = Rz(upper)·Ry(pitch)·Rx(roll)`。
+  主相机装在小yaw 上，所以用它当基座姿态，**不存在"小yaw 相对角修正"这回事**。
 
 **视觉侧使用**（`io/serial/serial_board.cpp`）：
 
 ```cpp
-// 大yaw 的世界系姿态（Z-Y-X：yaw-pitch-roll）
-Eigen::Quaterniond q =
-  Eigen::AngleAxisd(lower_yaw, UnitZ()) *
-  Eigen::AngleAxisd(pitch,     UnitY()) *
-  Eigen::AngleAxisd(roll,      UnitX());
+// 只取原始角度，各坐标系姿态由 io/tf/tf_tree 复合
+const ImuState s = serial_board.imu_state_at(timestamp - 1ms);
 
-// 小yaw 相对大yaw，供主相机解算修正（哨兵）
-const double psi = limit_rad(upper_yaw - lower_yaw);
+// 大yaw（全向相机所在轴）：纯 yaw
+R_yaw_axis2world = Rz(s.lower_yaw);
+
+// 小yaw 板（主相机所在）：yaw + pitch + roll
+R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 ```
 
-接收线程为每帧记录 `steady_clock` 时间戳，`imu_at(t)` 按时间戳对相邻两帧做 **slerp 球面插值**，
-`small_yaw_at(t)` 对 psi 在最短弧上做线性插值，两者共用同一对样本，与相机曝光时间对齐
-（入口传入 `timestamp - 1ms`）。
+接收线程为每帧记录 `steady_clock` 时间戳，`imu_state_at(t)` 按时间戳在相邻两帧之间对四个角做
+线性插值（yaw 取最短弧），与相机曝光时间对齐（入口传入 `timestamp - 1ms`）。
 
 > 单yaw 兵种（步兵等）：只有哨兵是双yaw 平台，其他兵种把唯一的 yaw 填在 `lower_yaw`，
-> `upper_yaw` 视觉侧不使用，`small_yaw_at()` 也就不会被调用。
+> `upper_yaw` 不使用；兼容接口 `serial_board.imu_at()` 仍按 `Rz(lower)·Ry(pitch)·Rx(roll)` 返回。
 
 ### 3.2 `0x503` 底盘速度（classisPacket）
 

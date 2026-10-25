@@ -20,6 +20,16 @@
 namespace io
 {
 
+// 0x502 一帧姿态量（弧度）
+//   大yaw(lower) 只有 yaw；pitch/roll 属于小yaw(upper)，即主相机所在的那块板。
+struct ImuState
+{
+  double pitch = 0.0;      // 小yaw 板俯仰，低头为正
+  double roll = 0.0;       // 小yaw 板横滚
+  double upper_yaw = 0.0;  // 小yaw 世界系绝对 yaw，[0, 2π)
+  double lower_yaw = 0.0;  // 大yaw 世界系绝对 yaw，[0, 2π)
+};
+
 class SerialBoard
 {
 public:
@@ -28,13 +38,12 @@ public:
   explicit SerialBoard(const std::string & config_path);
   ~SerialBoard();
 
-  // 大yaw（= gimbal 系，IMU 与全向相机所在轴）的世界系姿态，按时间戳 slerp 对齐图像
-  Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
+  // 一帧 IMU 姿态（按图像时间戳插值）。双yaw 平台的各坐标系由调用方用 tf 树复合。
+  ImuState imu_state_at(std::chrono::steady_clock::time_point timestamp);
 
-  // 小yaw 相对大yaw 的转角 psi（弧度，(-π, π]），同样按时间戳插值。
-  // 仅哨兵（双yaw）有意义；单yaw 兵种的 0x502 里 upper_yaw 不使用，返回 0。
-  // 用法：solver.set_small_yaw_offset(psi_now - psi_calib)，见 auto_aim::Solver。
-  double small_yaw_at(std::chrono::steady_clock::time_point timestamp);
+  // 兼容接口（单yaw 兵种）：Rz(lower_yaw)·Ry(pitch)·Rx(roll)。
+  // 双yaw 平台请改用 imu_state_at()，因为大yaw 只有 yaw、pitch/roll 属于小yaw。
+  Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
 
   void send(Command command) const;
   void send(NavCommand command) const;
@@ -50,12 +59,11 @@ public:
 private:
   struct IMUData
   {
-    Eigen::Quaterniond q;  // 大yaw -> 世界（由 lower_yaw / pitch / roll 构造）
-    double psi = 0.0;      // 小yaw 相对大yaw 的转角（(-π, π]），单yaw 兵种恒为 0
+    ImuState state;  // 四个原始角度，按时间戳插值后再复合出各坐标系姿态
     std::chrono::steady_clock::time_point timestamp;
   };
 
-  // 把队列里的新样本搬进 data_ahead_ / data_behind_（imu_at 与 small_yaw_at 共用）
+  // 把队列里的新样本搬进 data_ahead_ / data_behind_
   void update_imu_samples();
 
   // 数据源：真实串口 / 内置虚拟下位机 / 原始字节回放，由配置决定，解析逻辑完全一致

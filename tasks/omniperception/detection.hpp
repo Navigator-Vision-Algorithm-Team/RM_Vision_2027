@@ -37,8 +37,9 @@ struct OmniCameraConfig
   //                             并令 t = 0（相机位置相对机器人中心的偏移）
   //    · 连 fov 都没有 -> 才回退到旧的「像素线性插值」方法（decider.cpp 兜底分支）
   // ===========================================================================
-  // 注意：本工程 "gimbal/云台" 系 = 大yaw 系（IMU 与四个全向相机都装在大yaw上），
-  //       所以这里标的是「相机 -> 大yaw(IMU参考系)」，全向路径不需要小yaw角 psi。
+  // 注意：全向相机挂在大yaw（只有 yaw）的支架上，所以这里标的是
+  //       「相机 -> 大yaw 旋转轴」，且必须带平移（光心不在转轴上）。
+  //       标定值统一来自配置的 tf.frames.omni_cam_N（见 io/tf/tf_tree）。
   cv::Mat camera_matrix;   // 3x3 行优先内参（CV_64F）；空 => 用 FOV 近似
   cv::Mat distort_coeffs;  // 1x5 畸变 (k1 k2 p1 p2 k3)；空 => 无畸变
   Eigen::Matrix3d R_camera2gimbal = Eigen::Matrix3d::Identity();  // 相机 -> 大yaw 旋转

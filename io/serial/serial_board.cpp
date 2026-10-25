@@ -1,6 +1,7 @@
 #include "serial_board.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 #include "io/serial/gimbal/protocol_crc.hpp"
@@ -53,10 +54,10 @@ SerialBoard::SerialBoard(const std::string & config_path)
     sim::log_tag(source_mode_), transport_->describe(), baud_rate_, use_referee_system_,
     recorder_ ? recorder_->path() : std::string("off"));
 
-  // 初始化 IMU 数据为单位四元数、psi 为 0，收到真实数据后会被覆盖
+  // 初始化 IMU 数据为全零姿态，收到真实数据后会被覆盖
   auto t0 = std::chrono::steady_clock::time_point(std::chrono::seconds(0));
-  data_ahead_ = IMUData{Eigen::Quaterniond::Identity(), 0.0, t0};
-  data_behind_ = IMUData{Eigen::Quaterniond::Identity(), 0.0, t0 + std::chrono::milliseconds(1)};
+  data_ahead_ = IMUData{ImuState{}, t0};
+  data_behind_ = IMUData{ImuState{}, t0 + std::chrono::milliseconds(1)};
 
   receive_thread_ = std::thread(&SerialBoard::receiveThread, this);
   tools::logger()->info("[SerialBoard] Ready (IMU will update when MCU sends 0x502).");
@@ -70,35 +71,56 @@ SerialBoard::~SerialBoard()
   if (recorder_) recorder_->close();
 }
 
-Eigen::Quaterniond SerialBoard::imu_at(std::chrono::steady_clock::time_point timestamp)
+namespace
+{
+// 归一化到 [0, 2π)，与下位机的上报约定一致
+double wrap_2pi(double a)
+{
+  a = std::fmod(a, 2.0 * M_PI);
+  if (a < 0.0) a += 2.0 * M_PI;
+  return a;
+}
+}  // namespace
+
+ImuState SerialBoard::imu_state_at(std::chrono::steady_clock::time_point timestamp)
 {
   /*
-    非阻塞地获取最新 IMU 数据
-    并且对需要查找的IMU四元数数据进行线性的插值
-    我们使用现在的时间进行查找。得到两个四元数变量，三个时间变量：
-    q_a, q_b, t_a, t_b, t_c
-    我们的目的是找到t_c的Q，使用的是slerp方法。球面线形插值，对多维数据特攻
+    非阻塞地取出队列里的新样本，保留"上一帧/最新帧"两帧，
+    再按图像时间戳在这两帧之间线性插值（与相机曝光对齐）。
+    角度插值而不是四元数插值：四个量都是欧拉角，插完再复合更直观，
+    yaw 走最短弧，避免 0/2π 边界被插成"绕一圈"。
   */
 
   update_imu_samples();
 
   if (data_behind_.timestamp < timestamp) data_ahead_ = data_behind_;
 
-  Eigen::Quaterniond q_a = data_ahead_.q.normalized();
-  Eigen::Quaterniond q_b = data_behind_.q.normalized();
-  auto t_a = data_ahead_.timestamp;
-  auto t_b = data_behind_.timestamp;
-  auto t_c = timestamp;
-  std::chrono::duration<double> t_ab = t_b - t_a;
-  std::chrono::duration<double> t_ac = t_c - t_a;
+  const ImuState & a = data_ahead_.state;
+  const ImuState & b = data_behind_.state;
 
-  // 尚无真实 IMU 数据时直接返回单位四元数
-  if (t_ab.count() <= 0) return q_a;
+  const std::chrono::duration<double> t_ab = data_behind_.timestamp - data_ahead_.timestamp;
+  if (t_ab.count() <= 0) return a;  // 尚无两帧可用时退化为最近值
 
-  auto k = t_ac / t_ab;
-  Eigen::Quaterniond q_c = q_a.slerp(k, q_b).normalized();
+  const std::chrono::duration<double> t_ac = timestamp - data_ahead_.timestamp;
+  const double k = std::clamp(t_ac / t_ab, 0.0, 1.0);
 
-  return q_c;
+  ImuState out;
+  out.pitch = a.pitch + k * (b.pitch - a.pitch);
+  out.roll = a.roll + k * (b.roll - a.roll);
+  out.upper_yaw = wrap_2pi(a.upper_yaw + k * tools::limit_rad(b.upper_yaw - a.upper_yaw));
+  out.lower_yaw = wrap_2pi(a.lower_yaw + k * tools::limit_rad(b.lower_yaw - a.lower_yaw));
+  return out;
+}
+
+Eigen::Quaterniond SerialBoard::imu_at(std::chrono::steady_clock::time_point timestamp)
+{
+  // 单yaw 兵种的兼容语义：云台 = yaw + pitch + roll（大yaw 的 lower_yaw 即其唯一 yaw）
+  const ImuState s = imu_state_at(timestamp);
+  const Eigen::Quaterniond q(
+    Eigen::AngleAxisd(s.lower_yaw, Eigen::Vector3d::UnitZ()) *
+    Eigen::AngleAxisd(s.pitch, Eigen::Vector3d::UnitY()) *
+    Eigen::AngleAxisd(s.roll, Eigen::Vector3d::UnitX()));
+  return q.normalized();
 }
 
 void SerialBoard::update_imu_samples()
@@ -110,26 +132,6 @@ void SerialBoard::update_imu_samples()
       data_behind_ = new_data;
     }
   }
-}
-
-double SerialBoard::small_yaw_at(std::chrono::steady_clock::time_point timestamp)
-{
-  // 与 imu_at 共用同一对插值样本（psi 与四元数来自同一帧 0x502，无需再排一次队）
-  update_imu_samples();
-
-  if (data_behind_.timestamp < timestamp) data_ahead_ = data_behind_;
-
-  const double psi_a = data_ahead_.psi;
-  const double psi_b = data_behind_.psi;
-
-  const std::chrono::duration<double> t_ab = data_behind_.timestamp - data_ahead_.timestamp;
-  if (t_ab.count() <= 0) return psi_a;  // 尚无两帧可用时退化为最近值
-
-  const std::chrono::duration<double> t_ac = timestamp - data_ahead_.timestamp;
-  const double k = std::clamp(t_ac / t_ab, 0.0, 1.0);
-
-  // 在最短弧上插值，避免 ±π 附近跳变
-  return tools::limit_rad(psi_a + k * tools::limit_rad(psi_b - psi_a));
 }
 
 void SerialBoard::send(Command command) const
@@ -403,14 +405,10 @@ void SerialBoard::receiveThread()
         error_count = 0;
         auto t_now = std::chrono::steady_clock::now();
 
-        // 大yaw 的世界系姿态 Rz(lower)·Ry(pitch)·Rx(roll)
-        //（pitch 低头为正，与绕 +Y 的右手旋转一致；单yaw 兵种 lower_yaw 即其唯一 yaw）
-        Eigen::Quaterniond q =
-          Eigen::AngleAxisd(lower, Eigen::Vector3d::UnitZ()) *
-          Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-          Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
-
-        queue_.push({q, psi, t_now});
+        // 只存原始角度，各坐标系姿态由调用方 / tf 树复合：
+        //   大yaw  = Rz(lower)                          （纯 yaw，无 pitch/roll）
+        //   小yaw  = Rz(upper)·Ry(pitch)·Rx(roll)       （主相机所在板）
+        queue_.push({ImuState{pitch, roll, upper, lower}, t_now});
         break;
       }
       case 0x503: {

@@ -142,13 +142,11 @@ Eigen::Vector2d Decider::delta_angle(
     t_camera2gimbal.setZero();
   }
 
-  // 【大小yaw结构说明】本函数的外参 R_camera2gimbal 是「相机 -> 大yaw（IMU 参考系）」。
-  // 四个全向相机与 IMU 都装在大yaw上，所以这里算出的目标方向天然就在大yaw系，
-  // 无需任何小yaw相对角 psi 的修正；入口里叠加的 gimbal_pos 也正是大yaw的世界系 yaw。
-  // 反过来说：主相机装在小yaw上，它的手眼标定却参考大yaw系，所以主相机才需要
-  // psi 修正（见 auto_aim::Solver::set_small_yaw_offset()）。
-  // ⚠ 耦合提醒：若以后把 Solver 的 "gimbal" 改成小yaw系，上面的结论就不再成立，
-  //   全向角度需要整体减去 psi。详见 omni_pnp.hpp 里的说明。
+  // 【大小yaw结构说明】本函数的外参 R_camera2gimbal / t_camera2gimbal 是
+  // 「相机 -> 大yaw 旋转轴」，由配置的 tf.frames.omni_cam_N 查表得到（含平移）。
+  // 大yaw 只有 yaw，所以这里算出的目标方向天然在大yaw 系，与 pitch/roll 无关；
+  // 入口里叠加的必须是大yaw 的世界系 yaw（lower_yaw），不能用 Solver 的
+  // R_gimbal2world（那是小yaw 板的姿态）。详见 omni_pnp.hpp 里的说明。
 
   // 4) 解算 + 几何合理性检查（检查在 solve_omni_armor 内部）
   if (!K.empty()) {

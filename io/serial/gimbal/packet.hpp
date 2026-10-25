@@ -18,12 +18,13 @@ struct Header
 
 // cmd_id 0x502 — IMU data from gimbal
 //
-// 双yaw 结构（哨兵）：底盘 → 大yaw(lower) → 小yaw(upper)。
-//   · IMU 与四个全向相机刚性安装在大yaw 上 → lower_yaw 就是「大yaw(即 gimbal 系)的世界系偏航角」，
-//     用它构造的四元数就是 R_gimbal2world。
-//   · 主相机安装在小yaw 上 → upper_yaw 是小yaw 的世界系绝对角，
-//     psi = upper_yaw - lower_yaw 即小yaw 相对大yaw 的转角（主相机解算修正用）。
-//   · 两者都是相对「上电时车头朝向」的绝对角，范围 [0, 2π)，逆时针（左转）为正。
+// 双yaw 结构（哨兵）：底盘 → 大yaw(lower) → 小yaw(upper，主相机与 IMU 所在板)。
+//   · 大yaw 只有 yaw：lower_yaw 是「大yaw 旋转轴」的世界系绝对角，
+//     四个全向相机刚性挂在这根轴所在的支架上 → R_大yaw2world = Rz(lower_yaw)。
+//   · 小yaw 板带 yaw + pitch + roll：upper_yaw 是其世界系绝对角，
+//     pitch/roll 也是这块板的姿态 → R_小yaw2world = Rz(upper)·Ry(pitch)·Rx(roll)。
+//     主相机装在小yaw 上，所以这个姿态就是主相机的基座姿态。
+//   · 两者都相对「上电时车头朝向」为 0，范围 [0, 2π)，逆时针（左转）为正。
 //   · 只有哨兵是双yaw 平台；其他兵种把唯一的 yaw 填在 lower_yaw（upper_yaw 不使用）。
 //
 // 单位：弧度。pitch 低头为正、抬头为负，roll 绕 x 轴。
