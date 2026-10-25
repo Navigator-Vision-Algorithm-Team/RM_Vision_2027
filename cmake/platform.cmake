@@ -49,32 +49,39 @@ foreach(_sdk_lib
 endforeach()
 
 # ---------- OpenVINO ----------
+# 仓库自带两套官方运行库（架构相关，必须分开存放）：
+#   3rd_part/openvino_2024.6.0/aarch64/runtime/  l_openvino_toolkit_ubuntu20_2024.6.0_arm64
+#   3rd_part/openvino_2024.6.0/x86_64/runtime/   l_openvino_toolkit_ubuntu22_2024.6.0_x86_64
+# 两套包里的 OpenVINOConfig.cmake / OpenVINOTargets-release.cmake 把 lib 路径写死为
+# 各自架构（lib/aarch64 与 lib/intel64），无法合并成一份，故按 <架构>/runtime 分目录。
+#
 # 查找优先级：
-#   1. -DOpenVINO_DIR=<path>                    手动指定，最高优先级
-#   2. 项目内置 3rd_part/openvino_2024.6.0      仅当其 lib/ 目录架构与目标架构一致
-#   3. /opt/intel/openvino_2024.6.0             手动解压安装的 Intel 官方包
-#   4. 不设置 OpenVINO_DIR                       交给 find_package 搜索系统（apt 安装）
-set(SP_OPENVINO_RUNTIME "${CMAKE_SOURCE_DIR}/3rd_part/openvino_2024.6.0/runtime")
+#   1. -DOpenVINO_DIR=<path>        手动指定，最高优先级
+#   2. 仓库内置 <架构>/runtime       默认路径，保证所有机器版本一致（2024.6.0）
+#   3. /opt/intel/openvino_2024.6.0 手动解压安装的 Intel 官方包
+#   4. 以上都没有                    交给 find_package 搜索系统（apt 安装，版本可能更新）
+set(SP_OPENVINO_ROOT "${CMAKE_SOURCE_DIR}/3rd_part/openvino_2024.6.0")
+set(SP_OPENVINO_RUNTIME "${SP_OPENVINO_ROOT}/${SP_PROCESSOR}/runtime")
 
-# 内置包的架构由其 lib/ 子目录名决定：aarch64 / intel64
-set(_sp_ov_bundled_arch "")
-if(EXISTS "${SP_OPENVINO_RUNTIME}/lib/aarch64")
-  set(_sp_ov_bundled_arch "aarch64")
-elseif(EXISTS "${SP_OPENVINO_RUNTIME}/lib/intel64")
-  set(_sp_ov_bundled_arch "x86_64")
+# 各架构包内 lib/ 的子目录名不同
+if(SP_PROCESSOR STREQUAL "x86_64")
+  set(_sp_ov_lib_subdir "intel64")
+else()
+  set(_sp_ov_lib_subdir "aarch64")
 endif()
 
 if(NOT DEFINED OpenVINO_DIR)
-  if(_sp_ov_bundled_arch STREQUAL SP_PROCESSOR)
+  if(EXISTS "${SP_OPENVINO_RUNTIME}/cmake/OpenVINOConfig.cmake"
+     AND EXISTS "${SP_OPENVINO_RUNTIME}/lib/${_sp_ov_lib_subdir}")
     set(OpenVINO_DIR "${SP_OPENVINO_RUNTIME}/cmake")
   elseif(EXISTS "/opt/intel/openvino_2024.6.0/runtime/cmake")
     set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake")
   endif()
 endif()
 
-if(_sp_ov_bundled_arch STREQUAL SP_PROCESSOR AND OpenVINO_DIR STREQUAL "${SP_OPENVINO_RUNTIME}/cmake")
+if(OpenVINO_DIR STREQUAL "${SP_OPENVINO_RUNTIME}/cmake")
   set(SP_OPENVINO_BUNDLED TRUE)
-  set(SP_OPENVINO_LIB_DIR "${SP_OPENVINO_RUNTIME}/lib/${_sp_ov_bundled_arch}")
+  set(SP_OPENVINO_LIB_DIR "${SP_OPENVINO_RUNTIME}/lib/${_sp_ov_lib_subdir}")
 else()
   set(SP_OPENVINO_BUNDLED FALSE)
   set(SP_OPENVINO_LIB_DIR "")
@@ -89,6 +96,5 @@ if(SP_OPENVINO_BUNDLED)
   message(STATUS "[platform] OpenVINO 运行库随安装包分发：${SP_OPENVINO_LIB_DIR}")
 endif()
 
-# 让 ARM 板上的构建也保证能找到内置 OpenVINO 的运行库（install/ 已由 $ORIGIN 覆盖）
 unset(_sp_proc)
-unset(_sp_ov_bundled_arch)
+unset(_sp_ov_lib_subdir)

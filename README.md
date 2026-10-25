@@ -7,13 +7,12 @@
 > **单一分支说明**：x86_64 与 aarch64 共用 `develop` 分支，源码完全一致，**架构差异只存在于
 > 构建系统**（`cmake/platform.cmake`）。该文件是项目中唯一允许出现架构判断的地方，它根据
 > `CMAKE_SYSTEM_PROCESSOR` 自动选择：相机 SDK 目录（`io/*/lib/amd64` 或 `io/*/lib/arm64`）、
-> OpenVINO 来源（系统 / `/opt/intel` / 内置 `3rd_part`）、安装包里打包的 `.so`。
+> OpenVINO 目录（`3rd_part/openvino_2024.6.0/{aarch64,x86_64}/runtime`）、安装包里打包的 `.so`。
 > 业务代码、配置文件、脚本都不需要按架构分叉。新增平台差异时只改这一个文件。
 >
-> **ARM（aarch64）适配说明**：仓库同时提供海康 / 迈德威视相机 SDK 的 amd64 与 arm64 动态库
-> （`io/hikrobot/lib/{amd64,arm64}/libMvCameraControl.so`、`io/mindvision/lib/{amd64,arm64}/libMVSDK.so`）。
-> OpenVINO 在 ARM 上采用**内置方式**：下载 aarch64 版 OpenVINO 2024.6.0 放入项目 `3rd_part/`
-> 目录即可，无需系统安装；x86 上则使用系统安装（apt 的 `libopenvino-dev` 或 `/opt/intel`）。
+> **两套内置二进制**：海康 / 迈德威视相机 SDK 提供 amd64 与 arm64 版
+> （`io/hikrobot/lib/{amd64,arm64}/libMvCameraControl.so`、`io/mindvision/lib/{amd64,arm64}/libMVSDK.so`），
+> OpenVINO 2024.6.0 也提供 aarch64 与 x86_64 两套运行库，均随仓库分发，**两个平台都无需系统安装**。
 > 以下安装步骤以 **Ubuntu 26.04 LTS arm64（全新系统）** 为例，详细的适配分析见
 > [armFitting.md](docs/armFitting.md)；x86 开发机见 2.0 / 2.2。
 
@@ -38,23 +37,19 @@
        screen
    ```
 
-   **1.2 OpenVINO（内置方式：下载后放入项目 `3rd_part/` 目录，不安装到系统）：**
-   ```bash
-   # 目标平台 Ubuntu 26.04 arm64：官方 2024.6.0 的 arm64 构建为 ubuntu20 版
-   # （glibc 向后兼容，可在 26.04 正常运行），33MB 压缩，仅保留 runtime/ 后约 70MB
-   mkdir -p 3rd_part && cd 3rd_part
-   curl -fSL -o openvino_arm64.tgz "https://storage.openvinotoolkit.org/repositories/openvino/packages/2024.6/linux/l_openvino_toolkit_ubuntu20_2024.6.0.17404.4c0f47d2335_arm64.tgz"
-   echo "e094e7c3e3a3931213aeeb6d6abb6cc4d654f5cb4df8da2914158ba62e25e33a  openvino_arm64.tgz" | sha256sum -c -
-   tar -xzf openvino_arm64.tgz && rm openvino_arm64.tgz
-   mv l_openvino_toolkit_ubuntu20_2024.6.0.17404.4c0f47d2335_arm64 openvino_2024.6.0
-   # 删除非必需内容（仅 C++ 推理需要 runtime/），解压后体积从 ~102MB 降至 ~70MB
-   rm -rf openvino_2024.6.0/docs openvino_2024.6.0/install_dependencies \
-         openvino_2024.6.0/python openvino_2024.6.0/samples openvino_2024.6.0/setupvars.sh
-   cd ..
-   # cmake/platform.cmake 会按目标架构自动选择：aarch64 指向 3rd_part/openvino_2024.6.0，
-   # x86 走系统安装（/opt/intel 或 apt 的 libopenvino-dev），详见 docs/armFitting.md §5.1
-   # 内置包自带 lib/ 子目录名（aarch64 / intel64），架构不匹配时不会误用
+   **1.2 OpenVINO（已随仓库提供 aarch64 与 x86_64 两套运行库，无需安装）：**
    ```
+   3rd_part/openvino_2024.6.0/
+     aarch64/runtime/   # 官方 l_openvino_toolkit_ubuntu20_2024.6.0_arm64
+     x86_64/runtime/    # 官方 l_openvino_toolkit_ubuntu22_2024.6.0_x86_64
+   ```
+   `cmake/platform.cmake` 按目标架构自动选择，两条硬件线共用同一个版本（2024.6.0），
+   因此不会出现"开发机 apt 装的是新版、板子上是 2024.6"的版本漂移。
+   来源、SHA256 校验值、裁剪内容与重新获取步骤见
+   [3rd_part/openvino_2024.6.0/README.md](3rd_part/openvino_2024.6.0/README.md)。
+
+   想改用系统安装的 OpenVINO（如 apt 的 `libopenvino-dev`）时加
+   `-DOpenVINO_DIR=/path/to/runtime/cmake` 覆盖即可。
 
    **1.3 相机 SDK（arm64 动态库已随仓库提供，无需额外安装 SDK 本体）：**
    - [MindVision SDK](https://mindvision.com.cn/category/software/sdk-installation-package/)或[HikRobot SDK](https://www.hikrobotics.com/cn2/source/support/software/MVS_STD_GML_V2.1.2_231116.zip)
@@ -63,17 +58,18 @@
    sudo cp <SDK中的>.rules /etc/udev/rules.d/
    sudo udevadm control --reload && sudo udevadm trigger
    ```
-   - 运行时库路径配置（二选一，推荐 ldconfig）：
+   - 运行时库路径配置：**用 `install/` 部署时不需要任何配置**（`bin/` 内 `.so` 通过
+     `$ORIGIN` 自包含）；只有在 `build/` 里直接运行时可执行文件才需要下面二选一：
    ```bash
    # 方式一：ldconfig（推荐，一次性生效；注意 TBB 也必须配置）
-   echo "$(pwd)/3rd_part/openvino_2024.6.0/runtime/lib/aarch64" | sudo tee /etc/ld.so.conf.d/openvino.conf
-   echo "$(pwd)/3rd_part/openvino_2024.6.0/runtime/3rdparty/tbb/lib" | sudo tee -a /etc/ld.so.conf.d/openvino.conf
+   echo "$(pwd)/3rd_part/openvino_2024.6.0/aarch64/runtime/lib/aarch64" | sudo tee /etc/ld.so.conf.d/openvino.conf
+   echo "$(pwd)/3rd_part/openvino_2024.6.0/aarch64/runtime/3rdparty/tbb/lib" | sudo tee -a /etc/ld.so.conf.d/openvino.conf
    echo "$(pwd)/io/hikrobot/lib/arm64" | sudo tee /etc/ld.so.conf.d/mvs.conf
    echo "$(pwd)/io/mindvision/lib/arm64" | sudo tee /etc/ld.so.conf.d/mvsdk.conf
    sudo ldconfig
 
-   # 方式二：LD_LIBRARY_PATH（临时生效）
-   export LD_LIBRARY_PATH="$(pwd)/3rd_part/openvino_2024.6.0/runtime/lib/aarch64:$(pwd)/3rd_part/openvino_2024.6.0/runtime/3rdparty/tbb/lib:$(pwd)/io/hikrobot/lib/arm64:$(pwd)/io/mindvision/lib/arm64:$LD_LIBRARY_PATH"
+   # 方式二：LD_LIBRARY_PATH（临时生效；x86 把 aarch64 换成 x86_64、arm64 换成 amd64）
+   export LD_LIBRARY_PATH="$(pwd)/3rd_part/openvino_2024.6.0/aarch64/runtime/lib/aarch64:$(pwd)/3rd_part/openvino_2024.6.0/aarch64/runtime/3rdparty/tbb/lib:$(pwd)/io/hikrobot/lib/arm64:$(pwd)/io/mindvision/lib/arm64:$LD_LIBRARY_PATH"
    ```
 
    **1.4 注意事项：**
@@ -88,8 +84,8 @@
 
    ```bash
    sudo apt install -y libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev \
-       libyaml-cpp-dev libusb-1.0-0-dev nlohmann-json3-dev libopenvino-dev
-   cmake -B build            # platform.cmake 自动识别 x86_64：系统 OpenVINO + lib/amd64
+       libyaml-cpp-dev libusb-1.0-0-dev nlohmann-json3-dev
+   cmake -B build            # platform.cmake 自动识别 x86_64：内置 x86_64 OpenVINO + lib/amd64
    cmake --build build -j$(nproc)
    ```
 

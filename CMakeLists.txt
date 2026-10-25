@@ -15,6 +15,11 @@ endif()
 set(CMAKE_INSTALL_RPATH "$ORIGIN")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 
+# 用 DT_RPATH 而不是默认的 DT_RUNPATH：RUNPATH 只对直接依赖生效且不传递，
+# 于是程序能找到同目录的 libopenvino.so，但 libopenvino.so 自己找不到同目录的
+# libtbb.so，干净机器上启动即失败。DT_RPATH 是全局搜索列表，可让 bin/ 真正自包含。
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--disable-new-dtags")
+
 set(CMAKE_CXX_STANDARD 17)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
