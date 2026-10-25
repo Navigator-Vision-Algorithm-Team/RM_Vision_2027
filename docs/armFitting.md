@@ -174,6 +174,12 @@ ARM 上若使用 Ubuntu 22.04 arm64，可直接安装官方 ROS2 Humble arm64 �
 
 ### 5.1 【已完成】OpenVINO 内置 `3rd_part/` + 修改 4 处 CMakeLists 路径
 
+> **后续变更（x86 / arm 分支合并后）**：本节描述的"4 处 CMakeLists 各写一份架构判断"
+> 已被收敛为**唯一**的 `cmake/platform.cmake`。根 CMakeLists 只 `include(platform)`，
+> 各子目录直接使用 `SP_HIKROBOT_LIB_DIR` / `SP_MINDVISION_LIB_DIR` / `SP_OPENVINO_*`
+> 等变量，不再出现 `CMAKE_SYSTEM_PROCESSOR` 判断；x86 与 aarch64 共用同一份源码。
+> 本节其余内容保留为当时的适配记录。
+
 **步骤 1：放置 OpenVINO aarch64 版（已完成）**
 
 目标设备为 Ubuntu 26.04 arm64，但官方 2024.6.0 的 arm64 构建只有 **Ubuntu 20.04** 一版

@@ -4,11 +4,18 @@
 
 ### 3.2 编译方式
 
-> **ARM（aarch64）适配说明**：本项目仓库已内置海康 / 迈德威视相机 SDK 的 arm64 版本动态库
-> （`io/hikrobot/lib/arm64/libMvCameraControl.so`、`io/mindvision/lib/arm64/libMVSDK.so`），
-> CMake 会按架构自动选择。OpenVINO 采用**内置方式**：下载对应架构（ARM 选 aarch64 版）的
-> OpenVINO 2024.6.0 放入项目 `3rd_part/` 目录，无需系统安装。以下安装标准为
-> **Ubuntu 26.04 LTS arm64（全新系统）**，详细的适配分析见 [armFitting.md](armFitting.md)。
+> **单一分支说明**：x86_64 与 aarch64 共用 `develop` 分支，源码完全一致，**架构差异只存在于
+> 构建系统**（`cmake/platform.cmake`）。该文件是项目中唯一允许出现架构判断的地方，它根据
+> `CMAKE_SYSTEM_PROCESSOR` 自动选择：相机 SDK 目录（`io/*/lib/amd64` 或 `io/*/lib/arm64`）、
+> OpenVINO 来源（系统 / `/opt/intel` / 内置 `3rd_part`）、安装包里打包的 `.so`。
+> 业务代码、配置文件、脚本都不需要按架构分叉。新增平台差异时只改这一个文件。
+>
+> **ARM（aarch64）适配说明**：仓库同时提供海康 / 迈德威视相机 SDK 的 amd64 与 arm64 动态库
+> （`io/hikrobot/lib/{amd64,arm64}/libMvCameraControl.so`、`io/mindvision/lib/{amd64,arm64}/libMVSDK.so`）。
+> OpenVINO 在 ARM 上采用**内置方式**：下载 aarch64 版 OpenVINO 2024.6.0 放入项目 `3rd_part/`
+> 目录即可，无需系统安装；x86 上则使用系统安装（apt 的 `libopenvino-dev` 或 `/opt/intel`）。
+> 以下安装步骤以 **Ubuntu 26.04 LTS arm64（全新系统）** 为例，详细的适配分析见
+> [armFitting.md](docs/armFitting.md)；x86 开发机见 2.0 / 2.2。
 
 1. 安装依赖项：
 
@@ -27,7 +34,6 @@
        libyaml-cpp-dev \
        libusb-1.0-0-dev \
        nlohmann-json3-dev \
-       libceres-dev \
        openssh-server \
        screen
    ```
@@ -45,9 +51,9 @@
    rm -rf openvino_2024.6.0/docs openvino_2024.6.0/install_dependencies \
          openvino_2024.6.0/python openvino_2024.6.0/samples openvino_2024.6.0/setupvars.sh
    cd ..
-   # CMakeLists 已配置架构感知路径：aarch64 自动指向 3rd_part/openvino_2024.6.0，
-   # x86 走系统安装（/opt/intel 或 apt 的 libopenvino-dev），详见 armFitting.md §5.1
-   # 3rd_part/ 已在 .gitignore 中，不会进 git
+   # cmake/platform.cmake 会按目标架构自动选择：aarch64 指向 3rd_part/openvino_2024.6.0，
+   # x86 走系统安装（/opt/intel 或 apt 的 libopenvino-dev），详见 docs/armFitting.md §5.1
+   # 内置包自带 lib/ 子目录名（aarch64 / intel64），架构不匹配时不会误用
    ```
 
    **1.3 相机 SDK（arm64 动态库已随仓库提供，无需额外安装 SDK 本体）：**
@@ -71,19 +77,31 @@
    ```
 
    **1.4 注意事项：**
-   - ARM 平台上 OpenVINO **仅支持 CPU 推理设备**，使用配置文件中 `device: CPU`（不要使用 `GPU`）。
+   - 推理设备统一写 `device: auto`：有可用 GPU 时自动用 GPU，否则回退 CPU。ARM 板没有 GPU
+      插件，会打印一行 `GPU 不可用，改用 CPU 推理` 后继续，属正常现象；也可显式写 `CPU` / `GPU`。
    - ROS2（可选）：仅哨兵多线程目标需要，ARM 上可安装 ROS2 Humble arm64 官方包；不装则 CMake 自动跳过 ROS 相关目标。
-   - [Ceres](http://ceres-solver.org/installation.html)：代码中实际未使用，安装 `libceres-dev` 仅为满足 CMake 查找。
+   - Ceres 已从构建中移除（代码从未使用），无需再安装 `libceres-dev`。
 
-2. 编译：
+   2. 编译：
 
-   **2.1 ARM 本机编译（默认方式）：**
+   **2.0 x86_64 本机编译（开发机默认）：**
+
+   ```bash
+   sudo apt install -y libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev \
+       libyaml-cpp-dev libusb-1.0-0-dev nlohmann-json3-dev libopenvino-dev
+   cmake -B build            # platform.cmake 自动识别 x86_64：系统 OpenVINO + lib/amd64
+   cmake --build build -j$(nproc)
+   ```
+
+   **2.1 ARM 本机编译（aarch64 上直接编译）：**
 
    ```bash
    cmake -B build
-   # 普通编译
-   make -C build/ -j`nproc`
+   cmake --build build -j$(nproc)
    ```
+
+   > 三条命令唯一的区别就是 `-DCMAKE_TOOLCHAIN_FILE`，其余完全一致；架构选择由
+   > `cmake/platform.cmake` 依据 `CMAKE_SYSTEM_PROCESSOR` 自动完成。
 
    **2.2 x86 开发机交叉编译到 ARM（工具链文件 `cmake/aarch64-linux-gnu.cmake`）：**
 
@@ -91,8 +109,8 @@
    # 安装交叉编译器（一次性）
    sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-   # 配置（指定工具链文件即可，CMakeLists 会自动切换到 ARM 分支：
-   # OpenVINO 指向 3rd_part/，相机 SDK 选择 io/*/lib/arm64）
+   # 配置（指定工具链文件即可：platform.cmake 会把 CMAKE_SYSTEM_PROCESSOR 识别为 aarch64，
+   # 自动指向 3rd_part/ 的 OpenVINO 与 io/*/lib/arm64 的相机 SDK）
    cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.cmake
    cmake --build build -j$(nproc)
    ```
