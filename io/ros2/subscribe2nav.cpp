@@ -1,19 +1,22 @@
 #include "subscribe2nav.hpp"
 
+#include <chrono>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 namespace io
 {
 
-Subscribe2Nav::Subscribe2Nav()
+Subscribe2Nav::Subscribe2Nav(std::function<void(const NavCommand &)> nav_sender)
 : Node("nav_subscriber"),
   // enemy_statue_queue_(1),
   // autoaim_target_queue_(1),
   // enemy_status_counter_(0),
   // autoaim_target_counter_(0),
   move_info_queue_(1),
-  move_info_counter_(0)
+  move_info_counter_(0),
+  nav_sender_(std::move(nav_sender))
 {
   // enemy_status_subscription_ = this->create_subscription<sp_msgs::msg::EnemyStatusMsg>(
   //   "enemy_status", 10,
@@ -30,10 +33,19 @@ Subscribe2Nav::Subscribe2Nav()
   );
 
   RCLCPP_INFO(this->get_logger(), "nav_subscriber node initialized.");
+
+  // 启动独立线程：收到导航数据后立即发送，不依赖主循环节奏，
+  // 避免主链路（视觉处理）的耗时限慢导航指令下发。
+  if (nav_sender_) {
+    nav_forward_thread_ = std::thread(&Subscribe2Nav::nav_forward_loop, this);
+  }
 }
 
 Subscribe2Nav::~Subscribe2Nav()
 {
+  nav_quit_.store(true);
+  if (nav_forward_thread_.joinable()) nav_forward_thread_.join();
+
   RCLCPP_INFO(this->get_logger(), "nav_subscriber node shutting down.");
 }
 
@@ -132,6 +144,33 @@ void Subscribe2Nav::start()
 //   return msg.target_ids;
 // }
 
+NavCommand Subscribe2Nav::twist_to_nav_command(const geometry_msgs::msg::Twist & msg)
+{
+  NavCommand nav_command;
+
+  nav_command.vx = msg.linear.x;
+  nav_command.vy = msg.linear.y;
+  nav_command.wz = msg.angular.z;  // 与 Python serial_node / 导航规范一致：旋转角速度在 angular.z
+
+  return nav_command;
+}
+
+void Subscribe2Nav::nav_forward_loop()
+{
+  RCLCPP_INFO(this->get_logger(), "nav forward thread started (send on receive).");
+
+  while (!nav_quit_.load()) {
+    geometry_msgs::msg::Twist msg;
+
+    // 阻塞等待导航数据；超时后继续循环以检查退出标志
+    if (!move_info_queue_.try_pop_for(msg, std::chrono::milliseconds(100))) continue;
+
+    if (nav_sender_) nav_sender_(twist_to_nav_command(msg));
+  }
+
+  RCLCPP_INFO(this->get_logger(), "nav forward thread stopped.");
+}
+
 NavCommand Subscribe2Nav::subscribe_move_info(){
   if (move_info_queue_.empty()) {
     return NavCommand();
@@ -142,13 +181,7 @@ NavCommand Subscribe2Nav::subscribe_move_info(){
   RCLCPP_INFO(
     this->get_logger(), "Subscribe move");
 
-  NavCommand nav_command;
-
-  nav_command.vx = msg.linear.x;
-  nav_command.vy = msg.linear.y;
-  nav_command.wz = msg.angular.z;  // 与 Python serial_node / 导航规范一致：旋转角速度在 angular.z
-
-  return nav_command;
+  return twist_to_nav_command(msg);
 }
 
 }  // namespace io

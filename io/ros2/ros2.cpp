@@ -1,13 +1,13 @@
 #include "ros2.hpp"
 namespace io
 {
-ROS2::ROS2()
+ROS2::ROS2(std::function<void(const NavCommand &)> nav_sender)
 {
   rclcpp::init(0, nullptr);
 
   publish2nav_ = std::make_shared<Publish2Nav>();
 
-  subscribe2nav_ = std::make_shared<Subscribe2Nav>();
+  subscribe2nav_ = std::make_shared<Subscribe2Nav>(std::move(nav_sender));
 
   publish_spin_thread_ = std::make_unique<std::thread>([this]() { publish2nav_->start(); });
 
