@@ -44,38 +44,25 @@ include_directories(${PROJECT_SOURCE_DIR})
 add_subdirectory(tools)
 add_subdirectory(io)
 add_subdirectory(tasks/auto_aim)
+# 打符模块：原先只被 auto_buff_debug* 与 uav 使用，这些入口已删除，目前无目标链接它。
+# 保留在构建中以便代码继续参与编译检查；若确定长期不用，可删掉本行。
 add_subdirectory(tasks/auto_buff)
 add_subdirectory(tasks/omniperception)
 
 ####################src###################
-add_executable(standard src/standard.cpp)
+# 多线程自瞄主程序（配置示例 configs/mtstandard.yaml）
 add_executable(mt_standard src/mt_standard.cpp)
-add_executable(standard_mpc src/standard_mpc.cpp)
-add_executable(auto_aim_debug_mpc src/auto_aim_debug_mpc.cpp)
-add_executable(mt_auto_aim_debug src/mt_auto_aim_debug.cpp)
-add_executable(auto_buff_debug src/auto_buff_debug.cpp)
-add_executable(auto_buff_debug_mpc src/auto_buff_debug_mpc.cpp)
 # 步兵主程序：YOLO 检测 + PnP 位姿定位，默认配置 configs/soldier.yaml
 add_executable(soldier src/soldier.cpp)
 # 虚拟数据源运行器（无硬件可跑通 real / fake / replay）
 add_executable(virtual_run src/virtual_run.cpp)
+# uav 目标暂未启用：依赖 tasks/auto_buff，启用时一并打开下面的链接行
 # add_executable(uav src/uav.cpp)
-# add_executable(uav_debug src/uav_debug.cpp)
 
-# 自瞄/哨兵类：算法 + 串口 + CAN
-foreach(ex standard mt_standard standard_mpc auto_aim_debug_mpc mt_auto_aim_debug)
-    target_link_libraries(${ex} ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io io_can)
-endforeach()
-
-# 打符类：视觉 + 串口/CAN（auto_buff_debug 需要 io::CBoard 读取 IMU）
-foreach(ex auto_buff_debug auto_buff_debug_mpc)
-    target_link_libraries(${ex} ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io io_can)
-endforeach()
-
+target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 target_link_libraries(soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 # target_link_libraries(uav ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
-# target_link_libraries(uav_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 
 ##################calibration################
 add_executable(capture calibration/capture.cpp)
@@ -100,10 +87,8 @@ find_package(rosidl_typesupport_cpp QUIET)
 if(ament_cmake_FOUND AND rclcpp_FOUND AND std_msgs_FOUND AND rosidl_typesupport_cpp_FOUND)
     # 编译 sentry
     add_executable(sentry_multithread src/sentry_multithread.cpp)
-    add_executable(sentry_multithread_debug src/sentry_multithread_debug.cpp)
 
     target_link_libraries(sentry_multithread ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can)
-    target_link_libraries(sentry_multithread_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can)
 else()
     message(STATUS "ROS2 environment not found, skipping ROS2-related code.")
 endif()
@@ -118,16 +103,12 @@ endif()
 # 注意：OpenCV / fmt / Eigen / spdlog / yaml-cpp / nlohmann 等为系统库（apt 安装），
 #       不打包，目标机需先装好这些 apt 依赖。
 
-# 1) 可执行文件（按目标是否生成决定是否安装；ROS2 相关目标仅在其被编译时安装）
-set(ALL_EXES standard mt_standard standard_mpc auto_aim_debug_mpc mt_auto_aim_debug
-             auto_buff_debug auto_buff_debug_mpc virtual_run soldier
-             capture calibrate_camera calibrate_handeye calibrate_robotworld_handeye split_video)
+# 1) 可执行文件（if(TARGET) 保证只在对应目标被生成时安装；sentry 仅在找到 ROS2 时存在）
+set(ALL_EXES
+    mt_standard soldier virtual_run
+    capture calibrate_camera calibrate_handeye calibrate_robotworld_handeye split_video
+    sentry_multithread)
 foreach(ex ${ALL_EXES})
-    if(TARGET ${ex})
-        install(TARGETS ${ex} RUNTIME DESTINATION bin)
-    endif()
-endforeach()
-foreach(ex sentry_multithread sentry_multithread_debug)
     if(TARGET ${ex})
         install(TARGETS ${ex} RUNTIME DESTINATION bin)
     endif()
@@ -139,9 +120,14 @@ install(FILES "${SP_MINDVISION_LIB_DIR}/libMVSDK.so" DESTINATION bin)
 
 # 3) OpenVINO 运行库 + TBB（仅当链接的是项目内置 3rd_part 版本时打包，使 install/ 自包含）
 if(SP_OPENVINO_BUNDLED)
-    install(DIRECTORY "${SP_OPENVINO_LIB_DIR}/" DESTINATION bin FILES_MATCHING PATTERN "*.so*")
+    # 这两个目录里有 pkgconfig/、cmake/ 等子目录；FILES_MATCHING 只过滤文件、
+    # 空目录仍会被创建，故一并 EXCLUDE，保证 bin/ 里只有可执行文件与 .so
+    install(DIRECTORY "${SP_OPENVINO_LIB_DIR}/" DESTINATION bin
+            FILES_MATCHING PATTERN "*.so*"
+            PATTERN "pkgconfig" EXCLUDE PATTERN "cmake" EXCLUDE)
     install(DIRECTORY "${SP_OPENVINO_RUNTIME}/3rdparty/tbb/lib/" DESTINATION bin
-            FILES_MATCHING PATTERN "*.so*")
+            FILES_MATCHING PATTERN "*.so*"
+            PATTERN "pkgconfig" EXCLUDE PATTERN "cmake" EXCLUDE)
 endif()
 
 # 4) 配置、模型与启动脚本

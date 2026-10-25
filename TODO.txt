@@ -1,7 +1,0 @@
-1. 重装步兵识别链路优化。描述：一开始设定的是步兵，步兵是标记是1,但是后来改称了重装步兵，重装是2,所以我们的检测链路要优化。提醒：该yolo确实可以识别2号装甲板，但是因为7V7中2号是工程，所以注意校验工程装甲板和以后重装的装甲板是否一致
-
-3. 主线路中有导航发布有隐患，这是一个小作业。
-4. 待与电控时间戳对齐
-5. 全向相机标定值填写（内参/畸变/外参）。描述：全向相机的 PnP 移植代码已完成（tasks/omniperception/omni_pnp.*、tasks/omniperception/decider.cpp::delta_angle），目前缺标定数据，走的是 FOV/安装角近似占位方案。需要为 4 台全向相机标定并填入 configs/sentry_example.yaml 的 omni_camera_matrix_N / omni_distort_coeffs_N / omni_R_camera2gimbal_N / omni_t_camera2gimbal_N。提醒：外参要标成「相机 -> 大yaw(IMU参考系)」，可直接复用 calibration/calibrate_robotworld_handeye.cpp；全向相机与 IMU 同在大yaw上，标定时不需要考虑小yaw转角。
-6. 接入 MCU 的小yaw相对角 psi。描述：哨兵为大小yaw结构，四个全向相机与 IMU 在大yaw上、主相机在小yaw上，而主相机手眼标定参考的是大yaw，所以主相机解算需要 psi 修正。接口已就绪 auto_aim::Solver::set_small_yaw_offset(psi_now - psi_calib)，接入点已留在 src/sentry_multithread.cpp 与 src/sentry_multithread_debug.cpp，等电控新增该帧/字段后一行接入。提醒：全向相机在大yaw上，不需要该修正；若标定主相机时小yaw处于零位，psi_calib 取 0。
-7. 疑问：Armor::priority 没有默认初值，而 set_priority() 只被哨兵路径调用

@@ -1,9 +1,9 @@
 # Sentry 视觉节点通信协议
 
-> 适用入口：`src/sentry_multithread_debug.cpp`
+> 适用入口：`src/sentry_multithread.cpp`
 > 数据来源：下位机（MCU / 串口）+ 导航模块（ROS2）
 
-本文件描述 `sentry_multithread_debug` 入口从下位机**接收**的数据，以及为完成闭环**发送**给下位机的数据。
+本文件描述 `sentry_multithread` 入口从下位机**接收**的数据，以及为完成闭环**发送**给下位机的数据。
 
 ---
 

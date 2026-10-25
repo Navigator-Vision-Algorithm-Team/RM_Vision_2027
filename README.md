@@ -13,8 +13,7 @@
 > **两套内置二进制**：海康 / 迈德威视相机 SDK 提供 amd64 与 arm64 版
 > （`io/hikrobot/lib/{amd64,arm64}/libMvCameraControl.so`、`io/mindvision/lib/{amd64,arm64}/libMVSDK.so`），
 > OpenVINO 2024.6.0 也提供 aarch64 与 x86_64 两套运行库，均随仓库分发，**两个平台都无需系统安装**。
-> 以下安装步骤以 **Ubuntu 26.04 LTS arm64（全新系统）** 为例，详细的适配分析见
-> [armFitting.md](docs/armFitting.md)；x86 开发机见 2.0 / 2.2。
+> 以下安装步骤以 **Ubuntu 26.04 LTS arm64（全新系统）** 为例；x86 开发机见 2.0 / 2.2。
 
 1. 安装依赖项：
 
