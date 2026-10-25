@@ -45,11 +45,16 @@ int main(int argc, char * argv[])
 
   auto yaml = tools::load(config_path);
 
-  io::ROS2 ros2;
   tools::logger()->info("[Main] Initializing SerialBoard...");
   // 串口初始化
   io::SerialBoard serial_board(config_path);
   tools::logger()->info("[Main] SerialBoard ready.");
+
+  // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
+  // 与主循环（视觉处理）解耦，避免被主链路延迟。
+  io::ROS2 ros2([&serial_board](const io::NavCommand & nav_command) {
+    serial_board.send(nav_command);
+  });
 
   tools::logger()->info("[Main] Opening camera...");
   // 相机初始化
@@ -281,10 +286,6 @@ int main(int argc, char * argv[])
   //     tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
   // command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);
       serial_board.send(command);
-
-      io::NavCommand nav_command = ros2.subscribe_get_data();
-
-      serial_board.send(nav_command);
 
       // //test//
 

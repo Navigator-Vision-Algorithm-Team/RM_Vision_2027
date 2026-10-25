@@ -49,10 +49,15 @@ int main(int argc, char * argv[])
 
   auto yaml = tools::load(config_path);
 
-  io::ROS2 ros2;
   tools::logger()->info("[Main] Initializing SerialBoard...");
   io::SerialBoard serial_board(config_path);
   tools::logger()->info("[Main] SerialBoard ready.");
+
+  // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
+  // 与主循环（视觉处理）解耦，避免被主链路延迟。
+  io::ROS2 ros2([&serial_board](const io::NavCommand & nav_command) {
+    serial_board.send(nav_command);
+  });
 
   tools::logger()->info("[Main] Opening camera...");
   io::Camera camera(config_path, "main");
@@ -263,10 +268,6 @@ int main(int argc, char * argv[])
 
       main_recorder.record(img, q, timestamp);
       serial_board.send(command);
-
-      io::NavCommand nav_command = ros2.subscribe_get_data();
-
-      serial_board.send(nav_command);
 
       // /// ROS2通信
       // Eigen::Vector4d target_info = decider.get_target_info(armors, targets);
