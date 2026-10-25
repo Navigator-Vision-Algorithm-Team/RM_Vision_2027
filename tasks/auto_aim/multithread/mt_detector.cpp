@@ -2,6 +2,8 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include "tasks/auto_aim/ov_device.hpp"
+
 namespace auto_aim
 {
 namespace multithread
@@ -13,7 +15,7 @@ MultiThreadDetector::MultiThreadDetector(const std::string & config_path, bool d
   auto yaml = YAML::LoadFile(config_path);
   auto yolo_name = yaml["yolo_name"].as<std::string>();
   auto model_path = yaml[yolo_name + "_model_path"].as<std::string>();
-  device_ = yaml["device"].as<std::string>();
+  device_ = device_from_config(yaml["device"] ? yaml["device"].as<std::string>() : "auto");
 
   auto model = core_.read_model(model_path);
   ov::preprocess::PrePostProcessor ppp(model);
@@ -34,8 +36,8 @@ MultiThreadDetector::MultiThreadDetector(const std::string & config_path, bool d
     .scale(255.0);
 
   model = ppp.build();
-  compiled_model_ = core_.compile_model(
-    model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::THROUGHPUT));
+  compiled_model_ =
+    compile_ov_model(core_, model, device_, ov::hint::PerformanceMode::THROUGHPUT);
 
   tools::logger()->info("[MultiThreadDetector] initialized !");
 }

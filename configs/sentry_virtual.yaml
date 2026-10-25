@@ -136,7 +136,7 @@ omni_fov_v_4: 27.60                  # 相机垂直 FOV (度)
 
 # ----- 神经网络 (YOLO) -----
 yolo_name: "yolov5"                 # 模型名: "yolov5" | "yolov8" | "yolo11"
-device: "CPU"                       # 推理设备: "CPU" | "GPU"
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
 yolov5_model_path: "assets/yolov5.xml"
 yolov8_model_path: "assets/yolov8.xml"
 yolo11_model_path: "assets/yolo11.xml"

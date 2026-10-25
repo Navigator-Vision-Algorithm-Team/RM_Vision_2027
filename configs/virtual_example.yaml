@@ -75,6 +75,6 @@ record:
 # （使用 mt_standard 时需补全 yolo / 标定 / tracker / aimer 等参数，见 configs/mtstandard.yaml）
 enemy_color: "red"
 yolo_name: "yolov5"
-device: "CPU"
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
 yolov5_model_path: "assets/yolov5.xml"
 min_confidence: 0.8

@@ -56,6 +56,6 @@ record:
 # ------------------------------ 业务参数占位 ------------------------------
 enemy_color: "red"
 yolo_name: "yolov5"
-device: "CPU"
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
 yolov5_model_path: "assets/yolov5.xml"
 min_confidence: 0.8

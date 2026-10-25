@@ -6,6 +6,7 @@
 
 #include "io/camera.hpp"
 #include "io/can/cboard.hpp"
+#include "io/serial/serial_board.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/yolo.hpp"
