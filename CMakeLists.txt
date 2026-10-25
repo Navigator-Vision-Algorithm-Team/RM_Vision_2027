@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.16.3)
 
 project(sp_vision)
 
+# ---------- 平台抽象（架构差异唯一来源） ----------
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(platform)
+
 # ---------- 安装目录与 RPATH ----------
 # 默认安装到项目根目录下的 install/（可用 -DCMAKE_INSTALL_PREFIX=... 覆盖）
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
@@ -23,20 +27,8 @@ find_package(Eigen3 REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
-# find_package(fastcdr REQUIRED)
-# find_package(fastrtps REQUIRED)
-# OpenVINO 路径解析（详见 armFitting.md §5.1）：
-# - ARM(aarch64)：使用项目内置 3rd_part/openvino_2024.6.0（架构相关二进制，不进 git）
-# - x86 手动解压安装：/opt/intel/openvino_2024.6.0
-# - x86 apt 安装（libopenvino-dev）：不设置 OpenVINO_DIR，由 find_package 在系统路径搜索
-# 任意场景均可通过 -DOpenVINO_DIR=<path> 覆盖
-if(NOT DEFINED OpenVINO_DIR)
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-        set(OpenVINO_DIR "${CMAKE_SOURCE_DIR}/3rd_part/openvino_2024.6.0/runtime/cmake")
-    elseif(EXISTS "/opt/intel/openvino_2024.6.0/runtime/cmake")
-        set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake")
-    endif()
-endif()
+# fastcdr / fastrtps 由 ROS2 环境提供，仅哨兵多线程目标间接需要；本项目源码未直接
+# 包含其头文件，故不在此 find_package，避免未装 ROS2 的开发机配置失败。
 find_package(OpenVINO REQUIRED)
 
 include_directories(${EIGEN3_INCLUDE_DIR})
@@ -65,18 +57,18 @@ add_executable(virtual_run src/virtual_run.cpp)
 # add_executable(uav src/uav.cpp)
 # add_executable(uav_debug src/uav_debug.cpp)
 
-target_link_libraries(standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io io_can)
-target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io io_can)
-target_link_libraries(standard_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io io_can)
-target_link_libraries(auto_aim_debug_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io io_can)
-target_link_libraries(mt_auto_aim_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io io_can)
-target_link_libraries(auto_buff_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io io_can ${CERES_LIBRARIES})
-target_link_libraries(auto_buff_debug_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io ${CERES_LIBRARIES})
+# 自瞄/哨兵类：算法 + 串口 + CAN
+foreach(ex standard mt_standard standard_mpc auto_aim_debug_mpc mt_auto_aim_debug)
+    target_link_libraries(${ex} ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io io_can)
+endforeach()
+
+# 打符类：视觉 + 串口/CAN（auto_buff_debug 需要 io::CBoard 读取 IMU）
+foreach(ex auto_buff_debug auto_buff_debug_mpc)
+    target_link_libraries(${ex} ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io io_can)
+endforeach()
+
 target_link_libraries(soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
-target_link_libraries(auto_buff_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io)
-target_link_libraries(auto_buff_debug_mpc ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io)
 target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
-target_link_libraries(soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 # target_link_libraries(uav ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim auto_buff tools io)
 # target_link_libraries(uav_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 
@@ -120,7 +112,6 @@ endif()
 #   install/autostart.sh
 # 注意：OpenCV / fmt / Eigen / spdlog / yaml-cpp / nlohmann 等为系统库（apt 安装），
 #       不打包，目标机需先装好这些 apt 依赖。
-set(OV_RUNTIME "${CMAKE_SOURCE_DIR}/3rd_part/openvino_2024.6.0/runtime")
 
 # 1) 可执行文件（按目标是否生成决定是否安装；ROS2 相关目标仅在其被编译时安装）
 set(ALL_EXES standard mt_standard standard_mpc auto_aim_debug_mpc mt_auto_aim_debug
@@ -137,21 +128,15 @@ foreach(ex sentry_multithread sentry_multithread_debug)
     endif()
 endforeach()
 
-# 2) 相机 SDK 动态库（按架构选择对应目录，打包进 bin/ 以便 $ORIGIN 找到）
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-    set(HIK_LIB_DIR "${CMAKE_SOURCE_DIR}/io/hikrobot/lib/arm64")
-    set(MVS_LIB_DIR "${CMAKE_SOURCE_DIR}/io/mindvision/lib/arm64")
-else()
-    set(HIK_LIB_DIR "${CMAKE_SOURCE_DIR}/io/hikrobot/lib/amd64")
-    set(MVS_LIB_DIR "${CMAKE_SOURCE_DIR}/io/mindvision/lib/amd64")
-endif()
-install(FILES ${HIK_LIB_DIR}/libMvCameraControl.so DESTINATION bin)
-install(FILES ${MVS_LIB_DIR}/libMVSDK.so DESTINATION bin)
+# 2) 相机 SDK 动态库（目录由 cmake/platform.cmake 按架构给出，打包进 bin/ 以便 $ORIGIN 找到）
+install(FILES "${SP_HIKROBOT_LIB_DIR}/libMvCameraControl.so" DESTINATION bin)
+install(FILES "${SP_MINDVISION_LIB_DIR}/libMVSDK.so" DESTINATION bin)
 
-# 3) OpenVINO 运行库 + TBB（仅当项目内置 3rd_part 版本存在时打包，使 install/ 自包含）
-if(EXISTS "${OV_RUNTIME}/lib/aarch64")
-    install(DIRECTORY "${OV_RUNTIME}/lib/aarch64/" DESTINATION bin FILES_MATCHING PATTERN "*.so*")
-    install(DIRECTORY "${OV_RUNTIME}/3rdparty/tbb/lib/" DESTINATION bin FILES_MATCHING PATTERN "*.so*")
+# 3) OpenVINO 运行库 + TBB（仅当链接的是项目内置 3rd_part 版本时打包，使 install/ 自包含）
+if(SP_OPENVINO_BUNDLED)
+    install(DIRECTORY "${SP_OPENVINO_LIB_DIR}/" DESTINATION bin FILES_MATCHING PATTERN "*.so*")
+    install(DIRECTORY "${SP_OPENVINO_RUNTIME}/3rdparty/tbb/lib/" DESTINATION bin
+            FILES_MATCHING PATTERN "*.so*")
 endif()
 
 # 4) 配置、模型与启动脚本
