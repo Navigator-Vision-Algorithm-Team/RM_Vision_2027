@@ -101,9 +101,10 @@ def build_packet(cmd_id, payload, seq=0):
     return body + struct.pack("<H", crc)
 
 
-def pack_imu(pitch, roll, yaw, roboid=0, idx=0, seq=0):
-    # IMUPacket: float pitch, roll, yaw; uint8 roboid, id, timeseries  (data_length=15)
-    payload = struct.pack("<fffBBB", pitch, roll, yaw, roboid & 0xFF, 0, idx & 0xFF)
+def pack_imu(pitch, roll, upper_yaw, lower_yaw, roboid=0, seq=0):
+    # IMUPacket: float pitch, roll, upper_yaw, lower_yaw; uint8 roboid  (data_length=17)
+    # upper_yaw = 小yaw 的世界系绝对角，lower_yaw = 大yaw 的世界系绝对角（均为弧度 [0, 2π)）
+    payload = struct.pack("<ffffB", pitch, roll, upper_yaw, lower_yaw, roboid & 0xFF)
     return build_packet(0x502, payload, seq)
 
 
@@ -210,18 +211,26 @@ class VirtualMcu:
         a = self.args
         t = time.monotonic() - self.t0
 
-        yaw = math.pi * math.sin(2 * math.pi * 0.1 * t)
+        # 双yaw：大yaw 慢速摆动，小yaw 在大yaw 基础上有自己的小幅快摆
+        lower = math.pi * math.sin(2 * math.pi * 0.1 * t)
+        # 加相位偏移，让 psi 启动时就不为 0，避免"psi 恒 0"掩盖接线错误
+        psi_rel = 0.35 * math.sin(2 * math.pi * 0.45 * t + 0.6)
         pitch = 0.15 * math.sin(2 * math.pi * 0.5 * t)
         roll = 0.05 * math.sin(2 * math.pi * 0.3 * t)
 
         injected = False
         if a.noise_rad > 0:
-            yaw += self.rnd.gauss(0.0, a.noise_rad)
+            lower += self.rnd.gauss(0.0, a.noise_rad)
             pitch += self.rnd.gauss(0.0, a.noise_rad)
         if a.spike_every > 0 and idx > 0 and idx % a.spike_every == 0:
-            yaw += a.spike_rad
+            lower += a.spike_rad
             injected = True
             self.stats["spiked"] += 1
+
+        # 噪声/跳变只加在大yaw 上，小yaw 相对角保持干净：psi 应能被视觉侧精确还原
+        upper = lower + psi_rel
+        lower = lower % (2 * math.pi)
+        upper = upper % (2 * math.pi)
 
         if a.drop_rate > 0 and self.rnd.random() < a.drop_rate:
             self.stats["dropped"] += 1
@@ -231,7 +240,7 @@ class VirtualMcu:
             time.sleep(a.delay_ms / 1000.0)
             self.stats["delayed"] += 1
 
-        pkt = bytearray(pack_imu(pitch, roll, yaw, idx=idx, seq=idx & 0xFF))
+        pkt = bytearray(pack_imu(pitch, roll, upper, lower, seq=idx & 0xFF))
 
         if a.corrupt_crc_rate > 0 and self.rnd.random() < a.corrupt_crc_rate:
             pkt[-1] ^= 0xFF

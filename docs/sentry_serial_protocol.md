@@ -62,31 +62,59 @@ CRC 表与算法见 `io/serial/gimbal/protocol_crc.cpp`。接收端解析流程�
 
 ### 3.1 `0x502` IMU 姿态（IMUPacket）
 
-**最重要的一路数据**，用于 `serial_board.imu_at()` 获取云台世界系姿态。
+**最重要的一路数据**，用于 `serial_board.imu_at()` 获取「大yaw（也就是 gimbal 系）」的世界系姿态。
 
 | 偏移 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- |
-| 0 | `header` | Header | 见 2.1，`data_length = 15` |
-| 7 | `pitch` | float | 俯仰角（rad） |
+| 0 | `header` | Header | 见 2.1，`data_length = 17` |
+| 7 | `pitch` | float | 俯仰角（rad），**低头为正、抬头为负** |
 | 11 | `roll` | float | 横滚角（rad） |
-| 15 | `yaw` | float | 偏航角（rad） |
-| 19 | `roboid` | uint8 | 机器人 ID |
-| 20 | `id` | uint8 | 保留/来源标识 |
-| 21 | `timeseries` | uint8 | 时间序列号 |
-| 22 | `crc16` | uint16 | CRC16 |
+| 15 | `upper_yaw` | float | **小yaw**（顶端轴，主相机所在）的世界系绝对角（rad，`[0, 2π)`） |
+| 19 | `lower_yaw` | float | **大yaw**（中间轴，IMU 与四个全向相机所在）的世界系绝对角（rad，`[0, 2π)`） |
+| 23 | `roboid` | uint8 | 机器人 ID |
+| 24 | `crc16` | uint16 | CRC16 |
 
-总长 **24 字节**。
+总长 **26 字节**（`static_assert` 锁在 `io/serial/gimbal/packet.hpp`）。
+
+**角度约定**（务必与下位机一致）
+
+- 上电瞬间的车头朝向为 **0**，之后所有角度都是相对该方向的绝对角；
+- 范围 `[0, 2π)`，**逆时针（左转）为正**，大yaw / 小yaw 都是如此；
+- `psi = upper_yaw - lower_yaw`（取最短弧，落在 `(-π, π]`）即**小yaw 相对大yaw 的转角**。
+
+**机械结构对应的坐标系**
+
+```
+底盘 ── 大yaw(lower) ── 小yaw(upper)
+         │                  └─ 主相机
+         ├─ IMU
+         └─ 4 个全向相机
+```
+
+- `lower_yaw` + `pitch` + `roll` → **R_gimbal2world**（大yaw → 世界）。全向相机与 IMU 同在大yaw 上，
+  所以全向链路用它就够了，**不需要** psi。
+- 主相机在小yaw 上，而 `R_camera2gimbal` 是参考 IMU（大yaw）标定的，因此必须补 psi，
+  见 `auto_aim::Solver::set_small_yaw_offset()`（哨兵入口每帧调用）。
 
 **视觉侧使用**（`io/serial/serial_board.cpp`）：
 
 ```cpp
+// 大yaw 的世界系姿态（Z-Y-X：yaw-pitch-roll）
 Eigen::Quaterniond q =
-  Eigen::AngleAxisd(yaw,   UnitZ()) *
-  Eigen::AngleAxisd(pitch, UnitY()) *
-  Eigen::AngleAxisd(roll,  UnitX());
+  Eigen::AngleAxisd(lower_yaw, UnitZ()) *
+  Eigen::AngleAxisd(pitch,     UnitY()) *
+  Eigen::AngleAxisd(roll,      UnitX());
+
+// 小yaw 相对大yaw，供主相机解算修正（哨兵）
+const double psi = limit_rad(upper_yaw - lower_yaw);
 ```
 
-即按 **Z-Y-X（yaw-pitch-roll）** 顺序将欧拉角转为四元数。接收线程为每帧记录 `steady_clock` 时间戳，`imu_at(t)` 按时间戳对相邻两帧做 **slerp 球面插值**，与相机曝光时间对齐（入口传入 `timestamp - 1ms`）。
+接收线程为每帧记录 `steady_clock` 时间戳，`imu_at(t)` 按时间戳对相邻两帧做 **slerp 球面插值**，
+`small_yaw_at(t)` 对 psi 在最短弧上做线性插值，两者共用同一对样本，与相机曝光时间对齐
+（入口传入 `timestamp - 1ms`）。
+
+> 单yaw 兵种（步兵等）：只有哨兵是双yaw 平台，其他兵种把唯一的 yaw 填在 `lower_yaw`，
+> `upper_yaw` 视觉侧不使用，`small_yaw_at()` 也就不会被调用。
 
 ### 3.2 `0x503` 底盘速度（classisPacket）
 

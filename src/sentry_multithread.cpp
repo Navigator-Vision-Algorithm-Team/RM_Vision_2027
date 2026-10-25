@@ -124,6 +124,12 @@ int main(int argc, char * argv[])
   omniperception::Decider decider(config_path);
   omniperception::Perceptron perceptron(omni_configs, config_path, yolo);
 
+  // 主相机手眼标定时小yaw 相对大yaw 的转角；标定时小yaw 在零位则填 0。
+  // 配置里与 yaw_offset 一样用「度」，这里转成弧度。只有哨兵是双yaw 平台，
+  // 所以这个修正只在哨兵入口启用（单yaw 兵种 upper_yaw 不使用）。
+  const double small_yaw_calib =
+    (yaml["small_yaw_calib"] ? yaml["small_yaw_calib"].as<double>() : 0.0) / 57.3;
+
   cv::Mat img;
   std::chrono::steady_clock::time_point timestamp;
 
@@ -164,21 +170,31 @@ int main(int argc, char * argv[])
     solver.set_R_gimbal2world(q);
 
     // =====================================================================
-    //  【预留空位，待接入】大小yaw结构下主相机的小yaw修正。
+    //  大小yaw结构下主相机的小yaw 修正。
     //
-    //  结构：大yaw 承载 IMU + 四个全向相机；小yaw 在大yaw之上，承载主相机。
-    //  而 R_camera2gimbal 是参考 IMU(大yaw) 做手眼标定得到的，所以小yaw一旦
-    //  离开标定位置，主相机的解算就会偏一个 psi（小yaw相对大yaw的转角）。
+    //  结构：大yaw 承载 IMU + 四个全向相机；小yaw 在大yaw 之上，承载主相机。
+    //  而 R_camera2gimbal 是参考 IMU(大yaw) 做手眼标定得到的，所以小yaw 一旦
+    //  离开标定位置，主相机的解算就会偏一个 psi（小yaw 相对大yaw 的转角）。
+    //  0x502 现在同时上报 upper_yaw / lower_yaw，psi = upper - lower 直接可得。
     //
-    //  下位机承诺会新增一帧/字段给出 psi，拿到后在此处接入：
-    //      solver.set_small_yaw_offset(psi_now - PSI_CALIB_DURING_HANDEYE);
-    //  其中 offset 默认 0（不修正），行为与改动前完全一致；
-    //  若标定主相机时小yaw处于零位，则 PSI_CALIB 取 0。
+    //  psi_calib：做手眼标定时小yaw 相对大yaw 的转角，标定时小yaw 在零位则为 0
+    //  （配置键 small_yaw_calib，单位弧度）。
     //
-    //  注意：四个全向相机与 IMU 同在大yaw上，**不需要**这个修正，
-    //        全向链路直接沿用 gimbal_pos(=大yaw的世界系 yaw) 即可。
+    //  注意：四个全向相机与 IMU 同在大yaw 上，**不需要**这个修正，
+    //        全向链路直接沿用 gimbal_pos(=大yaw 的世界系 yaw) 即可。
     // =====================================================================
-    // solver.set_small_yaw_offset(psi_now - psi_calib);
+    {
+      const double psi_now = serial_board.small_yaw_at(timestamp - 1ms);
+      solver.set_small_yaw_offset(tools::limit_rad(psi_now - small_yaw_calib));
+
+      static bool psi_logged = false;
+      if (!psi_logged) {
+        psi_logged = true;
+        tools::logger()->info(
+          "[Main] small yaw (psi) correction ON: psi_calib={:.3f} rad, first psi={:.3f} rad",
+          small_yaw_calib, psi_now);
+      }
+    }
 
     Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 

@@ -119,23 +119,38 @@ void VirtualMcu::emit_imu(const Sink & sink)
 {
   const long long idx = imu_index_++;
 
-  // 匀速/正弦旋转曲线，接近真实云台运动
-  double yaw = M_PI * std::sin(2.0 * M_PI * 0.1 * t_now_);
+  // 双yaw：大yaw 慢速摆动，小yaw 在大yaw 基础上有自己的小幅快摆。
+  // 对外按协议发两个绝对角（[0, 2π)），其差即 psi，便于验证视觉侧的解算。
+  double lower = M_PI * std::sin(2.0 * M_PI * 0.1 * t_now_);
+  // 加一个相位偏移，让 psi 在启动时就不为 0，避免"psi 恒 0"掩盖接线错误
+  const double psi_rel = 0.35 * std::sin(2.0 * M_PI * 0.45 * t_now_ + 0.6);
   double pitch = 0.15 * std::sin(2.0 * M_PI * 0.5 * t_now_);
   double roll = 0.05 * std::sin(2.0 * M_PI * 0.3 * t_now_);
 
   bool injected = false;
 
   if (fault_.imu_noise_rad > 0) {
-    yaw += injector_.gauss() * fault_.imu_noise_rad;
+    lower += injector_.gauss() * fault_.imu_noise_rad;
     pitch += injector_.gauss() * fault_.imu_noise_rad;
   }
 
   if (fault_.imu_spike_every > 0 && idx > 0 && idx % fault_.imu_spike_every == 0) {
-    yaw += fault_.imu_spike_rad;
+    lower += fault_.imu_spike_rad;
     injected = true;
     log_fault("spike", "imu jump injected", idx);
   }
+
+  // 噪声/跳变只加在大yaw 上，小yaw 相对角保持干净：psi 应当能被视觉侧精确还原
+  double upper = lower + psi_rel;
+
+  // 归一化到 [0, 2π)，与下位机的上报约定一致
+  auto wrap_2pi = [](double a) {
+    while (a < 0.0) a += 2.0 * M_PI;
+    while (a >= 2.0 * M_PI) a -= 2.0 * M_PI;
+    return a;
+  };
+  lower = wrap_2pi(lower);
+  upper = wrap_2pi(upper);
 
   if (injector_.chance(fault_.imu_drop_rate)) {
     dropped_++;
@@ -159,10 +174,9 @@ void VirtualMcu::emit_imu(const Sink & sink)
 
   pkt.pitch = static_cast<float>(pitch);
   pkt.roll = static_cast<float>(roll);
-  pkt.yaw = static_cast<float>(yaw);
+  pkt.upper_yaw = static_cast<float>(upper);
+  pkt.lower_yaw = static_cast<float>(lower);
   pkt.roboid = robot_id_;
-  pkt.id = 0;
-  pkt.timeseries = static_cast<uint8_t>(idx & 0xFF);
   crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
 
   if (injector_.chance(fault_.imu_corrupt_crc_rate)) {

@@ -171,6 +171,9 @@ outpost_max_temp_lost_count: 75     # 前哨站目标最大临时丢失帧数
 # ----- 瞄准器 (Aimer) -----
 yaw_offset: -0.8                    # yaw 整体偏移 (度)
 pitch_offset: -1.0                  # pitch 整体偏移 (度)
+# 小yaw（主相机所在轴）相对大yaw 的转角，单位：度。
+# 做手眼标定主相机时小yaw 的读数；标定时小yaw 在零位就填 0。仅哨兵（双yaw）生效。
+small_yaw_calib: 0.0
 comming_angle: 60                   # 陀螺旋转 coming angle 阈值 (度)
 leaving_angle: 20                   # 陀螺旋转 leaving angle 阈值 (度)
 left_yaw_offset: -1.0               # 左侧射击 yaw 偏置 (度, 哨兵双枪管用)

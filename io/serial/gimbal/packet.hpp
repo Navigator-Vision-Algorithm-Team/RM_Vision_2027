@@ -17,17 +17,31 @@ struct Header
 } __attribute__((packed));
 
 // cmd_id 0x502 — IMU data from gimbal
+//
+// 双yaw 结构（哨兵）：底盘 → 大yaw(lower) → 小yaw(upper)。
+//   · IMU 与四个全向相机刚性安装在大yaw 上 → lower_yaw 就是「大yaw(即 gimbal 系)的世界系偏航角」，
+//     用它构造的四元数就是 R_gimbal2world。
+//   · 主相机安装在小yaw 上 → upper_yaw 是小yaw 的世界系绝对角，
+//     psi = upper_yaw - lower_yaw 即小yaw 相对大yaw 的转角（主相机解算修正用）。
+//   · 两者都是相对「上电时车头朝向」的绝对角，范围 [0, 2π)，逆时针（左转）为正。
+//   · 只有哨兵是双yaw 平台；其他兵种把唯一的 yaw 填在 lower_yaw（upper_yaw 不使用）。
+//
+// 单位：弧度。pitch 低头为正、抬头为负，roll 绕 x 轴。
+// 长度：header(7) + 4×float(16) + roboid(1) + crc16(2) = 26 字节，
+//       Header.data_length 应为 17（= 26 - 7 - 2，与 SendPacket 的算法一致）。
 struct IMUPacket
 {
   Header header;
   float pitch;
   float roll;
-  float yaw;
+  float upper_yaw;
+  float lower_yaw;
   uint8_t roboid;
-  uint8_t id;
-  uint8_t timeseries;
   uint16_t crc16 = 0;
 } __attribute__((packed));
+
+// 下位机按固定长度组帧，结构体一旦被改动必须同步固件，这里锁住长度防止误改
+static_assert(sizeof(IMUPacket) == 26, "IMUPacket 必须是 26 字节，改动需同步下位机固件");
 
 // cmd_id 0x503 — chassis velocity
 struct classisPacket

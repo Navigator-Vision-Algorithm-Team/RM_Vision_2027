@@ -122,8 +122,10 @@ void SerialQuaternionSource::parse_loop()
 
     if (header.cmd_id == 0x502 && full.size() >= sizeof(IMUPacket)) {
       IMUPacket pkt = fromVector<IMUPacket>(full);
+      // 与 SerialBoard::imu_at 同一约定：用大yaw(lower_yaw) 构造 R_gimbal2world。
+      // 小yaw 的 psi 只有双yaw 平台的业务入口需要，回放器不关心，故不在这里保留。
       const Eigen::Quaterniond q =
-        Eigen::AngleAxisd(pkt.yaw, Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(pkt.lower_yaw, Eigen::Vector3d::UnitZ()) *
         Eigen::AngleAxisd(pkt.pitch, Eigen::Vector3d::UnitY()) *
         Eigen::AngleAxisd(pkt.roll, Eigen::Vector3d::UnitX());
       push_sample(q);

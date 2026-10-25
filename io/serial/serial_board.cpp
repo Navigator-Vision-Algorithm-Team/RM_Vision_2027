@@ -1,5 +1,6 @@
 #include "serial_board.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 #include "io/serial/gimbal/protocol_crc.hpp"
@@ -52,10 +53,10 @@ SerialBoard::SerialBoard(const std::string & config_path)
     sim::log_tag(source_mode_), transport_->describe(), baud_rate_, use_referee_system_,
     recorder_ ? recorder_->path() : std::string("off"));
 
-  // 初始化 IMU 数据为单位四元数，收到真实数据后会被覆盖
+  // 初始化 IMU 数据为单位四元数、psi 为 0，收到真实数据后会被覆盖
   auto t0 = std::chrono::steady_clock::time_point(std::chrono::seconds(0));
-  data_ahead_ = {Eigen::Quaterniond::Identity(), t0};
-  data_behind_ = {Eigen::Quaterniond::Identity(), t0 + std::chrono::milliseconds(1)};
+  data_ahead_ = IMUData{Eigen::Quaterniond::Identity(), 0.0, t0};
+  data_behind_ = IMUData{Eigen::Quaterniond::Identity(), 0.0, t0 + std::chrono::milliseconds(1)};
 
   receive_thread_ = std::thread(&SerialBoard::receiveThread, this);
   tools::logger()->info("[SerialBoard] Ready (IMU will update when MCU sends 0x502).");
@@ -79,13 +80,7 @@ Eigen::Quaterniond SerialBoard::imu_at(std::chrono::steady_clock::time_point tim
     我们的目的是找到t_c的Q，使用的是slerp方法。球面线形插值，对多维数据特攻
   */
 
-  IMUData new_data;
-  while (queue_.try_pop(new_data)) {
-    if (new_data.timestamp > data_behind_.timestamp) {
-      data_ahead_ = data_behind_;
-      data_behind_ = new_data;
-    }
-  }
+  update_imu_samples();
 
   if (data_behind_.timestamp < timestamp) data_ahead_ = data_behind_;
 
@@ -104,6 +99,37 @@ Eigen::Quaterniond SerialBoard::imu_at(std::chrono::steady_clock::time_point tim
   Eigen::Quaterniond q_c = q_a.slerp(k, q_b).normalized();
 
   return q_c;
+}
+
+void SerialBoard::update_imu_samples()
+{
+  IMUData new_data;
+  while (queue_.try_pop(new_data)) {
+    if (new_data.timestamp > data_behind_.timestamp) {
+      data_ahead_ = data_behind_;
+      data_behind_ = new_data;
+    }
+  }
+}
+
+double SerialBoard::small_yaw_at(std::chrono::steady_clock::time_point timestamp)
+{
+  // 与 imu_at 共用同一对插值样本（psi 与四元数来自同一帧 0x502，无需再排一次队）
+  update_imu_samples();
+
+  if (data_behind_.timestamp < timestamp) data_ahead_ = data_behind_;
+
+  const double psi_a = data_ahead_.psi;
+  const double psi_b = data_behind_.psi;
+
+  const std::chrono::duration<double> t_ab = data_behind_.timestamp - data_ahead_.timestamp;
+  if (t_ab.count() <= 0) return psi_a;  // 尚无两帧可用时退化为最近值
+
+  const std::chrono::duration<double> t_ac = timestamp - data_ahead_.timestamp;
+  const double k = std::clamp(t_ac / t_ab, 0.0, 1.0);
+
+  // 在最短弧上插值，避免 ±π 附近跳变
+  return tools::limit_rad(psi_a + k * tools::limit_rad(psi_b - psi_a));
 }
 
 void SerialBoard::send(Command command) const
@@ -349,23 +375,42 @@ void SerialBoard::receiveThread()
           break;
         }
 
+        // 双yaw：lower = 大yaw（IMU 与四个全向相机所在轴），upper = 小yaw（主相机所在轴）
+        // packed 结构体的字段不能直接绑定到引用，先拷到局部变量（fmt 也受益）
+        const float pitch = imu_packet.pitch;
+        const float roll = imu_packet.roll;
+        const double lower = imu_packet.lower_yaw;
+        const double upper = imu_packet.upper_yaw;
+        // psi 取最短弧，避免 0/2π 边界（如 lower=350°、upper=10°）被算成 -340°
+        const double psi = tools::limit_rad(upper - lower);
+
         if (!first_imu_received) {
           first_imu_received = true;
-          float p = imu_packet.pitch, r = imu_packet.roll, y = imu_packet.yaw;
           tools::logger()->info(
-            "[SerialBoard] First IMU packet received (pitch={:.2f} roll={:.2f} yaw={:.2f}) — unblocking",
-            p, r, y);
+            "[SerialBoard] First IMU packet received (pitch={:.3f} roll={:.3f} "
+            "upper_yaw={:.3f} lower_yaw={:.3f} psi={:.3f} rad) — unblocking",
+            pitch, roll, upper, lower, psi);
+
+          // 防呆：视觉侧一律用 lower_yaw 当云台(大yaw)角。若固件把单yaw 平台的
+          // 唯一 yaw 填进了 upper_yaw，云台会被当成"从不转动"，这里提前报出来。
+          if (std::abs(upper) > 1e-3 && std::abs(lower) < 1e-3) {
+            tools::logger()->warn(
+              "[SerialBoard] upper_yaw 非零而 lower_yaw 为 0：单yaw 兵种若把 yaw 填在 "
+              "upper_yaw，云台姿态会恒为 0，请与固件确认字段归属");
+          }
         }
 
         error_count = 0;
         auto t_now = std::chrono::steady_clock::now();
 
+        // 大yaw 的世界系姿态 Rz(lower)·Ry(pitch)·Rx(roll)
+        //（pitch 低头为正，与绕 +Y 的右手旋转一致；单yaw 兵种 lower_yaw 即其唯一 yaw）
         Eigen::Quaterniond q =
-          Eigen::AngleAxisd(imu_packet.yaw, Eigen::Vector3d::UnitZ()) *
-          Eigen::AngleAxisd(imu_packet.pitch, Eigen::Vector3d::UnitY()) *
-          Eigen::AngleAxisd(imu_packet.roll, Eigen::Vector3d::UnitX());
+          Eigen::AngleAxisd(lower, Eigen::Vector3d::UnitZ()) *
+          Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
+          Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
 
-        queue_.push({q, t_now});
+        queue_.push({q, psi, t_now});
         break;
       }
       case 0x503: {
