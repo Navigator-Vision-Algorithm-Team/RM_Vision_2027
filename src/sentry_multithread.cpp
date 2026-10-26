@@ -183,11 +183,34 @@ int main(int argc, char * argv[])
     // 双yaw 姿态：大yaw 只有 yaw，pitch/roll 属于小yaw（主相机所在板）
     const io::ImuState imu = serial_board.imu_state_at(timestamp - 1ms);
 
-    // 主相机 = 小yaw 板：Rz(upper)·Ry(pitch)·Rx(roll)
-    const Eigen::Quaterniond q_main(
-      Eigen::AngleAxisd(imu.upper_yaw, Eigen::Vector3d::UnitZ()) *
-      Eigen::AngleAxisd(imu.pitch, Eigen::Vector3d::UnitY()) *
-      Eigen::AngleAxisd(imu.roll, Eigen::Vector3d::UnitX()));
+    // 刷新 tf 树的两个动态关节：
+    //   yaw_axis  = Rz(lower_yaw)
+    //   small_yaw = Rz(upper)·Ry(pitch)·Rx(roll)
+    tf_tree.set_imu(imu.pitch, imu.roll, imu.upper_yaw, imu.lower_yaw);
+
+    // 主相机基座（小yaw 板）姿态：从 tf 树取，代码里不再手工复合欧拉角。
+    // tf 里没配 small_yaw 时退回手工复合，保证未标定也能跑。
+    Eigen::Quaterniond q_main;
+    {
+      io::tf::Transform T_plate2world;
+      if (tf_tree.lookup(io::tf::Tree::SMALL_YAW, io::tf::Tree::WORLD, T_plate2world)) {
+        q_main = Eigen::Quaterniond(T_plate2world.R);
+      } else {
+        q_main = Eigen::Quaterniond(
+          Eigen::AngleAxisd(imu.upper_yaw, Eigen::Vector3d::UnitZ()) *
+          Eigen::AngleAxisd(imu.pitch, Eigen::Vector3d::UnitY()) *
+          Eigen::AngleAxisd(imu.roll, Eigen::Vector3d::UnitX()));
+      }
+    }
+
+    // 大yaw（全向相机所在轴）的世界系 yaw：同样从 tf 树取
+    double omni_base_yaw = imu.lower_yaw;
+    {
+      io::tf::Transform T_yaw2world;
+      if (tf_tree.lookup(io::tf::Tree::YAW_AXIS, io::tf::Tree::WORLD, T_yaw2world)) {
+        omni_base_yaw = std::atan2(T_yaw2world.R(1, 0), T_yaw2world.R(0, 0));
+      }
+    }
 
     // 比赛未开始时跳过自瞄逻辑（裁判系统控制）
     if (!serial_board.is_game_started()) {
@@ -207,11 +230,8 @@ int main(int argc, char * argv[])
     }
 
     // 主相机在小yaw 上，Solver 的 "gimbal" 就是小yaw 板
+    //（R_gimbal2imubody 在当前配置里为单位阵，即 tf 的 small_yaw 与 IMU 参考系重合）
     solver.set_R_gimbal2world(q_main);
-
-    // 大yaw（全向相机所在轴）只有 yaw，作为 tf 树的动态关节
-    tf_tree.set_imu(imu.pitch, imu.roll, imu.upper_yaw, imu.lower_yaw);
-    const double omni_base_yaw = imu.lower_yaw;
 
     Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
