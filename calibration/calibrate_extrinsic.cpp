@@ -253,6 +253,15 @@ Eigen::Matrix3d mount_to_R(double yaw_deg, double pitch_deg, double roll_deg)
   return rot_z(yaw_deg * DEG) * rot_y(pitch_deg * DEG) * rot_x(roll_deg * DEG) * R0;
 }
 
+// --camera 的后缀 -> tf 帧名（运行时是按这个名字 lookup 的）
+//   main -> main_cam ；omni3 -> omni_cam_3
+std::string frame_name_of(const std::string & camera)
+{
+  if (camera.rfind("omni", 0) == 0) return "omni_cam_" + camera.substr(4);
+  if (camera == "main") return "main_cam";
+  return camera;
+}
+
 std::string parent_of(const std::string & camera)
 {
   return camera.rfind("omni", 0) == 0 ? "yaw_axis" : "small_yaw";
@@ -353,8 +362,33 @@ bool run_manual(const std::string & camera, std::string xyz, std::string ypr, st
 
   std::cout << "\n[manual] yaw=" << a[0] << "° pitch=" << a[1] << "° roll=" << a[2]
             << "°  xyz=(" << t.x() << ", " << t.y() << ", " << t.z() << ") m\n";
-  emit_tf(camera, parent, R, t, std::filesystem::path(out_dir).append(camera).string());
-  std::cout << "提示：物理量精度有限，建议再用 --mode handeye 标一次覆盖它。\n";
+
+  // 直接输出"人输入的形态"（xyz + mount_deg），并附等价的 R/t 便于核对
+  const std::string R_list = join_list(to_cv_mat(R));
+  const std::string t_list = cv::format("[%.6f, %.6f, %.6f]", t.x(), t.y(), t.z());
+
+  std::cout << "\n--------------------- 粘贴到 configs 的 tf.frames ---------------------\n";
+  std::cout << "    " << frame_name_of(camera) << ":\n"
+            << "      parent: " << parent << "\n"
+            << cv::format("      xyz: [%.6f, %.6f, %.6f]\n", t.x(), t.y(), t.z())
+            << cv::format("      mount_deg: [%.4f, %.4f, %.4f]   # [yaw, pitch, roll]\n", a[0], a[1], a[2])
+            << "      # 等价的矩阵写法（二选一，R/t 优先级更高）\n"
+            << "      # R: " << R_list << "\n"
+            << "      # t: " << t_list << "\n";
+  std::cout << "----------------------------------------------------------------------\n";
+
+  const std::string cam_out = std::filesystem::path(out_dir).append(camera).string();
+  std::filesystem::create_directories(cam_out);
+  std::ofstream ofs(std::filesystem::path(cam_out) / "tf_extrinsic.yaml");
+  ofs << "tf:\n  frames:\n"
+      << "    " << frame_name_of(camera) << ":\n"
+      << "      parent: " << parent << "\n"
+      << cv::format("      xyz: [%.6f, %.6f, %.6f]\n", t.x(), t.y(), t.z())
+      << cv::format("      mount_deg: [%.4f, %.4f, %.4f]\n", a[0], a[1], a[2]);
+  ofs.close();
+  std::cout << "已写入: " << (std::filesystem::path(cam_out) / "tf_extrinsic.yaml").string()
+            << "\n";
+  std::cout << "提示：物理量精度有限，标完建议用 §6 的 L2/L3 验证。\n";
   return true;
 }
 
@@ -592,7 +626,9 @@ bool solve_and_report(
     std::cout << "  建议用卷尺量出光心高度，然后用 --tz-mm <毫米> 重跑一次覆盖它。\n";
   }
 
-  emit_tf(camera, parent_of(camera), R, t, std::filesystem::path(out_dir).append(camera).string());
+  emit_tf(
+    frame_name_of(camera), parent_of(camera), R, t,
+    std::filesystem::path(out_dir).append(camera).string());
   return true;
 }
 

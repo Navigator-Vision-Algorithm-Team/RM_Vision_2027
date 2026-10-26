@@ -103,8 +103,15 @@ private:
 // 从 yaml 的 tf.frames 构建（写法见 configs/sentry_example.yaml）
 io::tf::Tree load_tree(const YAML::Node & yaml);
 
-// Z-Y-X（yaw-pitch-roll，度）转旋转矩阵：R = Rz(yaw)·Ry(pitch)·Rx(roll)
+// Z-Y-X（roll-pitch-yaw，度）转旋转矩阵：R = Rz(yaw)·Ry(pitch)·Rx(roll)
+// 语义：**子帧相对父帧的旋转**，直接作用在子帧坐标轴上（通用 tf 用法）
 Eigen::Matrix3d rpy_deg_to_R(double roll_deg, double pitch_deg, double yaw_deg);
+
+// 相机安装角（yaw 左正、pitch 下正、roll 绕光轴，度）转「相机 -> 父帧」旋转。
+// 与 rpy_deg_to_R 的区别：相机帧是 OpenCV 约定（x 右 / y 下 / z 光轴向前），
+// 所以要多乘一个基准旋转 R0，把"光轴指向"换算成"相机帧姿态"。
+// 手写配置时用 mount_deg 更不容易搞错；手眼标定工具输出的 R 已经是这个结果。
+Eigen::Matrix3d mount_deg_to_R(double yaw_deg, double pitch_deg, double roll_deg);
 
 }  // namespace tf
 }  // namespace io

@@ -265,29 +265,32 @@ tf:
       joint: upper_pitch_roll
       # offset: [0.0, 0.0, 0.004]   # 米；= 枪管根部离大yaw 轴原点的高度差
 
-    # ---- 四个全向相机：相机 -> 大yaw 旋转轴（含光心到转轴的距离，解决视差）----
+    # ---- 四个全向相机：相机 -> 大yaw 旋转轴（含光心到转轴的距离，解决视差）
+    #      xyz  = 光心在 yaw_axis 系下的位置（米）
+    #      mount_deg = [yaw, pitch, roll] 度：光轴朝向，yaw 左正 / pitch 低头正 / roll 绕光轴
+    #      （也可以用 R + t 直接给矩阵，优先级最高）
     omni_cam_1:
       parent: yaw_axis
       # xyz: [0.0, 0.0, 0.0]
-      # rpy_deg: [0.0, 0.0, 0.0]
+      # mount_deg: [0.0, 0.0, 0.0]
     omni_cam_2:
       parent: yaw_axis
       # xyz: [0.0, 0.0, 0.0]
-      # rpy_deg: [0.0, 0.0, 0.0]
+      # mount_deg: [0.0, 0.0, 0.0]
     omni_cam_3:
       parent: yaw_axis
       # xyz: [0.0, 0.0, 0.0]
-      # rpy_deg: [0.0, 0.0, 0.0]
+      # mount_deg: [0.0, 0.0, 0.0]
     omni_cam_4:
       parent: yaw_axis
       # xyz: [0.0, 0.0, 0.0]
-      # rpy_deg: [0.0, 0.0, 0.0]
+      # mount_deg: [0.0, 0.0, 0.0]
 
     # ---- 主相机：相机 -> 小yaw 板（板子的参考系即 0x502 的 pitch/roll/upper_yaw）----
     main_cam:
       parent: small_yaw
       # xyz: [0.0, 0.0, 0.0]
-      # rpy_deg: [0.0, 0.0, 0.0]
+      # mount_deg: [0.0, 0.0, 0.0]
 
 # ----- 相机标定 -----
 # 云台旋转矩阵 → IMU 本体坐标系 (3x3 行优先, 通常为单位阵)

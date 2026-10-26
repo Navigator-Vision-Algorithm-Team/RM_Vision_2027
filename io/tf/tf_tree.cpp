@@ -36,6 +36,17 @@ Eigen::Matrix3d rpy_deg_to_R(double roll_deg, double pitch_deg, double yaw_deg)
   return rot_z(yaw_deg * DEG) * rot_y(pitch_deg * DEG) * rot_x(roll_deg * DEG);
 }
 
+Eigen::Matrix3d mount_deg_to_R(double yaw_deg, double pitch_deg, double roll_deg)
+{
+  // 基准姿态：光轴指向父帧 +x，相机 x(右) -> 父帧 -y，相机 y(下) -> 父帧 -z
+  // （与 tasks/omniperception/omni_pnp.cpp::mount_to_R_camera2gimbal 同一约定）
+  Eigen::Matrix3d R0;
+  R0 << 0, 0, 1,  //
+    -1, 0, 0,     //
+    0, -1, 0;
+  return rot_z(yaw_deg * DEG) * rot_y(pitch_deg * DEG) * rot_x(roll_deg * DEG) * R0;
+}
+
 void Tree::add_static(
   const std::string & parent, const std::string & child, const Transform & T_parent_child)
 {
@@ -150,14 +161,18 @@ Tree load_tree(const YAML::Node & yaml)
 
     // 没填数值的静态边视为「尚未标定」，直接跳过：
     // 配置里保留结构说明，运行时回退到各模块自己的近似/旧键，不会把标定值覆盖成单位阵。
-    const bool has_rotation = f["R"] || f["rpy_deg"];
+    const bool has_rotation = f["R"] || f["mount_deg"] || f["rpy_deg"];
     const bool has_translation = f["t"] || f["xyz"];
     if (!has_rotation && !has_translation) continue;
 
-    // 静态标定值：优先 R(9) + t(3)，其次 xyz + rpy_deg
+    // 静态标定值：R(9) > mount_deg(相机安装角) > rpy_deg(通用子帧旋转)
     Transform T;
     if (f["R"] && f["R"].size() == 9) {
       for (int i = 0; i < 9; ++i) T.R(i / 3, i % 3) = f["R"][i].as<double>();
+    } else if (f["mount_deg"] && f["mount_deg"].size() == 3) {
+      T.R = mount_deg_to_R(
+        f["mount_deg"][0].as<double>(), f["mount_deg"][1].as<double>(),
+        f["mount_deg"][2].as<double>());
     } else if (f["rpy_deg"] && f["rpy_deg"].size() == 3) {
       T.R = rpy_deg_to_R(
         f["rpy_deg"][0].as<double>(), f["rpy_deg"][1].as<double>(), f["rpy_deg"][2].as<double>());
