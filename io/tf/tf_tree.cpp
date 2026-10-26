@@ -19,11 +19,10 @@ Eigen::Matrix3d rot_z(double a) { return Eigen::AngleAxisd(a, Eigen::Vector3d::U
 Eigen::Matrix3d rot_y(double a) { return Eigen::AngleAxisd(a, Eigen::Vector3d::UnitY()).toRotationMatrix(); }
 Eigen::Matrix3d rot_x(double a) { return Eigen::AngleAxisd(a, Eigen::Vector3d::UnitX()).toRotationMatrix(); }
 
-// 只在动态边里用的纯旋转
-Transform rotation_only(const Eigen::Matrix3d & R, bool inverse)
+// 动态边：T_parent_child = {R, offset}；取逆时 T_child_parent = {R^T, -R^T·offset}
+Transform joint_tf(const Eigen::Matrix3d & R, const Eigen::Vector3d & offset, bool inverse)
 {
-  return inverse ? Transform{R.transpose(), Eigen::Vector3d::Zero()}
-                 : Transform{R, Eigen::Vector3d::Zero()};
+  return inverse ? Transform{R.transpose(), -R.transpose() * offset} : Transform{R, offset};
 }
 
 void push_frame(std::vector<std::string> & frames, const std::string & frame)
@@ -48,14 +47,16 @@ void Tree::add_static(
   adj_.emplace(child, Edge{parent, T_parent_child, "", false});
 }
 
-void Tree::add_joint(const std::string & parent, const std::string & child, const std::string & joint)
+void Tree::add_joint(
+  const std::string & parent, const std::string & child, const std::string & joint,
+  const Eigen::Vector3d & offset)
 {
   push_frame(frames_, parent);
   push_frame(frames_, child);
 
   // parent -> child 方向要取逆；child -> parent 直接用
-  adj_.emplace(parent, Edge{child, Transform{}, joint, true});
-  adj_.emplace(child, Edge{parent, Transform{}, joint, false});
+  adj_.emplace(parent, Edge{child, Transform{}, joint, true, offset});
+  adj_.emplace(child, Edge{parent, Transform{}, joint, false, offset});
   joints_.emplace(joint, Eigen::Matrix3d::Identity());
 }
 
@@ -106,7 +107,7 @@ bool Tree::lookup(const std::string & from, const std::string & to, Transform & 
       if (!edge.joint.empty()) {
         auto j = joints_.find(edge.joint);
         const Eigen::Matrix3d & R = (j == joints_.end()) ? Eigen::Matrix3d::Identity() : j->second;
-        T_nb_cur = rotation_only(R, edge.inverse);
+        T_nb_cur = joint_tf(R, edge.offset, edge.inverse);
       }
 
       const Transform T_nb_from = T_nb_cur * T_cur_from;
@@ -136,9 +137,14 @@ Tree load_tree(const YAML::Node & yaml)
 
     const std::string parent = f["parent"] ? f["parent"].as<std::string>() : std::string("world");
 
-    // 动态关节
+    // 动态关节：可选 offset = child 原点在 parent 系下的固定位置（同轴不同高时用）
     if (f["joint"]) {
-      tree.add_joint(parent, child, f["joint"].as<std::string>());
+      Eigen::Vector3d offset = Eigen::Vector3d::Zero();
+      const YAML::Node off = f["offset"] ? f["offset"] : f["xyz"];
+      if (off && off.size() == 3) {
+        for (int i = 0; i < 3; ++i) offset[i] = off[i].as<double>();
+      }
+      tree.add_joint(parent, child, f["joint"].as<std::string>(), offset);
       continue;
     }
 

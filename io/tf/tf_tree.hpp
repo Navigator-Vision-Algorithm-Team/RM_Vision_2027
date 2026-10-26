@@ -31,13 +31,16 @@ struct Transform
 //
 // 结构与本项目的机械链一一对应：
 //
-//   world
-//   ├── yaw_axis        (动态关节 lower_yaw：绕 z 纯 yaw，大yaw 没有 pitch/roll)
+//   world                       原点 = 大yaw 轴原点（上电瞬间的车头方向为 +x）
+//   ├── yaw_axis        (动态关节 lower_yaw：绕 z 纯 yaw，大yaw 没有 pitch/roll，
+//   │                    原点与 world 重合，offset 为 0)
 //   │   ├── omni_cam_1   (静态边：标定值 相机 -> 大yaw)
 //   │   ├── omni_cam_2   ...
 //   │   └── omni_cam_4
-//   └── small_yaw       (动态关节 upper_pitch_roll：Rz(upper)·Ry(pitch)·Rx(roll))
-//       └── main_cam     (静态边：标定值 相机 -> 小yaw)
+//   └── small_yaw       (动态关节 upper_pitch_roll：Rz(upper)·Ry(pitch)·Rx(roll)
+//                        与 yaw_axis 同轴但不同高，靠 offset=[0,0,h] 表达；
+//                        原点取枪管根部/俯仰轴)
+//       └── main_cam     (静态边：标定值 相机 -> 小yaw；相机比枪管根部高一点)
 //
 // · 静态边 = 标定值，全部写在配置 tf.frames 里，代码里不出现任何硬编码几何量；
 // · 动态边 = joint，每帧用 0x502 的角度刷新（set_imu）；
@@ -61,8 +64,12 @@ public:
   void add_static(
     const std::string & parent, const std::string & child, const Transform & T_parent_child);
 
-  // 动态边：child 相对 parent 的变换由 joint 决定（纯旋转，无平移）
-  void add_joint(const std::string & parent, const std::string & child, const std::string & joint);
+  // 动态边：child 相对 parent 的变换 = 固定平移 offset + 关节旋转
+  //   offset 是 child 原点在 parent 系下的固定位置（米）。同轴但不同高度的两条 yaw
+  //   轴就靠它表达：小yaw 板位于大yaw 轴上方 h 处，h 由 offset 给出。
+  void add_joint(
+    const std::string & parent, const std::string & child, const std::string & joint,
+    const Eigen::Vector3d & offset = Eigen::Vector3d::Zero());
 
   void set_joint(const std::string & joint, const Eigen::Matrix3d & R_parent_child);
 
@@ -82,9 +89,10 @@ private:
   struct Edge
   {
     std::string neighbor;
-    Transform T;        // 静态边的 T_neighbor_this（动态边忽略）
-    std::string joint;  // 非空 = 动态边
+    Transform T;           // 静态边的 T_neighbor_this（动态边忽略）
+    std::string joint;     // 非空 = 动态边
     bool inverse = false;  // 动态边：true 表示需要取逆（parent -> child 方向）
+    Eigen::Vector3d offset = Eigen::Vector3d::Zero();  // 动态边：child 原点在 parent 系下的位置
   };
 
   std::multimap<std::string, Edge> adj_;

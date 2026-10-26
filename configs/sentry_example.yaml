@@ -254,12 +254,16 @@ mode: 1                             # 决策模式 (影响全向感知的搜索�
 # =============================================================================
 tf:
   frames:
+    # 大yaw 旋转轴：原点就是 world 原点（上电瞬间的转轴位置），所以 offset 为 0
     yaw_axis:
       parent: world
       joint: lower_yaw
+
+    # 小yaw 板：与大yaw 同轴、但高出一个 h。原点取枪管根部（俯仰电机轴心）
     small_yaw:
       parent: world
       joint: upper_pitch_roll
+      # offset: [0.0, 0.0, 0.004]   # 米；= 枪管根部离大yaw 轴原点的高度差
 
     # ---- 四个全向相机：相机 -> 大yaw 旋转轴（含光心到转轴的距离，解决视差）----
     omni_cam_1:

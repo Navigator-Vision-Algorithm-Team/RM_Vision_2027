@@ -30,20 +30,23 @@
 ## 2. 坐标系与数值约定
 
 ```
-world
-├── yaw_axis        大yaw 旋转轴（只有 yaw）          动态：Rz(lower_yaw)
+world                              原点 = 大yaw 轴原点，+x = 上电瞬间车头朝向
+├── yaw_axis        大yaw 旋转轴（只有 yaw）          动态：Rz(lower_yaw)，offset = 0
 │   ├── omni_cam_1  静态：待标 B
 │   ├── omni_cam_2 … omni_cam_4
 └── small_yaw       小yaw 板（yaw + pitch + roll）    动态：Rz(upper)·Ry(pitch)·Rx(roll)
-    └── main_cam    静态：待标 C
+    │               与大yaw **同轴但不同高**，高度差用 offset = [0, 0, h] 表达
+    │               原点取枪管根部（俯仰电机轴心）
+    └── main_cam    静态：待标 C（相机在枪管根部上方一点）
 ```
 
 - 约定 `p_parent = R · p_camera + t`，即配置里的 `R`/`t` 就是 `T_parent←camera`；
   `t` 就是**相机光心在父帧下的坐标**（米）。
-- 单位：`R` 无量纲（行优先 9 个数），`t` 米，`rpy_deg` 度。
-- 主轴原点：大yaw 与小yaw 两根轴的交点；`world` 在主轴零位时与其重合。
+- 单位：`R` 无量纲（行优先 9 个数），`t` 米，`rpy_deg` 度，`offset` 米。
 - 姿态角零点：上电朝向为 0，逆时针（左转）为正；pitch 低头为正。
 - **标定值与上电朝向无关**：`R`/`t` 是机械常量，所以每次上电不用重标。
+- 三个"基准点"要一致：`world`/`yaw_axis` 原点在**大yaw 轴**上；`small_yaw` 原点是
+  **枪管根部（俯仰轴）**；`main_cam` 的 `t` 从枪管根部量起。
 
 ---
 
