@@ -69,3 +69,16 @@ distort_coeffs: [-0.093662536083526302, 0.18945726820633155, -0.0004042434986192
 # 相机同理想情况的偏角: yaw-1.61 pitch-0.82 roll-0.61 degree
 R_camera2gimbal: [0.02823004230930648, -0.014076983590428133, 0.99950232778328707, -0.99954530259354468, -0.010995644138609872, 0.028076393521179785, 0.010594940981141165, -0.99984045444409364, -0.014380990321749998]
 t_camera2gimbal: [0.045517325957791413, 0.10544338092767802, 0.034649710880185793]
+
+#####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
+# 整个 debug_ros2 段可以整段删除：没有这一段就不启动调试数据流。
+# 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,gimbal_pose,target_pose}
+# 用法：板子上起桥接 `ros2 launch foxglove_bridge foxglove_bridge_launch.xml`，
+#      桌面 Foxglove Studio -> Open connection -> Foxglove WebSocket -> ws://<板子IP>:8765
+debug_ros2:
+  enable: true            # false = 完全不启动 DDS（比赛时可关掉）
+  namespace: "/sp_debug"  # 话题前缀
+  image_hz: 15            # 图像推送频率上限，0 = 每帧都推（带宽会明显变大）
+  jpeg_quality: 75        # 1-100，越小带宽越低
+  publish_raw: false      # 是否额外推送相机原图
+  publish_yolo_input: true # 是否推送 YOLO 预处理后的输入图（ROI + letterbox）

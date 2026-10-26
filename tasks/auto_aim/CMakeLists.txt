@@ -21,6 +21,8 @@ add_library(auto_aim OBJECT
     voter.cpp
     shooter.cpp
     yolo.cpp
+    # ROS2 实时调试数据流（-> Foxglove）；无 ROS2 环境下自动退化为空实现
+    debug_stream.cpp
     # 设备选择与降级（x86 GPU / arm64 CPU 共用同一份配置）
     ov_device.cpp
     yolos/yolov5.cpp

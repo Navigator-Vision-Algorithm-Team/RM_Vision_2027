@@ -89,6 +89,11 @@ else()
     message(STATUS "ROS2 environment not found, skipping ROS2-related code.")
 endif()
 
+####################tests###################
+# 调试版入口（sentry_multithread_debug / soldier_debug）：业务逻辑与 src/ 完全一致，
+# 只额外通过 ROS2 向 Foxglove 推送图像与位姿，仅在找到 ROS2 时构建
+add_subdirectory(tests)
+
 ################## install ##################
 # 把编译产物与所有运行所需资源打包到 <prefix>（默认项目根 install/），
 # 形成自包含部署目录：
