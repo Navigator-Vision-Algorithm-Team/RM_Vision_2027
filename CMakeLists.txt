@@ -69,6 +69,10 @@ target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 add_executable(calibrate_intrinsics calibration/calibrate_intrinsics.cpp)
 target_link_libraries(calibrate_intrinsics ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 
+# 外参标定：相机 -> tf 父帧（物理测量 / 手眼算法两种模式）
+add_executable(calibrate_extrinsic calibration/calibrate_extrinsic.cpp)
+target_link_libraries(calibrate_extrinsic ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
+
 # 检查 ROS 环境
 find_package(ament_cmake QUIET)
 find_package(rclcpp QUIET)
