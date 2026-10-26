@@ -64,8 +64,10 @@ target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 
 ##################calibration################
 # 旧的标定工具（capture / calibrate_camera / calibrate_handeye /
-# calibrate_robotworld_handeye / split_video）已清空，标定方案见 calibration/README.md，
-# 新的采集/解算工具按该方案重写后再加回这里。
+# calibrate_robotworld_handeye / split_video）已清空，标定方案见 calibration/README.md。
+# 目前只有内参标定工具，外参（相机 -> 转轴）的手眼标定工具按方案后续补。
+add_executable(calibrate_intrinsics calibration/calibrate_intrinsics.cpp)
+target_link_libraries(calibrate_intrinsics ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 
 # 检查 ROS 环境
 find_package(ament_cmake QUIET)

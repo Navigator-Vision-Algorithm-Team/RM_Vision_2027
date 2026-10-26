@@ -22,6 +22,9 @@ build-debug/
 # mock-input 分支新增：本地构建产物（install/ 未纳入版本控制，882MB）
 install/
 
+# 标定采集的图片与结果（体积大，且因机器而异）
+calibration/out/
+
 # mock-input 分支新增：Python 虚拟下位机的字节码缓存
 __pycache__/
 cmake-build-debug/
