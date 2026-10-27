@@ -1,3 +1,11 @@
+# =============================================================================
+#  mt_standard 的配置：与 configs/mtstandard.yaml 完全相同，
+#  仅把数据源相关键改成 fake —— 业务代码一行不改，即可在无下位机/无相机时跑通。
+#
+#  用法：./build/mt_standard configs/mtstandard_virtual.yaml
+#  回放：把 source_mode/camera_name 改成 replay，并指向录制目录
+#  串口用
+# =============================================================================
 enemy_color: "red"
 # enemy_color: "blue"
 

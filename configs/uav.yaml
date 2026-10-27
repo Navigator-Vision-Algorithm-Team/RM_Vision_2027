@@ -1,3 +1,4 @@
+# 给无人机使用的脚本，并不使用
 enemy_color: "red"
 # enemy_color: "blue"
 
@@ -52,7 +53,7 @@ min_armor_ratio: 1
 max_armor_ratio: 5
 max_side_ratio: 1.5
 max_rectangular_error: 25 # degree
-min_confidence: 0.8
+#min_confidence: 0.8
 
 #####-----cboard参数-----#####
 quaternion_canid: 0x001

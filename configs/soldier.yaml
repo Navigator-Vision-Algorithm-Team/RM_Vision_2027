@@ -1,6 +1,7 @@
 # soldier.cpp 专用配置：只包含 YOLO 检测 + PnP 定位所需的键
 # 键集合已按代码逐一核对，缺键会导致 tools::read / yaml .as<T>() 直接退出或抛异常
 # 不需要 tracker / aimer / shooter / planner / buff 相关键
+# can用
 
 #####-----兵种与敌我-----#####
 enemy_color: "red"
