@@ -20,7 +20,7 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 # libtbb.so，干净机器上启动即失败。DT_RPATH 是全局搜索列表，可让 bin/ 真正自包含。
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--disable-new-dtags")
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type")
 endif()
