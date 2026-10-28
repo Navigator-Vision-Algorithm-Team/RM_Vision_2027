@@ -1,6 +1,16 @@
 cmake_minimum_required(VERSION 3.16.3)
 
 # ============================================================================
+#  串口通信自检（不依赖 ROS2 / 相机 SDK，也不链接 io，避免拖入相机运行库）
+#    ./serial_communication_test [串口] [波特率] [yaw角速度 rad/s] [发送频率 Hz] [--nav]
+#  只复用协议定义与 CRC 实现，收到的帧按结构体字段打印，同时下发 0x0402 让云台缓转
+# ============================================================================
+add_executable(serial_communication_test
+    serial_communication_test.cpp
+    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
+target_link_libraries(serial_communication_test serial)
+
+# ============================================================================
 #  调试版入口（仅供局域网内 Foxglove 实时观瞄，正式比赛请用 src/ 下的目标）
 #
 #  tests/ 下的可执行文件与 src/ 下的正式版业务逻辑完全一致，只是在主循环里
