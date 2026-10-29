@@ -106,8 +106,7 @@ add_subdirectory(tests)
 
 # 1) 可执行文件（if(TARGET) 保证只在对应目标被生成时安装；sentry 仅在找到 ROS2 时存在）
 set(ALL_EXES
-    mt_standard soldier virtual_run
-    sentry_multithread)
+    soldier sentry_multithread)
 foreach(ex ${ALL_EXES})
     if(TARGET ${ex})
         install(TARGETS ${ex} RUNTIME DESTINATION bin)
