@@ -33,7 +33,6 @@ const std::string keys =
 
 int main(int argc, char * argv[])
 {
-  tools::Exiter exiter;
   tools::Plotter plotter;
   tools::Recorder main_recorder(30, "main");
 
@@ -72,6 +71,10 @@ int main(int argc, char * argv[])
   // 云台关节反馈：复用 SerialBoard 已有的串口接收线程，收到一帧 0x502 就发布一次
   // JointState，不额外启动程序、不重复占用串口。
   serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
+
+  // Exiter 必须在 io::ROS2 之后构造：rclcpp::init 会用自己的 handler 接管 SIGINT，
+  // 后安装的 handler 才能让 Ctrl+C 重新置位退出标志。
+  tools::Exiter exiter;
 
   tools::logger()->info("[Main] Opening camera...");
   // 相机初始化
@@ -178,7 +181,9 @@ int main(int argc, char * argv[])
   double cached_omni_yaw = 0;
   double cached_omni_pitch = 0;
 
-  while (!exiter.exit()) {
+  // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
+  // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
+  while (!exiter.exit() && rclcpp::ok()) {
     camera.read(img, timestamp);
     if (img.empty()) {
       continue;
