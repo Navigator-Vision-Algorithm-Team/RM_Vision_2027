@@ -82,6 +82,9 @@ int main(int argc, char * argv[])
     serial_board.send(nav_command);
   });
 
+  // 云台关节反馈：复用 SerialBoard 已有的串口接收线程（不额外占串口）
+  serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
+
   tools::logger()->info("[Main] Opening camera...");
   // 相机初始化
   io::Camera camera(config_path, "main");

@@ -14,11 +14,17 @@ class ROS2
 public:
   // nav_sender: 导航数据发送回调（如串口下发）。
   // 传入后 Subscribe2Nav 内部会启动独立线程"收包即发送"，与主循环解耦。
-  explicit ROS2(std::function<void(const NavCommand &)> nav_sender = nullptr);
+  // subscribe_nav=false 时只创建发布侧（如仅需发布云台关节反馈的入口）。
+  explicit ROS2(
+    std::function<void(const NavCommand &)> nav_sender = nullptr, bool subscribe_nav = true);
 
   ~ROS2();
 
   void publish(const Eigen::Vector4d & target_pos);
+
+  // 云台关节反馈回调，交给 io::SerialBoard::set_gimbal_joint_callback 使用。
+  // 回调内部持有发布节点的 shared_ptr，无需额外线程，也不会再开一份串口。
+  std::function<void(double yaw_rad, double pitch_rad)> gimbal_joint_sender();
 
   // std::vector<int8_t> subscribe_enemy_status();
 
