@@ -247,7 +247,9 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 
 ---
 
-## 5. ROS2 输入：导航速度
+## 5. ROS2 通信
+
+### 5.1 输入：导航速度
 
 入口：`ROS2` 构造时传入发送回调（`SerialBoard::send`），`Subscribe2Nav` 内部启动独立线程 `nav_forward_loop`，阻塞等待 `move_info_queue_`，收到 `Twist` 后立即转换为 `NavCommand` 并经串口下发——不经过主循环，避免被视觉主链路延迟（`io/ros2/subscribe2nav.cpp`）。
 
@@ -267,6 +269,24 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 
 > 旋转角速度取自 `angular.z`（与导航规范 `cmd_vel.angular.z` 一致，且已含 `fake_vel_transform` 叠加的自旋分量）。
 
+### 5.2 输出：云台关节反馈（JointState）
+
+由 `io::ROS2` 的发布节点直接发布，数据来自 `SerialBoard` 的串口接收线程：**收到一帧 CRC 正确的 `0x502` 才发布一次**，不重复包装旧角度，也不额外启动程序或重复占用串口。
+
+| 项 | 值 |
+| --- | --- |
+| 话题 | `/red_standard_robot1/serial/gimbal_joint_state` |
+| 消息类型 | `sensor_msgs/msg/JointState` |
+| `name` | `gimbal_yaw_joint`、`gimbal_pitch_joint` |
+| `position` | `limit_rad(lower_yaw)`（rad，`(-π, π]`）、`0.0`（大yaw 无俯仰自由度） |
+| `velocity` / `effort` | 空 |
+| `header.stamp` | 发布时刻的 ROS 时间（每个采样重新取） |
+| 频率 | 跟随 `0x502` 帧率，上限 100Hz（超采样时丢弃中间帧，始终发最新采样） |
+
+> 注意：`0x502` 的 `lower_yaw` 是「以上电时车头朝向为 0」的世界系绝对角，**不是「云台相对底盘」**。
+> 若要满足导航侧 TF 的关节语义，需下位机补充 `chassis_yaw`（底盘世界系 yaw）或直接补 `relative_yaw`，
+> 视觉侧再改为 `limit_rad(lower_yaw - chassis_yaw)`（改动点见 `SerialBoard::receiveThread` 的注释）。
+
 ---
 
 ## 6. 接收数据在入口中的用途速查
@@ -278,6 +298,7 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 | 复位信号 | `0x505` (reset) | `tracker.reset()` |
 | 弹速 | `bullet_speed`（yaml） | `aimer.aim(..., bullet_speed)` |
 | 导航速度 | ROS2 `cmd_vel` | 下发 `0x0405` |
+| 云台关节反馈 | `0x502` -> ROS2 `gimbal_joint_state` | 供导航侧构建 JointState TF（见 5.2） |
 
 ---
 
@@ -290,3 +311,4 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 | CRC 算法 | `io/serial/gimbal/protocol_crc.cpp` / `protocol_crc.hpp` |
 | 串口收发与解析 | `io/serial/serial_board.cpp` / `serial_board.hpp` |
 | ROS2 订阅 | `io/ros2/subscribe2nav.cpp` |
+| ROS2 发布（目标位置 / 关节反馈） | `io/ros2/publish2nav.cpp` |
