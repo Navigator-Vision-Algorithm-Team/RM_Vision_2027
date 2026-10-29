@@ -60,6 +60,12 @@
    sudo cp <SDK中的>.rules /etc/udev/rules.d/
    sudo udevadm control --reload && sudo udevadm trigger
    ```
+   - **海康运行时库必须与 `libMvCameraControl.so` 同目录**：SDK 内部只从自身所在目录
+     加载 `libMvUsb3vTL.so`（USB3 传输层）与 `libMediaProcess.so` 等辅助库，缺库时
+     `MV_CC_EnumDevices` 会返回 `MV_E_RESOURCE (0x80000006)`，现象是一台相机都枚举不到。
+     仓库已在 `io/hikrobot/lib/{amd64,arm64}/` 中提供这套运行库，安装时会一起复制到
+     `install/bin/`；升级海康 SDK 时请把 MVS 安装包 `lib/64`（arm64 为 `lib/aarch64`）
+     下的同名文件一并放到该目录，不要只替换 `libMvCameraControl.so`。
    - 运行时库路径配置：**用 `install/` 部署时不需要任何配置**（`bin/` 内 `.so` 通过
      `$ORIGIN` 自包含）；只有在 `build/` 里直接运行时可执行文件才需要下面二选一：
    ```bash

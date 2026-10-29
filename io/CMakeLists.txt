@@ -41,7 +41,8 @@ target_link_directories(io PUBLIC ${SP_HIKROBOT_LIB_DIR})
 target_include_directories(io PUBLIC mindvision/include)
 target_link_directories(io PUBLIC ${SP_MINDVISION_LIB_DIR})
 
-target_link_libraries(io MvCameraControl MVSDK usb-1.0 yaml-cpp serial)
+# ${CMAKE_DL_LIBS}：hik_camera_manager 用 dladdr 定位 SDK 所在目录做运行库自检
+target_link_libraries(io MvCameraControl MVSDK usb-1.0 yaml-cpp serial ${CMAKE_DL_LIBS})
 
 ################## 检查 ROS 环境 ##################
 find_package(ament_cmake QUIET)
