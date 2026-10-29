@@ -100,7 +100,6 @@ add_subdirectory(tests)
 #   install/bin/      可执行文件 + 相机 SDK(.so) + OpenVINO 运行库 + TBB
 #   install/configs/ 推理配置
 #   install/assets/  模型文件
-#   install/autostart.sh
 # 注意：OpenCV / fmt / Eigen / spdlog / yaml-cpp / nlohmann 等为系统库（apt 安装），
 #       不打包，目标机需先装好这些 apt 依赖。
 
@@ -131,7 +130,6 @@ endif()
 
 # 4) 配置、模型与启动脚本
 install(DIRECTORY configs assets DESTINATION .)
-install(FILES autostart.sh DESTINATION .)
 
 message(STATUS "Install prefix: ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "Install layout: bin/ (executables + SDK/OpenVINO .so), configs/, assets/")
