@@ -16,7 +16,7 @@ namespace auto_aim
 class YOLOV5 : public YOLOBase
 {
 public:
-  YOLOV5(const std::string & config_path, bool debug);
+  YOLOV5(const std::string & config_path, bool debug, bool single_thread_cpu = false);
 
   std::list<Armor> detect(const cv::Mat & bgr_img, int frame_count) override;
 
@@ -27,6 +27,7 @@ private:
   std::string device_, model_path_;
   std::string save_path_, debug_path_;
   bool debug_, use_roi_, use_traditional_;
+  bool single_thread_cpu_ = false;
 
   const int class_num_ = 13;
   const float nms_threshold_ = 0.3;

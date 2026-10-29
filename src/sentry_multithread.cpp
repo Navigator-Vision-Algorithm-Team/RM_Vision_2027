@@ -10,14 +10,14 @@
 #include "io/ros2/ros2.hpp"
 #include "io/tf/tf_tree.hpp"
 #include "tasks/auto_aim/aimer.hpp"
+#include "tasks/auto_aim/multithread/yolo_pipeline.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
-#include "tasks/auto_aim/yolo.hpp"
 #include "tasks/omniperception/decider.hpp"
 // 【改动】load_omni_pnp_config（读取全向相机 PnP 标定参数）声明在这里
+#include "tasks/omniperception/omni_jobs.hpp"
 #include "tasks/omniperception/omni_pnp.hpp"
-#include "tasks/omniperception/perceptron.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -151,14 +151,29 @@ int main(int argc, char * argv[])
   }
 
   // 初始化其他组件
-  auto yolo = std::make_shared<auto_aim::YOLO>(config_path, false);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
 
   omniperception::Decider decider(config_path);
-  omniperception::Perceptron perceptron(omni_configs, config_path, yolo);
+
+  // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程，
+  // 相机数据只喂给自己的实例，不再出现多路相机争抢同一个 OpenVINO InferRequest。
+  // 结果进入统一队列，主相机结果始终优先。
+  // camera_jobs 里面初始的架构就是这个相机对于yolo的特殊处理配置，像是recoder和yolo推理之后的如何处理之类的事情
+  std::vector<auto_aim::multithread::CameraJob> camera_jobs;
+  {
+    auto_aim::multithread::CameraJob main_job;
+    main_job.camera = &camera;
+    main_job.camera_id = -1;  // -1 = 主相机
+    main_job.keep_image = true;
+    camera_jobs.push_back(std::move(main_job));
+
+    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
+    for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
+  }
+  auto_aim::multithread::YoloPipeline pipeline(config_path, std::move(camera_jobs), false);
 
   // 主相机外参：tf 树里有 main_cam -> small_yaw 就用标定值，否则沿用 yaml 里的
   // R_camera2gimbal / t_camera2gimbal（语义同样是「相机 -> 小yaw 板」）。
@@ -169,9 +184,6 @@ int main(int argc, char * argv[])
       tools::logger()->info("[Main] main_cam extrinsic <- tf tree");
     }
   }
-
-  cv::Mat img;
-  std::chrono::steady_clock::time_point timestamp;
 
   bool game_started_logged = false;
   bool spin_mode_initialized = false;
@@ -184,10 +196,20 @@ int main(int argc, char * argv[])
   // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
   // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
   while (!exiter.exit() && rclcpp::ok()) {
-    camera.read(img, timestamp);
-    if (img.empty()) {
+    // 开赛前关闭推理：相机仍持续出图（主相机帧照常入队，供录像使用），
+    // 避免赛前 5 路 YOLO 空转占满 CPU。
+    pipeline.set_inference_enabled(serial_board.is_game_started());
+
+    // 阻塞等待主相机结果：统一结果队列里主相机的优先级最高
+    auto_aim::multithread::CameraResult frame;
+    if (!pipeline.wait_main(frame)) break;  // 推理池已停止
+    if (frame.img.empty()) {
       continue;
     }
+
+    cv::Mat & img = frame.img;
+    const auto timestamp = frame.timestamp;
+    auto armors = std::move(frame.armors);
 
     // 双yaw 姿态：大yaw 只有 yaw，pitch/roll 属于小yaw（主相机所在板）
     const io::ImuState imu = serial_board.imu_state_at(timestamp - 1ms);
@@ -248,10 +270,6 @@ int main(int argc, char * argv[])
       tracker.reset();
     }
 
-    //yolo推理
-    //TODO: 在yolo内部没有多线程的使用，而在我们的实现中，我们的全向感知和主相机公用同一个yolo对象，如果没有多线程的处理，这里会不会导致yolo无法按照顺序处理所有的图像？
-    auto armors = yolo->detect(img);
-
     io::Command command{false, false, 0, 0};
 
     // 如果发现全向相机是0，就打开开始旋转的那个标签。
@@ -282,8 +300,8 @@ int main(int argc, char * argv[])
       // 设置优先级
       decider.set_priority(armors);
 
-      //全向相机中拿出装甲板的候选
-      auto detection_queue = perceptron.get_detection_queue();
+      //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
+      auto detection_queue = omniperception::take_detection_results(pipeline);
 
       decider.sort(detection_queue);
 
