@@ -240,6 +240,7 @@ int main(int argc, char * argv[])
     }
 
     //yolo推理
+    //TODO: 在yolo内部没有多线程的使用，而在我们的实现中，我们的全向感知和主相机公用同一个yolo对象，如果没有多线程的处理，这里会不会导致yolo无法按照顺序处理所有的图像？
     auto armors = yolo->detect(img);
 
     io::Command command{false, false, 0, 0};

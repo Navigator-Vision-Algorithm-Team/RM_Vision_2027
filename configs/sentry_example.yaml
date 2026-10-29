@@ -327,6 +327,6 @@ R_camera2gimbal: [0.0, 0.0, 1.0,
 t_camera2gimbal: [0.03084, 0.0, 0.08898]
 
 # 游戏控制相关
-
+# 在日常调试的时候这个地方就是这个地方是false
 use_referee_system: false
 game_state_progress_threshold: 4

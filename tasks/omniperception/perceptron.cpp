@@ -74,7 +74,7 @@ void Perceptron::parallel_infer(
     while (true) {
       cv::Mat img;
       std::chrono::steady_clock::time_point ts;
-
+      // 这个地方是锁，四个相机争抢，这里的相机争抢必然涉及到主相机的争抢，但是我们应该保证主相机的线程，并且希望四个全向感知不这样争抢
       {
         std::unique_lock<std::mutex> lock(mutex_);
         if (stop_flag_) break;
