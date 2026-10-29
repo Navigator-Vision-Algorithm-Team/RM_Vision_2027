@@ -38,6 +38,15 @@ struct CameraResult
   bool is_main() const { return camera_id < 0; }
 };
 
+// wait_main() 的返回值：调用方需要在 Timeout 分支里继续检查自己的退出条件
+// （Ctrl+C / rclcpp shutdown / 相机掉线），不能无限期阻塞在队列上。
+enum class WaitStatus
+{
+  Ok,       // 取到一帧主相机结果
+  Timeout,  // 超时，暂无主相机结果（相机可能没出图）
+  Stopped   // 推理池已停止，不会再产生结果
+};
+
 // 一路相机的任务描述：相机、YOLO 实例与线程一一绑定，数据不跨相机复用。
 struct CameraJob
 {
@@ -81,8 +90,11 @@ public:
   // 全向不再产生新结果，避免空转占满 CPU。
   void set_inference_enabled(bool enabled);
 
-  // 阻塞等待一帧主相机结果；推理池已停止时返回 false。
-  bool wait_main(CameraResult & result);
+  // 等待一帧主相机结果，最多等 timeout。
+  // 必须带超时：相机掉线时线程可能永远等不到新帧，若这里无限阻塞，
+  // 主循环就感知不到 Ctrl+C / rclcpp shutdown，也无法在析构时退出。
+  WaitStatus wait_main(
+    CameraResult & result, std::chrono::milliseconds timeout = std::chrono::milliseconds(100));
 
   // 非阻塞取走当前积压的所有全向结果（按到达顺序）。
   void drain_omni(std::vector<CameraResult> & results);

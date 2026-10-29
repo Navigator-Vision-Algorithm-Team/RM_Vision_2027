@@ -193,6 +193,10 @@ int main(int argc, char * argv[])
   double cached_omni_yaw = 0;
   double cached_omni_pitch = 0;
 
+  // 主相机最后出帧的时间：用于相机掉线时的告警（超时等待本身不会卡死主循环）
+  auto last_main_frame = std::chrono::steady_clock::now();
+  auto last_stall_log = last_main_frame;
+
   // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
   // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
   while (!exiter.exit() && rclcpp::ok()) {
@@ -200,9 +204,24 @@ int main(int argc, char * argv[])
     // 避免赛前 5 路 YOLO 空转占满 CPU。
     pipeline.set_inference_enabled(serial_board.is_game_started());
 
-    // 阻塞等待主相机结果：统一结果队列里主相机的优先级最高
+    // 限时等待主相机结果：统一结果队列里主相机的优先级最高。
+    // 必须带超时，相机掉线时也能回到 while 条件响应 Ctrl+C / SIGTERM。
     auto_aim::multithread::CameraResult frame;
-    if (!pipeline.wait_main(frame)) break;  // 推理池已停止
+    const auto status = pipeline.wait_main(frame, std::chrono::milliseconds(100));
+    if (status == auto_aim::multithread::WaitStatus::Stopped) break;  // 推理池已停止
+
+    if (status == auto_aim::multithread::WaitStatus::Timeout) {
+      const auto now = std::chrono::steady_clock::now();
+      const double stalled = std::chrono::duration<double>(now - last_main_frame).count();
+      if (stalled >= 2.0 &&
+          std::chrono::duration<double>(now - last_stall_log).count() >= 2.0) {
+        last_stall_log = now;
+        tools::logger()->warn("[Main] 主相机已 {:.1f}s 没有新帧，继续等待...", stalled);
+      }
+      continue;
+    }
+
+    last_main_frame = std::chrono::steady_clock::now();
     if (frame.img.empty()) {
       continue;
     }

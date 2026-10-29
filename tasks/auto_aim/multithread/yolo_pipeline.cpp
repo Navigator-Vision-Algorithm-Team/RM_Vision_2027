@@ -6,6 +6,7 @@
 
 #include "tasks/auto_aim/yolo.hpp"
 #include "tools/cpu_affinity.hpp"
+#include "tools/exiter.hpp"
 #include "tools/logger.hpp"
 #include "tools/yaml.hpp"
 
@@ -110,6 +111,12 @@ YoloPipeline::~YoloPipeline()
 {
   quit_ = true;
   result_cv_.notify_all();
+
+  // 兜底：worker 可能正阻塞在 camera->read() 里等一帧。HikRobot 与虚拟数据源
+  // 的读图循环会检查 tools::exiting()，置位后它们能立即返回空帧，worker 随即
+  // 看到 quit_ 退出，避免 join 卡死。
+  tools::request_exit();
+
   for (auto & thread : threads_) {
     if (thread.joinable()) thread.join();
   }
@@ -121,15 +128,19 @@ void YoloPipeline::set_inference_enabled(bool enabled)
   inference_enabled_.store(enabled, std::memory_order_relaxed);
 }
 
-bool YoloPipeline::wait_main(CameraResult & result)
+WaitStatus YoloPipeline::wait_main(CameraResult & result, std::chrono::milliseconds timeout)
 {
   std::unique_lock<std::mutex> lock(result_mutex_);
-  result_cv_.wait(lock, [this] { return has_main_ || quit_; });
-  if (!has_main_) return false;
+
+  // 只等有限时间：相机掉线时主相机线程会一直卡在读图里，如果这里无限等，
+  // 主循环既看不到 Ctrl+C / SIGTERM，也无法走到析构去置 quit_。
+  const bool ready = result_cv_.wait_for(lock, timeout, [this] { return has_main_ || quit_; });
+  if (!ready) return WaitStatus::Timeout;
+  if (!has_main_) return WaitStatus::Stopped;
 
   result = std::move(main_result_);
   has_main_ = false;
-  return true;
+  return WaitStatus::Ok;
 }
 
 void YoloPipeline::drain_omni(std::vector<CameraResult> & results)
