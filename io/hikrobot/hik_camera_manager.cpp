@@ -14,6 +14,7 @@
 #include <fstream>
 #include <vector>
 
+#include "hik_error.hpp"
 #include "tools/logger.hpp"
 
 namespace io
@@ -97,30 +98,6 @@ std::string HikCameraManager::sdk_directory()
   return dir.empty() ? std::string("<unknown>") : dir.string();
 }
 
-std::string HikCameraManager::error_name(unsigned int ret)
-{
-  switch (ret) {
-    case MV_OK:
-      return "MV_OK";
-    case MV_E_HANDLE:
-      return "MV_E_HANDLE";
-    case MV_E_SUPPORT:
-      return "MV_E_SUPPORT";
-    case MV_E_PARAMETER:
-      return "MV_E_PARAMETER";
-    case MV_E_RESOURCE:
-      return "MV_E_RESOURCE";
-    case MV_E_NODATA:
-      return "MV_E_NODATA";
-    case MV_E_NOENOUGH_BUF:
-      return "MV_E_NOENOUGH_BUF";
-    case MV_E_LOAD_LIBRARY:
-      return "MV_E_LOAD_LIBRARY";
-    default:
-      return "UNKNOWN";
-  }
-}
-
 bool HikCameraManager::has_hik_udev_rules()
 {
   namespace fs = std::filesystem;
@@ -156,7 +133,7 @@ void HikCameraManager::report_enum_failure(unsigned int ret)
 
   tools::logger()->warn(
     "[HikCameraManager] MV_CC_EnumDevices 失败：{:#x}（{}），SDK 目录：{}", ret,
-    error_name(ret), sdk_directory());
+    hik_error_name(ret), sdk_directory());
 
   if (!transport.empty() && !std::filesystem::exists(transport)) {
     // 这是最常见的“枚举不到相机”：海康 SDK 只从 libMvCameraControl.so 所在目录
@@ -241,7 +218,7 @@ void * HikCameraManager::create_handle(const std::string & serial_number)
   if (ret != MV_OK) {
     tools::logger()->warn(
       "[HikCameraManager] MV_CC_CreateHandle('{}') failed: {:#x} ({})", serial_number, ret,
-      error_name(ret));
+      hik_error_name(ret));
     return nullptr;
   }
 

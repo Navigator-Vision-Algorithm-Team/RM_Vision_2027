@@ -43,8 +43,6 @@ private:
   // /etc/udev/rules.d 下是否存在海康 MVS 相关规则（仅用于诊断提示）
   static bool has_hik_udev_rules();
 
-  static std::string error_name(unsigned int ret);
-
   std::mutex mutex_;
   MV_CC_DEVICE_INFO_LIST device_list_{};
   bool enumerated_{false};

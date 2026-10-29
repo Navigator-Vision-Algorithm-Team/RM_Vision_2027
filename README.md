@@ -66,8 +66,13 @@
      加载 `libMvUsb3vTL.so`（USB3 传输层）与 `libMediaProcess.so` 等辅助库，缺库时
      `MV_CC_EnumDevices` 会返回 `MV_E_RESOURCE (0x80000006)`，现象是一台相机都枚举不到。
      仓库已在 `io/hikrobot/lib/{amd64,arm64}/` 中提供这套运行库，安装时会一起复制到
-     `install/bin/`；升级海康 SDK 时请把 MVS 安装包 `lib/64`（arm64 为 `lib/aarch64`）
-     下的同名文件一并放到该目录，不要只替换 `libMvCameraControl.so`。
+     `install/bin/`。
+   - **海康 SDK 版本锁定为 `3.2.1.0`**：`io/hikrobot/include`、`lib/{amd64,arm64}` 下的
+     控制库、传输层、图像处理库与头文件必须来自**同一个 MVS 版本**。只换其中一部分时，
+     枚举（`MV_CC_EnumDevices`）往往还能过，但一开设备（`MV_CC_OpenDevice`）就返回
+     `MV_E_VERSION (0x80000009)` —— 本项目踩过这个坑：控制库 4.1.2.2 + 传输层 3.2.1.0。
+     升级 SDK 请整套替换（include + `libMvCameraControl.so` + `libMvUsb3vTL.so` +
+     `libMediaProcess.so` + `libMVRender.so` + `libFormatConversion.so`）。
    - 运行时库路径配置：**用 `install/` 部署时不需要任何配置**（`bin/` 内 `.so` 通过
      `$ORIGIN` 自包含）；只有在 `build/` 里直接运行时可执行文件才需要下面二选一：
    ```bash
