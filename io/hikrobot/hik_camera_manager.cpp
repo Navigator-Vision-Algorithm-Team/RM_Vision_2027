@@ -3,10 +3,16 @@
 #include <dlfcn.h>
 #include <fmt/format.h>
 
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <vector>
 
 #include "tools/logger.hpp"
 
@@ -14,6 +20,9 @@ namespace io
 {
 namespace
 {
+// 海康 USB3 工业相机的 USB 厂商号
+constexpr const char * kHikVendorId = "2bdf";
+
 std::filesystem::path sdk_path()
 {
   Dl_info info{};
@@ -27,6 +36,52 @@ std::string sdk_version_string()
 {
   const unsigned int v = MV_CC_GetSDKVersion();
   return fmt::format("{}.{}.{}.{}", (v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+}
+
+struct UsbDevice
+{
+  std::string sysfs_name;
+  int busnum = -1;
+  int devnum = -1;
+};
+
+// 直接从 sysfs 找海康 USB 设备：能判断“相机有没有被系统识别”，
+// 不依赖 SDK 是否工作正常。
+std::vector<UsbDevice> find_hik_usb_devices()
+{
+  namespace fs = std::filesystem;
+  std::vector<UsbDevice> devices;
+
+  std::error_code ec;
+  const fs::path root("/sys/bus/usb/devices");
+  if (!fs::is_directory(root, ec)) return devices;
+
+  try {
+    for (const auto & entry : fs::directory_iterator(root, ec)) {
+      const auto dir = entry.path();
+
+      std::ifstream vid_file(dir / "idVendor");
+      std::string vid;
+      if (!(vid_file >> vid) || vid != kHikVendorId) continue;
+
+      UsbDevice dev;
+      dev.sysfs_name = dir.filename().string();
+      std::ifstream(dir / "busnum") >> dev.busnum;
+      std::ifstream(dir / "devnum") >> dev.devnum;
+      devices.push_back(dev);
+    }
+  } catch (const std::exception &) {
+    // 诊断代码本身不允许影响主流程
+  }
+
+  return devices;
+}
+
+std::string usb_devnode(int busnum, int devnum)
+{
+  char buffer[64];
+  std::snprintf(buffer, sizeof(buffer), "/dev/bus/usb/%03d/%03d", busnum, devnum);
+  return buffer;
 }
 }  // namespace
 
@@ -79,8 +134,11 @@ bool HikCameraManager::has_hik_udev_rules()
       std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
       });
+      // 海康官方规则文件名是 80-drivers-SDK-2bdf.rules（不含 mvs/hik），
+      // 所以这里同时按厂商号 2bdf 与 sdk 匹配。
       if (name.find("mvs") != std::string::npos || name.find("hik") != std::string::npos ||
-          name.find("mvusb") != std::string::npos) {
+          name.find("mvusb") != std::string::npos || name.find("2bdf") != std::string::npos ||
+          name.find("sdk") != std::string::npos) {
         return true;
       }
     }
@@ -112,17 +170,53 @@ void HikCameraManager::report_enum_failure(unsigned int ret)
     return;
   }
 
-  if (ret == MV_E_RESOURCE) {
+  if (ret != MV_E_RESOURCE) return;
+
+  // 传输层就位仍返回 MV_E_RESOURCE：用 sysfs 把“没插好 / 权限不足 / 版本不匹配”区分开。
+  const auto devices = find_hik_usb_devices();
+  if (devices.empty()) {
     tools::logger()->warn(
-      "[HikCameraManager] 传输层已就位，但仍返回 MV_E_RESOURCE：通常是 USB 权限不足。");
-    if (!has_hik_udev_rules()) {
-      tools::logger()->warn(
-        "[HikCameraManager] /etc/udev/rules.d 下没有找到 MVS/Hik 相关规则，"
-        "请从 MVS 安装包复制 udev 规则后执行：\n"
-        "  sudo cp <MVS安装包>/udev/51-mvs.rules /etc/udev/rules.d/\n"
-        "  sudo udevadm control --reload-rules && sudo udevadm trigger");
-    }
+      "[HikCameraManager] 系统中没有发现海康 USB 设备（VID {}）：请检查相机供电、USB 线，"
+      "以及是否插在可用的 USB3 口上（可先用 lsusb 确认）",
+      kHikVendorId);
+    return;
   }
+
+  bool any_accessible = false;
+  for (const auto & dev : devices) {
+    const auto node = usb_devnode(dev.busnum, dev.devnum);
+
+    struct stat st {};
+    if (::stat(node.c_str(), &st) != 0) {
+      tools::logger()->warn(
+        "[HikCameraManager] 发现相机 {}，但设备节点 {} 不存在（检查 usbfs 挂载）",
+        dev.sysfs_name, node);
+      continue;
+    }
+
+    const bool rw = ::access(node.c_str(), R_OK | W_OK) == 0;
+    any_accessible = any_accessible || rw;
+    tools::logger()->warn(
+      "[HikCameraManager] 发现相机 {} -> {}，权限 {:03o}（uid={} gid={}）：{}", dev.sysfs_name,
+      node, st.st_mode & 0777, st.st_uid, st.st_gid,
+      rw ? "当前用户可读写" : "当前用户无读写权限");
+  }
+
+  if (!any_accessible) {
+    tools::logger()->warn(
+      "[HikCameraManager] 结论：USB 权限不足（udev 规则未生效）。仓库已附带规则文件，执行：\n"
+      "  sudo cp io/hikrobot/udev/51-mvs.rules /etc/udev/rules.d/\n"
+      "  sudo udevadm control --reload-rules && sudo udevadm trigger\n"
+      "然后重新插拔相机再试（/etc/udev/rules.d 中{}海康相关规则）",
+      has_hik_udev_rules() ? "已存在" : "没有");
+    return;
+  }
+
+  tools::logger()->warn(
+    "[HikCameraManager] 结论：设备存在且当前用户可读写，但 SDK 仍枚举失败，"
+    "多半是 libMvCameraControl.so 与 libMvUsb3vTL.so 版本不匹配。"
+    "请用同一份 MVS 安装包的 lib/64（arm64 为 lib/aarch64）整目录替换 {} 后重试。",
+    sdk_directory());
 }
 
 void * HikCameraManager::create_handle(const std::string & serial_number)
