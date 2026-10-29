@@ -114,28 +114,44 @@ int main(int argc, char * argv[])
                   : 44.5;
 
     // =====================================================================
-    //  【改动】读取该全向相机的 PnP 标定参数（内参/畸变/外参，全部可选）。
+    //  读取该全向相机的 PnP 标定参数（内参/畸变/外参，全部可选）。
     //  键名： omni_camera_matrix_N / omni_distort_coeffs_N /
     //         omni_R_camera2gimbal_N / omni_t_camera2gimbal_N
-    //  解析实现见 tasks/omniperception/omni_pnp.cpp::load_omni_pnp_config，
-    //  与 sentry_multithread_debug.cpp 共用同一份逻辑。
-    //  留空时的行为见 configs/sentry_example.yaml 中的说明。
+    //  解析实现见 tasks/omniperception/omni_pnp.cpp::load_omni_pnp_config。
+    //  注意：该函数只做解析，"外参键缺失"时【不】报警——因为那一刻还不知道
+    //        tf 树会不会兜底，报警会与实际行为矛盾。日志由下面这段按三态统一输出。
     // =====================================================================
     omniperception::load_omni_pnp_config(cfg, yaml, i);
 
-    // tf 树优先：omni_cam_i -> yaw_axis 给出「相机 -> 大yaw」的完整位姿（含平移）。
-    // 这一步很关键：全向相机的光心不在大yaw 转轴上，只用旋转会带来视差误差。
+    // 外参优先级：tf 树 > yaml 的 omni_R/t_camera2gimbal_N > 安装角近似。
+    // 三态日志（避免"明明用了 tf 却报警说要用安装角"的误导）：
+    //   ① tf 查到          -> debug：实车正常路径，不打扰
+    //   ② tf 无、yaml 有    -> info ：合法降级（例如仿真配置没写 tf）
+    //   ③ tf 无、yaml 也无  -> warn ：真的在走安装角近似（t=0，近距离有视差误差）
+    // 进入本块时 cfg.has_extrinsic 的含义是「yaml 是否给了有效外参」。
     {
       io::tf::Transform T_cam2yaw;
       const std::string frame = io::tf::Tree::OMNI_CAM_PREFIX + std::to_string(i);
+
       if (tf_tree.lookup(frame, io::tf::Tree::YAW_AXIS, T_cam2yaw)) {
+        // ① tf 优先：omni_cam_i -> yaw_axis 给出「相机 -> 大yaw」的完整位姿（含平移）。
+        //    平移很关键：全向相机的光心不在大yaw 转轴上，只用旋转会带来视差误差。
         cfg.R_camera2gimbal = T_cam2yaw.R;
         cfg.t_camera2gimbal = T_cam2yaw.t;
         cfg.has_extrinsic = true;
-      } else if (cfg.has_extrinsic) {
+        tools::logger()->debug(
+          "[omni{}] 外参 <- tf ({} -> {})", i, frame, io::tf::Tree::YAW_AXIS);
+      } else if (!cfg.has_extrinsic) {
+        // ③ 两个来源都没有：decider 会退回 mount_to_R_camera2gimbal()，且 t 置 0。
         tools::logger()->warn(
-          "[Main] tf 里没有 {} -> {}，沿用 omni_R/t_camera2gimbal_{}", frame,
-          io::tf::Tree::YAW_AXIS, i);
+          "[omni{}] tf 里没有 {} -> {}，且未配置 omni_R/t_camera2gimbal_{} "
+          "-> 将用安装角 mount_yaw/mount_pitch 近似外参（t=0，近距离有视差误差）",
+          i, frame, io::tf::Tree::YAW_AXIS, i);
+      } else {
+        // ② tf 缺失但 yaml 给了有效 R/t：合法降级，不是错误。
+        tools::logger()->info(
+          "[omni{}] tf 里没有 {} -> {}，外参沿用 yaml 的 omni_R/t_camera2gimbal_{}",
+          i, frame, io::tf::Tree::YAW_AXIS, i);
       }
     }
 
