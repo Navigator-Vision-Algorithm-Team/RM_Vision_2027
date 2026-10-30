@@ -19,4 +19,6 @@ bool Exiter::exit() const { return exit_; }
 
 bool exiting() { return exit_; }
 
+void request_exit() { exit_ = true; }
+
 }  // namespace tools

@@ -12,8 +12,8 @@
 
 namespace auto_aim
 {
-YOLO11::YOLO11(const std::string & config_path, bool debug)
-: debug_(debug), detector_(config_path, false)
+YOLO11::YOLO11(const std::string & config_path, bool debug, bool single_thread_cpu)
+: debug_(debug), single_thread_cpu_(single_thread_cpu), detector_(config_path, false)
 {
   auto yaml = YAML::LoadFile(config_path);
 
@@ -50,7 +50,8 @@ YOLO11::YOLO11(const std::string & config_path, bool debug)
     .scale(255.0);
 
   model = ppp.build();
-  compiled_model_ = compile_ov_model(core_, model, device_, ov::hint::PerformanceMode::LATENCY);
+  compiled_model_ = compile_ov_model(
+    core_, model, device_, ov::hint::PerformanceMode::LATENCY, single_thread_cpu_ ? 1 : 0);
 }
 
 std::list<Armor> YOLO11::detect(const cv::Mat & raw_img, int frame_count)

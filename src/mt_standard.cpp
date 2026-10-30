@@ -4,9 +4,6 @@
 
 #include "io/camera.hpp"
 // #include "io/dm_imu/dm_imu.hpp"  // [CAN] 已切换为串口通信
-#ifdef SP_WITH_ROS2
-#include "io/ros2/ros2.hpp"
-#endif
 #include "io/serial/serial_board.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 // #include "tasks/auto_aim/multithread/commandgener.hpp"  // [CAN] CommandGener 依赖 CBoard
@@ -43,6 +40,7 @@ int main(int argc, char * argv[])
     return 0;
   }
 
+  tools::Exiter exiter;
   tools::Plotter plotter;
   tools::Recorder recorder;
 
@@ -52,17 +50,6 @@ int main(int argc, char * argv[])
   // io::CBoard cboard(config_path);
 
   io::SerialBoard serial_board(config_path);
-
-#ifdef SP_WITH_ROS2
-  // 云台关节反馈：复用 SerialBoard 的串口接收线程，收到 0x502 新帧即发布一次
-  // JointState，不额外启动程序、不重复占用串口。本入口不订阅导航指令，只开发布侧。
-  io::ROS2 ros2(nullptr, false);
-  serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
-#endif
-
-  // Exiter 必须在 io::ROS2 之后构造：rclcpp::init 会用自带 handler 接管 SIGINT/SIGTERM，
-  // 后安装的 handler 才能让 Ctrl+C 重新置位退出标志，保证主循环正常结束。
-  tools::Exiter exiter;
 
   // [CAN] 多线程检测器，已改为单线程 YOLO
   // auto_aim::multithread::MultiThreadDetector detector(config_path);

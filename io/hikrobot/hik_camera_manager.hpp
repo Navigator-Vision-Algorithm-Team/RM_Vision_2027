@@ -33,9 +33,23 @@ private:
   void rescan();
   const MV_CC_DEVICE_INFO * find(const std::string & serial_number) const;
 
+  // 枚举失败时的诊断日志：区分“缺运行库”和“USB 权限/无相机”两类常见原因。
+  // 同一个错误码只详细打印一次，避免守护线程重连时刷屏。
+  void report_enum_failure(unsigned int ret);
+
+  // libMvCameraControl.so 实际被加载的目录（海康 SDK 只从该目录找传输层等运行库）
+  static std::string sdk_directory();
+
+  // /etc/udev/rules.d 下是否存在海康 MVS 相关规则（仅用于诊断提示）
+  static bool has_hik_udev_rules();
+
   std::mutex mutex_;
   MV_CC_DEVICE_INFO_LIST device_list_{};
   bool enumerated_{false};
+
+  unsigned int last_enum_error_{MV_OK};
+  bool logged_sdk_info_{false};
+  bool logged_no_camera_{false};
 };
 
 }  // namespace io
