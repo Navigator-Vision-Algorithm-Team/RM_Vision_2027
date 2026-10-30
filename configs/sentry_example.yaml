@@ -27,6 +27,11 @@ frame_rate_main: 120.0
 # 0 = 不启用全向感知 (等价于普通自瞄)
 omni_camera_count: 0
 
+# ----- 单主相机（omni_camera_count = 0）丢失目标时的云台行为 -----
+# true  = 自旋扫描：云台按固定步长持续转动，扩大搜索范围（缺省值，保持旧行为）
+# false = 原地保持：停在当前朝向，不转动
+spin_when_no_omni: true
+
 # ----- 全向相机 1 (sursign="omni1") -----
 camera_name_omni1: "hikrobot"
 exposure_ms_omni1: 50.0
@@ -338,3 +343,12 @@ t_camera2gimbal: [0.03084, 0.0, 0.08898]
 # 在日常调试的时候这个地方就是这个地方是false
 use_referee_system: false
 game_state_progress_threshold: 4
+
+## ros 调试相关
+debug_ros2:
+  enable: true
+  namespace: "/sp_debug"
+  image_hz: 15
+  jpeg_quality: 75
+  publish_raw: false
+  publish_yolo_input: true

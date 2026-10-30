@@ -84,6 +84,17 @@ int main(int argc, char * argv[])
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
 
+  // 单主相机（omni_count == 0）时，丢失目标后的云台行为开关：
+  //   true  = 自旋扫描（旧行为，按固定步长持续转动）
+  //   false = 原地保持当前朝向
+  // 缺省 true，保持旧行为；yaml 里写 spin_when_no_omni: false 即可关闭自旋
+  const bool spin_when_no_omni =
+    yaml["spin_when_no_omni"] ? yaml["spin_when_no_omni"].as<bool>() : true;
+  if (omni_count == 0) {
+    tools::logger()->info(
+      "[Main] single main camera, spin when lost: {}", spin_when_no_omni ? "on" : "off");
+  }
+
   // 缓冲时间， 确保全向相机初始化完成，避免出现空帧，但是我们的全向相机和主相机并不在同一个物理链路上，所以这个sleep并没有非常的必要
   // if (omni_count > 0) {
   //   std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -186,7 +197,6 @@ int main(int argc, char * argv[])
   }
 
   bool game_started_logged = false;
-  bool spin_mode_initialized = false;
 
     // 全向感知缓存：全向发现目标后的 yaw/pitch，主相机锁定前反复播报
   bool has_omni_cache = false;
@@ -291,23 +301,25 @@ int main(int argc, char * argv[])
 
     io::Command command{false, false, 0, 0};
 
-    // 如果发现全向相机是0，就打开开始旋转的那个标签。
-    if (omni_count == 0 && !spin_mode_initialized) {
-      spin_mode_initialized = true;
-      tools::logger()->info("[Main] Omni camera count is 0, enabling spin mode");
-    }
-    // 如果全向是0，且已经初始化了旋转模式，且全向相机没有检测到目标，且自瞄状态是丢失，那么就让云台以固定速度旋转
-    // 只是这个一个自旋的逻辑
-    if (omni_count == 0 && spin_mode_initialized && armors.empty() && tracker.state() == "lost") {
-      // 云台自旋的角度增量（不是角速度）：实际转速 ≈ 该增量 × 帧率
-      const double spin_yaw_step = 0.2;
-
-      command.control = true;
+    // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
+    // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
+    // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
+    // 直接走 else 会把云台拽回世界系 0 度。
+    if (omni_count == 0 && armors.empty() && tracker.state() == "lost") {
       command.shoot = false;
-      // gimbal_pos[0] 是云台当前的世界系绝对 yaw，叠加增量后即为世界系绝对目标角
-      // 这个limite_rad是为了防止yaw超过pi或者小于-pi，导致云台旋转过度
-      command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
-      command.pitch = tools::limit_rad(0.0);
+      if (spin_when_no_omni) {
+        // 自旋扫描：云台自旋的角度增量（不是角速度），实际转速 ≈ 该增量 × 帧率
+        const double spin_yaw_step = 0.2;
+        command.control = true;
+        // gimbal_pos[0] 是当前世界系绝对 yaw，叠加增量后即为世界系绝对目标角
+        command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
+        command.pitch = tools::limit_rad(0.0);
+      } else {
+        // 原地保持：gimbal_pos[0]/[1] 是世界系绝对 yaw/pitch，原样下发即为「保持当前角度」
+        command.control = false;
+        command.yaw = gimbal_pos[0];
+        command.pitch = gimbal_pos[1];
+      }
 
       main_recorder.record(img, q_main, timestamp);
       serial_board.send(command);
