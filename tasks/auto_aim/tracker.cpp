@@ -141,7 +141,9 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   // 并且有一个致命的问题，这个的地方写死了图像的大小就是（1440, 1080），这显然是有一些不合理的。
 
   // 优先选择靠近图像中心的装甲板
-  const cv::Point2f img_center(1440.f, 1080.f);  // 后期有精力可以吧这个东西写在config文件中，因为后期我希望大改动一下现在的config文件的读取统一的问题，所以这个先不该动 TODO:
+  // 【修复】原来写成 (1440, 1080)（图像右下角），与注释"靠近图像中心"矛盾，
+  // 等价于优先选右下角的装甲板。改为真正的中心 (720, 540)。
+  const cv::Point2f img_center(720.f, 540.f);
 
   armors.sort([&](const Armor & a, const Armor & b) {
     if (a.priority != b.priority) return a.priority < b.priority;
@@ -195,6 +197,11 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   pre_state_ = state_;
   // 更新状态机
   state_machine(found);
+
+  // 【调试】状态切换打日志：原来代码里没有任何状态切换记录，掉锁原因无法从日志判断
+  if (state_ != pre_state_) {
+    tools::logger()->info("[Tracker] state: {} -> {} (found={})", pre_state_, state_, found);
+  }
 
   // 发散检测
   if (state_ != "lost" && target_.diverged()) {
