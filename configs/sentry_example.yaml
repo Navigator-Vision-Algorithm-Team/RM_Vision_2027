@@ -16,8 +16,10 @@ bullet_speed: 28.0                   # 默认弹速 (m/s), 会被下位机数据
 # ----- 主相机 (sursign="main") -----
 # camera_name 决定相机类型: "hikrobot" | "mindvision" | "Usbcamera"
 camera_name_main: "hikrobot"
-exposure_ms_main: 40.0               # 曝光时间 (ms)
-gain_main: 8.0                     # 增益 (HikRobot 用, MindVision 用 gamma_main)
+# 【调试改动 2026-10-31】40ms 曝光时手持快速移动拖影严重，检测置信度掉到 0.8 以下导致丢帧。
+# 曝光 40→12ms（拖影降为 1/3.3），增益 8→18 补偿亮度（约 +10dB）。
+exposure_ms_main: 12.0               # 曝光时间 (ms)
+gain_main: 18.0                    # 增益 (HikRobot 用, MindVision 用 gamma_main)
 serial_number_main: "DA8419579"              # 相机序列号 (唯一匹配方式)
 transfer_size_main: 1048576            # USB 传输大小 (字节, 1MB)
 frame_rate_main: 120.0             
