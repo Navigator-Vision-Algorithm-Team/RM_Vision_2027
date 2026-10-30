@@ -63,6 +63,10 @@ public:
   void begin_yolo();
   void end_yolo();
 
+  // 推理已由别的线程完成时直接上报耗时（多相机推理池 YoloPipeline），
+  // 效果与 begin_yolo()/end_yolo() 成对调用一致。
+  void yolo_sample(double infer_ms);
+
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

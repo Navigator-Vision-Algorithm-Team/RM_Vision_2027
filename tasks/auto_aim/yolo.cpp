@@ -8,22 +8,22 @@
 
 namespace auto_aim
 {
-YOLO::YOLO(const std::string & config_path, bool debug)
+YOLO::YOLO(const std::string & config_path, bool debug, bool single_thread_cpu)
 {
   auto yaml = YAML::LoadFile(config_path);
   auto yolo_name = yaml["yolo_name"].as<std::string>();
   lock_enabled_ = yaml["yolo_lock"] ? yaml["yolo_lock"].as<bool>() : true;
 
   if (yolo_name == "yolov8") {
-    yolo_ = std::make_unique<YOLOV8>(config_path, debug);
+    yolo_ = std::make_unique<YOLOV8>(config_path, debug, single_thread_cpu);
   }
 
   else if (yolo_name == "yolo11") {
-    yolo_ = std::make_unique<YOLO11>(config_path, debug);
+    yolo_ = std::make_unique<YOLO11>(config_path, debug, single_thread_cpu);
   }
 
   else if (yolo_name == "yolov5") {
-    yolo_ = std::make_unique<YOLOV5>(config_path, debug);
+    yolo_ = std::make_unique<YOLOV5>(config_path, debug, single_thread_cpu);
   }
 
   else {

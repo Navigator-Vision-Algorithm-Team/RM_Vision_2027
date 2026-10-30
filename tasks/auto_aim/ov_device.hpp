@@ -20,9 +20,13 @@ std::string device_from_config(const std::string & configured);
 // 编译 OpenVINO 模型，并兜住"设备不可用"这种纯硬件差异：
 //   device == "auto"：优先 GPU，失败回退 CPU
 //   显式 device     ：失败时告警并回退 CPU（CPU 本身失败则原样抛出）
+//
+// num_threads > 0 时只对 CPU 生效：显式限制每个实例的推理线程数与 stream 数。
+// 多相机场景下每路 YOLO 独占一个 CPU 核，若放任每个实例各开一套线程池，
+// 线程数会按实例数成倍膨胀并互相抢核，因此这里强制单线程。
 ov::CompiledModel compile_ov_model(
   ov::Core & core, const std::shared_ptr<ov::Model> & model, const std::string & device,
-  ov::hint::PerformanceMode mode);
+  ov::hint::PerformanceMode mode, int num_threads = 0);
 
 }  // namespace auto_aim
 

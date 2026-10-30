@@ -228,7 +228,7 @@ bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
 //   }
 // }
 
-// armors 的过滤、优先级设置与排序已在 Perceptron 内完成（那里才有相机几何参数，
+// armors 的过滤、优先级设置与排序已在 omni_jobs 的推理线程内完成（那里才有相机几何参数，
 // 才能保证 delta_yaw/delta_pitch 与 armors.front() 始终指同一块装甲板；
 // 若在这里再过滤一次，front() 可能被移除而使角度失效）。
 // 这里只做两件事：丢弃空结果（否则下面的比较器会对空 list 取 front，属于未定义行为），

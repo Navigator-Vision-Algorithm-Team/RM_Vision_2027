@@ -1,0 +1,19 @@
+# 海康 MVS / HikRobot USB3 工业相机 udev 规则
+#
+# 作用：把相机对应的 /dev/bus/usb/<bus>/<dev> 设备节点权限放开到 0666，
+# 否则普通用户运行视觉程序时 libusb 打不开设备，MV_CC_EnumDevices 会返回
+# MV_E_RESOURCE (0x80000006)，表现为“一台相机都枚举不到”。
+#
+# 安装：
+#   sudo cp io/hikrobot/udev/51-mvs.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   然后重新插拔相机（或重新登录）
+#
+# 内容与 MVS Linux 安装包自带的规则一致（文件名可能是 51-mvs.rules 或
+# 80-drivers-SDK-2bdf.rules），这里取前者，避免与系统已有规则重复。
+
+# 海康 USB3 工业相机（厂商号 0x2bdf）
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="2bdf", MODE="0666", GROUP="plugdev"
+
+# 部分 MVS 版本通过虚拟串口下发相机参数
+ACTION=="add", KERNEL=="ttyvirserial[0-9]*", MODE="0666", GROUP="plugdev"
