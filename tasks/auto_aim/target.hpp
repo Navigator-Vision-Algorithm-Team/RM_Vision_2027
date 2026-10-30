@@ -106,6 +106,11 @@ public:
   size_t nis_window_samples() const;
   size_t min_nis_samples() const;
 
+  // 三个模型的当前概率（M1/M2/M3），供调试展示
+  Eigen::Vector3d model_probabilities() const;
+  // 主模型（M1）的 NIS/dof，理想值 1
+  double nis_ratio() const;
+
   bool diverged() const;
 
   bool convergened();

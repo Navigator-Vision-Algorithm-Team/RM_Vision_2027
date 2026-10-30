@@ -25,6 +25,16 @@ struct DebugStatus
   std::string state;                                     // 业务状态文本（tracker 状态等）
   std::string note;                                      // 额外一行文本，可留空
 
+  // ---- 以下为 IMM/EKF 的预测信息，由业务侧按需填充 ----
+  // has_ekf=false 时面板与 JSON 不输出这一块（例如 soldier 纯 PnP 链路）
+  bool has_ekf = false;
+  Eigen::Vector3d target_center = Eigen::Vector3d::Zero();  // 目标旋转中心（世界系，m）
+  Eigen::Vector2d target_vel = Eigen::Vector2d::Zero();     // 目标速度（世界系，m/s）
+  double target_w = 0.0;                                    // 角速度（rad/s）
+  double target_r = 0.0;                                    // 估计半径（m）
+  Eigen::Vector3d model_prob = Eigen::Vector3d::Zero();     // IMM 三个模型的概率
+  double nis_ratio = 0.0;                                   // NIS/dof，理想 1
+
   // 【新增】EKF 遥测：只有带 tracker 的入口会填；valid=false 时不发布 ekf 话题
   struct Ekf
   {

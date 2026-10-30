@@ -12,6 +12,7 @@
 // ============================================================================
 
 #include <chrono>
+#include <fmt/core.h>
 #include <cmath>
 #include <opencv2/opencv.hpp>
 #include <thread>
@@ -137,6 +138,20 @@ int main(int argc, char * argv[])
     // 0x0402 下发到下位机，由下位机驱动云台；shoot 恒为 0
     serial_board.send(command);
 
+    // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
+    // soldier 走的是「单板 PnP 直接瞄准」，没有 EKF/IMM，所以不填 has_ekf，
+    // 只用 note 显示当前 PnP 距离与世界坐标，保证面板上的数值信息不丢
+    std::string note;
+    if (target != armors.end()) {
+      note = fmt::format(
+        "pnp  {:.2f} m  world ({:+.2f}, {:+.2f}, {:+.2f})", target->xyz_in_gimbal.norm(),
+        target->xyz_in_world.x(), target->xyz_in_world.y(), target->xyz_in_world.z());
+    }
+
+    debug.publish(
+      armors, auto_aim::DebugStatus{
+                gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
+                command.shoot, target != armors.end() ? "aim" : "no_target", note});
     // 【新增】调试数据流：检测框 + YOLO FPS + 云台/目标位姿 + EKF 遥测 + 预测命中点
     auto_aim::DebugStatus dbg_status{
       gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control, command.shoot,

@@ -406,9 +406,20 @@ int main(int argc, char * argv[])
           cv::circle(img, pt, 2, cv::Scalar(0, 0, 255), -1);
         }
       }
-      cv::putText(img,
-        fmt::format("State: {} | Targets: {}", tracker.state(), targets.size()),
-        cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+      // HUD：状态 + IMM 的预测信息（距离 / 角速度 / 模型概率 / NIS 一致性）
+      std::string hud = fmt::format("State: {} | Targets: {}", tracker.state(), targets.size());
+      if (!targets.empty()) {
+        const auto & target = targets.front();
+        const Eigen::VectorXd x = target.ekf_x();
+        if (x.size() >= 11) {
+          const Eigen::Vector3d mu = target.model_probabilities();
+          hud += fmt::format(
+            " | d {:.2f}m w {:+.1f} mu {:.2f}/{:.2f}/{:.2f} nis {:.2f}", std::hypot(x[0], x[2]),
+            x[7], mu[0], mu[1], mu[2], target.nis_ratio());
+        }
+      }
+      cv::putText(
+        img, hud, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
 
       main_recorder.record(img, q_main, timestamp);
 
