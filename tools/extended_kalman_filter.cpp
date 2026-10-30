@@ -78,9 +78,10 @@ Eigen::VectorXd ExtendedKalmanFilter::predict(
 Eigen::VectorXd ExtendedKalmanFilter::update(
   const Eigen::VectorXd & z, const Eigen::MatrixXd & H, const Eigen::MatrixXd & R,
   std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract,
-  double dt)
+  double dt, const Eigen::MatrixXd & R_monitor)
 {
-  return update(z, H, R, [&](const Eigen::VectorXd & x) { return H * x; }, z_subtract, dt);
+  return update(
+    z, H, R, [&](const Eigen::VectorXd & x) { return H * x; }, z_subtract, dt, R_monitor);
 }
 
 Eigen::VectorXd ExtendedKalmanFilter::update(
@@ -94,7 +95,7 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
   const Eigen::VectorXd & z, const Eigen::MatrixXd & H, const Eigen::MatrixXd & R,
   std::function<Eigen::VectorXd(const Eigen::VectorXd &)> h,
   std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract,
-  double dt)
+  double dt, const Eigen::MatrixXd & R_monitor)
 {
   if (I.rows() != x.rows()) I = Eigen::MatrixXd::Identity(x.rows(), x.rows());
 
@@ -105,8 +106,11 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
   // 新息（innovation）
   const Eigen::VectorXd innovation = z_subtract(z, h(x_prior));
 
-  // 监控用的新息协方差：始终基于原始 R，保证 NIS 与 Tracker 的失配判据口径不变
-  const Eigen::MatrixXd S_monitor = H * P_prior * H.transpose() + R;
+  // 监控用的新息协方差：优先用 R_monitor（未乘在线自适应因子的基准 R），
+  // 未提供时退回 R。这样 NIS 与 Tracker 的失配判据口径不受自适应缩放影响，
+  // 切断「R 缩放 -> NIS 变化 -> 再缩放 R」的自指回路
+  const Eigen::MatrixXd & R_mon = R_monitor.size() == 0 ? R : R_monitor;
+  const Eigen::MatrixXd S_monitor = H * P_prior * H.transpose() + R_mon;
   Eigen::LDLT<Eigen::MatrixXd> ldlt_monitor(S_monitor);
   const bool s_ok =
     ldlt_monitor.info() == Eigen::Success && ldlt_monitor.vectorD().minCoeff() > 0.0;
@@ -177,6 +181,10 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
 
   x = x_add(x_prior, K * innovation);
 
+  // 反馈用的 NIS：基于实际参与更新的 S（含在线自适应因子与 Huber 权重），
+  // 供 R 自适应闭环使用；监控 NIS 仍用上面的 R_monitor，两者互不干扰
+  const double nis_feedback = innovation.dot(S_inv * innovation);
+
   total_count_++;
   if (nis_fail) nis_fail_count_++;
 
@@ -209,6 +217,7 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
   }
 
   data["nis"] = nis;
+  data["nis_feedback"] = nis_feedback;
   data["log_det_s"] = log_det_s;
   data["nis_threshold"] = threshold;
   data["nis_fail"] = nis_fail ? 1.0 : 0.0;  // 每帧复位，不再“一红到底”

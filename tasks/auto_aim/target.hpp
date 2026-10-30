@@ -24,6 +24,18 @@ struct ModelConfig
   bool damping = false;  // true: 平移速度指数衰减（静止）
 };
 
+// 观测噪声 R 的在线自适应：用监控 NIS 反馈一个全局缩放因子
+struct AdaptiveRConfig
+{
+  bool enable = false;        // 默认关闭，需要显式开启
+  double tau_seconds = 2.0;   // 反馈时间常数，越小平滑越差但收敛越快
+  double min_scale = 0.05;
+  double max_scale = 20.0;
+  size_t start_samples = 30;  // 冷启动保护：前 N 次更新不调整
+  double ratio_min = 0.25;    // 单帧 NIS/dof 限幅，防止一帧离群把 scale 拉飞
+  double ratio_max = 4.0;
+};
+
 // IMM / EKF 的全部可调参数，默认值与 configs/IMM.yaml 一致
 struct TargetConfig
 {
@@ -60,6 +72,8 @@ struct TargetConfig
   double dist_offset = 1.0;
   double ayaw_gain = 0.005;
   double ayaw_offset = 0.09;
+
+  AdaptiveRConfig adaptive_r;
 
   // 初始协方差对角（顺序 x vx y vy z vz a w r l h ax ay az）
   std::array<double, 14> p0{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1, 25, 25, 25}};
@@ -110,6 +124,8 @@ public:
   Eigen::Vector3d model_probabilities() const;
   // 主模型（M1）的 NIS/dof，理想值 1
   double nis_ratio() const;
+  // R 的当前在线自适应缩放因子（未开启时恒为 1）
+  double r_scale() const { return r_scale_; }
 
   bool diverged() const;
 
@@ -129,6 +145,7 @@ private:
   // 3 模型 IMM：M1 常规 / M2 高机动 / M3 静止阻尼
   static constexpr int MODEL_NUM = 3;
   TargetConfig config_;
+  double r_scale_ = 1.0;  // 观测噪声 R 的在线自适应缩放因子
   std::array<tools::ExtendedKalmanFilter, MODEL_NUM> ekf_;
   std::array<double, MODEL_NUM> mu_{{0.8, 0.15, 0.05}};
   Eigen::MatrixXd Pi_;      // 模型转移矩阵 Pi_(i,j) = P(i -> j)

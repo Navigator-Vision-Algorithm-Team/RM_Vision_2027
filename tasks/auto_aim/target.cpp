@@ -85,6 +85,17 @@ TargetConfig TargetConfig::load(const std::string & path)
       if (m["distance_offset"]) cfg.dist_offset = m["distance_offset"].as<double>();
       if (m["armor_yaw_gain"]) cfg.ayaw_gain = m["armor_yaw_gain"].as<double>();
       if (m["armor_yaw_offset"]) cfg.ayaw_offset = m["armor_yaw_offset"].as<double>();
+
+      if (m["adaptive_scale"]) {
+        const auto & a = m["adaptive_scale"];
+        if (a["enable"]) cfg.adaptive_r.enable = a["enable"].as<bool>();
+        if (a["tau_seconds"]) cfg.adaptive_r.tau_seconds = a["tau_seconds"].as<double>();
+        if (a["min_scale"]) cfg.adaptive_r.min_scale = a["min_scale"].as<double>();
+        if (a["max_scale"]) cfg.adaptive_r.max_scale = a["max_scale"].as<double>();
+        if (a["start_samples"]) cfg.adaptive_r.start_samples = a["start_samples"].as<size_t>();
+        if (a["ratio_min"]) cfg.adaptive_r.ratio_min = a["ratio_min"].as<double>();
+        if (a["ratio_max"]) cfg.adaptive_r.ratio_max = a["ratio_max"].as<double>();
+      }
     }
 
     if (yaml["initial_covariance"] && yaml["initial_covariance"].IsSequence()) {
@@ -452,18 +463,26 @@ void Target::update_ypda(const std::vector<MatchedArmor> & matched, double dt)
   const int m = 4 * n;
   const int state_dim = static_cast<int>(ekf_[0].x.rows());
 
-  // 量测 z 与噪声 R 与模型无关，先统一构造
+  // 量测 z 与基准噪声 R_base 与模型无关，先统一构造
   Eigen::VectorXd z(m);
-  Eigen::MatrixXd R = Eigen::MatrixXd::Zero(m, m);
+  Eigen::MatrixXd R_base = Eigen::MatrixXd::Zero(m, m);
   std::vector<int> ids(n);
 
   for (int k = 0; k < n; k++) {
     const Armor & armor = *matched[k].armor;
     ids[k] = matched[k].id;
-    R.block(4 * k, 4 * k, 4, 4) = measurement_noise(armor).asDiagonal();
+    R_base.block(4 * k, 4 * k, 4, 4) = measurement_noise(armor).asDiagonal();
     z.segment<4>(4 * k) << armor.ypd_in_world[0], armor.ypd_in_world[1], armor.ypd_in_world[2],
       armor.ypr_in_world[0];
   }
+
+  // 实际参与状态更新的 R：在线自适应因子**只作用于 distance 分量**。
+  // yaw/pitch 的角度噪声本来就准，跟着缩放会让小陀螺/近距离场景明显退化
+  // （实测全局缩放时 spin 的 pos_rmse 恶化 20%）。
+  // 基准 R 单独传给 EKF 做 NIS 监控，切断「缩放 R -> NIS 变化 -> 再缩放 R」的自指回路
+  Eigen::MatrixXd scale_mat = Eigen::MatrixXd::Identity(m, m);
+  for (int k = 0; k < n; k++) scale_mat(4 * k + 2, 4 * k + 2) = r_scale_;
+  const Eigen::MatrixXd R_update = scale_mat * R_base;
 
   // 非线性转换函数 h: x -> z，按 4 维一组堆叠
   auto h = [&](const Eigen::VectorXd & x) -> Eigen::VectorXd {
@@ -499,7 +518,8 @@ void Target::update_ypda(const std::vector<MatchedArmor> & matched, double dt)
       H.block(4 * k, 0, 4, state_dim) = h_jacobian(ekf_[j].x, ids[k]);
     }
 
-    ekf_[j].update(z, H, R, h, z_subtract, dt);
+    // 更新用 R_update（含自适应），监控用 R_base（固定），两者分开
+    ekf_[j].update(z, H, R_update, h, z_subtract, dt, R_base);
 
     const auto & data = ekf_[j].data;
     const double nis_j = data.count("nis") ? data.at("nis") : 0.0;
@@ -529,6 +549,33 @@ void Target::update_ypda(const std::vector<MatchedArmor> & matched, double dt)
   double normalize = 0.0;
   for (int j = 0; j < MODEL_NUM; j++) normalize += mu_[j];
   for (int j = 0; j < MODEL_NUM; j++) mu_[j] /= normalize;
+
+  // ---- R 在线自适应：用主模型（M1）的监控 NIS 反馈一个全局缩放因子 ----
+  // 监控 NIS 基于 R_base，与 r_scale_ 无关，因此不会自激
+  if (config_.adaptive_r.enable) {
+    const auto & data0 = ekf_[0].data;
+    if (
+      ekf_[0].total_count() >= static_cast<int>(config_.adaptive_r.start_samples) &&
+      data0.count("nis")) {
+      // 反馈必须用「实际更新 R」算出的 NIS 才能闭环；监控 NIS 基于固定 R_base，
+      // 用它做反馈会让 r_scale 一路缩到下限
+      const double nis =
+        data0.count("nis_feedback") ? data0.at("nis_feedback") : data0.at("nis");
+      const double dof = std::max(static_cast<double>(m), 1.0);
+
+      // 单帧限幅：防止一帧离群把 scale 拉飞
+      const double ratio = std::clamp(
+        nis / dof, config_.adaptive_r.ratio_min, config_.adaptive_r.ratio_max);
+
+      // 一阶低通，时间常数 tau：alpha = dt / tau
+      const double alpha = std::clamp(dt / config_.adaptive_r.tau_seconds, 0.0, 1.0);
+      if (alpha > 0.0) r_scale_ *= std::pow(ratio, alpha);
+
+      r_scale_ =
+        std::clamp(r_scale_, config_.adaptive_r.min_scale, config_.adaptive_r.max_scale);
+    }
+  }
+  ekf_[0].data["r_scale"] = r_scale_;
 
   fuse();
 
