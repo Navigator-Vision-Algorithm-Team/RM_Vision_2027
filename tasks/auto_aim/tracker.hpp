@@ -17,7 +17,9 @@ namespace auto_aim
 class Tracker
 {
 public:
-  Tracker(const std::string & config_path, Solver & solver);
+  // solve_armors=false 时跳过 Solver::solve（供离线合成数据回放使用，
+  // 此时 Armor 的 xyz/ypd 已由数据源直接给出）
+  Tracker(const std::string & config_path, Solver & solver, bool solve_armors = true);
 
   std::string state() const;
   void reset();
@@ -32,12 +34,14 @@ public:
 
 private:
   Solver & solver_;
+  bool solve_armors_;
   Color enemy_color_;
   int min_detect_count_;
   int max_temp_lost_count_;
   int detect_count_;
   int temp_lost_count_;
-  int outpost_max_temp_lost_count_;
+  // 3V3 无前哨站，前哨站专用丢失容忍计数已停用
+  // int outpost_max_temp_lost_count_;
   int normal_temp_lost_count_;
   std::string state_, pre_state_;
   Target target_;
@@ -48,7 +52,8 @@ private:
 
   bool set_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t);
 
-  bool update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t);
+  bool update_target(
+    std::list<Armor> & armors, std::chrono::steady_clock::time_point t, double dt);
 };
 
 }  // namespace auto_aim

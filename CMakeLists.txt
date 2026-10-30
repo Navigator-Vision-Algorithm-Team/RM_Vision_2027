@@ -89,6 +89,11 @@ else()
     message(STATUS "ROS2 environment not found, skipping ROS2-related code.")
 endif()
 
+##################benchmarks##############
+# EKF 离线基准（合成数据生成 + 评分）：不需要相机 / 串口 / ROS2，
+# 数据与报告落在 logs/ekf_bench/（logs/ 已被 .gitignore 覆盖）
+add_subdirectory(benchmarks/ekf)
+
 ####################tests###################
 # 调试版入口（sentry_multithread_debug / soldier_debug）：业务逻辑与 src/ 完全一致，
 # 只额外通过 ROS2 向 Foxglove 推送图像与位姿，仅在找到 ROS2 时构建

@@ -32,3 +32,5 @@ cmake-build-debug/
 .serena
 
 benchmarks
+
+benchmarks/
