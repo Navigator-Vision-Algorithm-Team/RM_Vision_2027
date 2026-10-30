@@ -14,18 +14,24 @@ namespace
 {
 struct MotionModel
 {
-  double v1;     // 线加速度方差
-  double v2;     // 角加速度方差
-  bool damping;  // 速度是否指数衰减（静止模型）
+  double sa2;    // 每帧加速度增量的方差 (m/s^2)^2
+  double v2;     // 角加速度方差 (rad/s^2)^2
+  bool ca;       // true: 加速度状态延续（匀加速）；false: 每帧清零（匀速）
+  bool damping;  // true: 平移速度按 alpha 指数衰减（静止）
 };
 
-// M1 常规 / M2 高机动 / M3 静止阻尼
-// M1 的 v2 不能太小：小陀螺（6~8 rad/s）时角速度需要足够的门限才能跟上，
-// 太小会迫使 M2 频繁接管，混合后反而拖慢 w 的响应
+// M1 匀速 / M2 匀加速 / M3 静止
+// 现在 M1 与 M2 的 F 真正不同：M1 把加速度状态清零（CV），M2 保留并参与递推（CA）。
+// 这才是 IMM 意义上的“多运动模型”，而不是仅靠 Q 大小区分的两个同构滤波器。
+// sa2 是“每帧加速度增量的方差”。注意 CA 模型里速度噪声由加速度积分而来，
+// 每秒只累积 sqrt(sa2)，比直接给速度加噪声慢得多，所以 M2 的 sa2 要给到 10 量级
+// 才能覆盖 0.5s 内 4m/s 的急停急起（a ≈ 8 m/s^2）
+// CV 模型（M1/M3）里 sa2 直接决定速度的过程噪声：速度每帧标准差 = sqrt(sa2)*dt
+// 100Hz 下 sa2=10 -> 0.03 m/s，与旧版 v1=10 等价；M3 取 0.1 表示几乎不动
 constexpr MotionModel MOTION_MODELS[3] = {
-  {10.0, 150.0, false},
-  {1000.0, 400.0, false},
-  {0.1, 150.0, true},
+  {10.0, 150.0, false, false},  // M1 匀速
+  {10.0, 400.0, true, false},   // M2 匀加速
+  {0.1, 150.0, false, true},    // M3 静止
 };
 }  // namespace
 
@@ -53,11 +59,13 @@ Target::Target(
   auto center_y = xyz[1] + r * std::sin(ypr[0]);
   auto center_z = xyz[2];
 
-  // x vx y vy z vz a w r l h
+  // x vx y vy z vz a w r l h ax ay az
   // a: angle
   // w: angular velocity
   // l: r2 - r1
   // h: z2 - z1
+  // 加速度（ax/ay/az）放在末尾，保证 0~10 的索引与旧版完全一致：
+  // aimer / planner / shooter / commandgener 里的 ekf_x()[...] 全部无需改动
   /*
   | 下标 | 状态量  | 含义               |
 | -: | ---- | ---------------- |
@@ -72,8 +80,13 @@ Target::Target(
 |  8 | `r`  | 第一组装甲板到旋转中心的半径   |
 |  9 | `l`  | 两组装甲板半径差，`r2-r1` |
 | 10 | `h`  | 两组装甲板高度差，`z2-z1` |
+| 11 | `ax` | 旋转中心在 x 方向的加速度   |
+| 12 | `ay` | 旋转中心在 y 方向的加速度   |
+| 13 | `az` | 旋转中心在 z 方向的加速度   |
   */
-  Eigen::VectorXd x0{{center_x, 0, center_y, 0, center_z, 0, ypr[0], 0, r, 0, 0}};  //初始化预测量
+  // 索引：x vx y vy z vz a w r l h ax ay az
+  Eigen::VectorXd x0{
+    {center_x, 0, center_y, 0, center_z, 0, ypr[0], 0, r, 0, 0, 0, 0, 0}};  //初始化预测量
   Eigen::MatrixXd P0 = P0_dig.asDiagonal();
 
   init_models(x0, P0);
@@ -81,8 +94,8 @@ Target::Target(
 
 Target::Target(double x, double vyaw, double radius, double h) : armor_num_(4)
 {
-  Eigen::VectorXd x0{{x, 0, 0, 0, 0, 0, 0, vyaw, radius, 0, h}};
-  Eigen::VectorXd P0_dig{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
+  Eigen::VectorXd x0{{x, 0, 0, 0, 0, 0, 0, vyaw, radius, 0, h, 0, 0, 0}};
+  Eigen::VectorXd P0_dig{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
   Eigen::MatrixXd P0 = P0_dig.asDiagonal();
 
   init_models(x0, P0);
@@ -180,12 +193,17 @@ void Target::predict(double dt)
   }
 
   // ---- 2) 各模型从混合初值出发独立预测 ----
-  // Piecewise White Noise 模型：Q 的每个 2x2 块秩恒为 1（a*c - b^2 ≡ 0），
-  // 对正负 dt 都半正定；负 dt（Planner 回推轨迹）时交叉项 b = dt^3/2 自然变号，
-  // 对应时间反演下“位置误差与速度误差负相关”，因此这里保留带符号的 dt
-  const double a = dt * dt * dt * dt / 4.0;
-  const double b = dt * dt * dt / 2.0;
-  const double cc = dt * dt;
+  // 状态索引：0:x 1:vx 2:y 3:vy 4:z 5:vz 6:a 7:w 8:r 9:l 10:h 11:ax 12:ay 13:az
+  // 加速度放在末尾，保持既有 0~10 的索引不变（aimer/planner/shooter 无需改动）
+  constexpr int GROUPS[3][3] = {{0, 1, 11}, {2, 3, 12}, {4, 5, 13}};
+
+  // 加速度增量 Δa ~ N(0, sa2) 通过一帧传播到位置/速度的系数
+  const double dt2 = dt * dt;
+  const double q_pp = dt2 * dt2 / 4.0;  // 位置-位置
+  const double q_pv = dt2 * dt / 2.0;   // 位置-速度
+  const double q_vv = dt2;              // 速度-速度
+  const double q_pa = dt2 / 2.0;        // 位置-加速度
+  const double q_va = dt;               // 速度-加速度
 
   // M3 静止模型的速度衰减时间常数（太小会拖累小陀螺的 w 估计）
   constexpr double DAMPING_TAU = 0.30;
@@ -195,42 +213,60 @@ void Target::predict(double dt)
     ekf_[j].x = x_mix[j];
     ekf_[j].P = P_mix[j];
 
-    Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim, state_dim);
-    F(0, 1) = dt;
-    F(2, 3) = dt;
-    F(4, 5) = dt;
-    F(6, 7) = dt;
+    const auto & model = MOTION_MODELS[j];
 
-    if (MOTION_MODELS[j].damping) {
-      // 只阻尼平移速度：静止蹲点指机器人不移动，但仍可能原地小陀螺，
-      // 若把角速度也阻尼到 0，会把 spin/close_fast 的 w 估计一起拖垮
-      F(0, 1) = alpha * dt;
-      F(2, 3) = alpha * dt;
-      F(4, 5) = alpha * dt;
-      F(1, 1) = alpha;
-      F(3, 3) = alpha;
-      F(5, 5) = alpha;
+    Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim, state_dim);
+    F(6, 7) = dt;  // 角度：a' = a + w*dt
+
+    for (int g = 0; g < 3; g++) {
+      const int p = GROUPS[g][0], v = GROUPS[g][1], acc = GROUPS[g][2];
+
+      if (model.damping) {
+        // 静止：平移速度指数衰减、加速度清零；角速度不阻尼（目标仍可原地小陀螺）
+        F(p, v) = alpha * dt;
+        F(v, v) = alpha;
+        F(acc, acc) = 0.0;
+      } else if (model.ca) {
+        // 匀加速：位置与速度都吃加速度项。
+        // 加速度自身带 0.95 的轻微阻尼：纯随机游走会让加速度无界漂移，
+        // 远距离弱观测时（far_noisy）会把位置和 yaw 一起带抖
+        constexpr double ACC_DAMPING = 0.90;
+        F(p, v) = dt;
+        F(p, acc) = 0.5 * dt * dt;
+        F(v, v) = 1.0;
+        F(v, acc) = dt;
+        F(acc, acc) = ACC_DAMPING;
+      } else {
+        // 匀速：加速度每帧清零，不参与位置/速度递推
+        F(p, v) = dt;
+        F(v, v) = 1.0;
+        F(acc, acc) = 0.0;
+      }
     }
 
-    const double v1 = MOTION_MODELS[j].v1;
-    const double v2 = MOTION_MODELS[j].v2;
+    const double sa2 = model.sa2;
+    const double v2 = model.v2;
+
     Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(state_dim, state_dim);
-    Q(0, 0) = a * v1;
-    Q(0, 1) = b * v1;
-    Q(1, 0) = b * v1;
-    Q(1, 1) = cc * v1;
-    Q(2, 2) = a * v1;
-    Q(2, 3) = b * v1;
-    Q(3, 2) = b * v1;
-    Q(3, 3) = cc * v1;
-    Q(4, 4) = a * v1;
-    Q(4, 5) = b * v1;
-    Q(5, 4) = b * v1;
-    Q(5, 5) = cc * v1;
-    Q(6, 6) = a * v2;
-    Q(6, 7) = b * v2;
-    Q(7, 6) = b * v2;
-    Q(7, 7) = cc * v2;
+
+    for (int g = 0; g < 3; g++) {
+      const int p = GROUPS[g][0], v = GROUPS[g][1], acc = GROUPS[g][2];
+      Q(p, p) = q_pp * sa2;
+      Q(p, v) = q_pv * sa2;
+      Q(v, p) = q_pv * sa2;
+      Q(v, v) = q_vv * sa2;
+      Q(p, acc) = q_pa * sa2;
+      Q(acc, p) = q_pa * sa2;
+      Q(v, acc) = q_va * sa2;
+      Q(acc, v) = q_va * sa2;
+      Q(acc, acc) = sa2;
+    }
+
+    // 角度/角速度：沿用 PV 模型的 2x2 块
+    Q(6, 6) = q_pp * v2;
+    Q(6, 7) = q_pv * v2;
+    Q(7, 6) = q_pv * v2;
+    Q(7, 7) = q_vv * v2;
 
     auto f = [&](const Eigen::VectorXd & x) -> Eigen::VectorXd {
       Eigen::VectorXd x_prior = F * x;
@@ -454,7 +490,7 @@ std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
 {
   std::vector<Eigen::Vector4d> _armor_xyza_list;
 
-  if (x_fused_.size() < 11) return _armor_xyza_list;
+  if (x_fused_.size() < 14) return _armor_xyza_list;
 
   for (int i = 0; i < armor_num_; i++) {
     auto angle = tools::limit_rad(x_fused_[6] + i * 2 * CV_PI / armor_num_);
@@ -466,7 +502,7 @@ std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
 
 bool Target::diverged() const
 {
-  if (x_fused_.size() < 11) return true;
+  if (x_fused_.size() < 14) return true;
 
   auto r_ok = x_fused_[8] > 0.05 && x_fused_[8] < 0.5;
   auto l_ok = x_fused_[8] + x_fused_[9] > 0.05 && x_fused_[8] + x_fused_[9] < 0.5;
@@ -522,12 +558,14 @@ Eigen::MatrixXd Target::h_jacobian(const Eigen::VectorXd & x, int id) const
 
   auto dz_dh = (use_l_h) ? 1.0 : 0.0;
 
+  // 列索引：0:x 1:vx 2:y 3:vy 4:z 5:vz 6:a 7:w 8:r 9:l 10:h 11:ax 12:ay 13:az
+  // 加速度三列对观测量没有直接偏导（位置只依赖 x/y/z 与几何量），保持为 0
   // clang-format off
   Eigen::MatrixXd H_armor_xyza{
-    {1, 0, 0, 0, 0, 0, dx_da, 0, dx_dr, dx_dl,     0},
-    {0, 0, 1, 0, 0, 0, dy_da, 0, dy_dr, dy_dl,     0},
-    {0, 0, 0, 0, 1, 0,     0, 0,     0,     0, dz_dh},
-    {0, 0, 0, 0, 0, 0,     1, 0,     0,     0,     0}
+    {1, 0, 0, 0, 0, 0, dx_da, 0, dx_dr, dx_dl,     0, 0, 0, 0},
+    {0, 0, 1, 0, 0, 0, dy_da, 0, dy_dr, dy_dl,     0, 0, 0, 0},
+    {0, 0, 0, 0, 1, 0,     0, 0,     0,     0, dz_dh, 0, 0, 0},
+    {0, 0, 0, 0, 0, 0,     1, 0,     0,     0,     0, 0, 0, 0}
   };
   // clang-format on
 

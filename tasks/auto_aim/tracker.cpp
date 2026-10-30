@@ -316,7 +316,11 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   //     Target(armor, t, 0.2765, 3, Eigen::VectorXd{{1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0}});
   // } else {
   // 其余兵种（含哨兵、步兵、英雄）统一按 4 块装甲板、半径 0.2m 建模
-  target_ = Target(armor, t, 0.2, 4, Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}});
+  // P0 顺序：x vx y vy z vz a w r l h ax ay az
+  // 加速度初始方差 25（σ=5 m/s^2），覆盖急停急起与变向的量级
+  target_ = Target(
+    armor, t, 0.2, 4,
+    Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1, 25, 25, 25}});
   // }
 
   return true;
