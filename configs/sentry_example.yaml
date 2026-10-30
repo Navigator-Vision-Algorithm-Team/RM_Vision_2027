@@ -30,7 +30,7 @@ omni_camera_count: 0
 # ----- 单主相机（omni_camera_count = 0）丢失目标时的云台行为 -----
 # true  = 自旋扫描：云台按固定步长持续转动，扩大搜索范围（缺省值，保持旧行为）
 # false = 原地保持：停在当前朝向，不转动
-spin_when_no_omni: true
+spin_when_no_omni: false
 
 # ----- 全向相机 1 (sursign="omni1") -----
 camera_name_omni1: "hikrobot"
@@ -352,3 +352,5 @@ debug_ros2:
   jpeg_quality: 75
   publish_raw: false
   publish_yolo_input: true
+  # PnP 一级校验：在 image 话题的图上叠加「检测点 vs 重投影点 + 残差 + 板面三轴」
+  pnp_check: true
