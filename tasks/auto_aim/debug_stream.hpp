@@ -35,6 +35,7 @@ struct DebugStatus
 //
 // 话题（默认，<ns>/<tag> 前缀）：
 //   image         sensor_msgs/CompressedImage  原图 + YOLO 框 + 敌人编号 + FPS/位姿叠加
+//                                              + PnP 一级校验（重投影点 / 残差 / 板面三轴，见 debug_stream.cpp）
 //   image_raw     sensor_msgs/CompressedImage  相机原图（可选）
 //   yolo_input    sensor_msgs/CompressedImage  YOLO 预处理后的输入图（可选）
 //   status        std_msgs/String              JSON：FPS / 推理耗时 / 云台位姿 / 目标位姿

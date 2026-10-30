@@ -352,3 +352,5 @@ debug_ros2:
   jpeg_quality: 75
   publish_raw: false
   publish_yolo_input: true
+  # PnP 一级校验：在 image 话题的图上叠加「检测点 vs 重投影点 + 残差 + 板面三轴」
+  pnp_check: true

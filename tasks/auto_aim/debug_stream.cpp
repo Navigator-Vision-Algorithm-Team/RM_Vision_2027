@@ -14,6 +14,10 @@
 #include <utility>
 #include <vector>
 
+// PnP 一级校验：与 Solver 共用同一份解算内核（tasks/auto_aim/pnp.cpp），
+// 调试线程里重算一次位姿再投影回图像，不改变主链路任何行为。
+#include "pnp.hpp"
+
 // SP_WITH_ROS2 由 io 目标在找到 ROS2 时以 PUBLIC 方式定义（见 io/CMakeLists.txt）。
 // 没有该宏时本文件整体退化为空实现，业务代码无需任何 #ifdef。
 #ifdef SP_WITH_ROS2
@@ -40,6 +44,7 @@ struct Options
   int jpeg_quality = 75;
   bool publish_raw = false;
   bool publish_yolo_input = true;
+  bool pnp_check = true;     // 在推流图像上叠加 PnP 一级校验（重投影点 + 板面三轴）
 };
 
 Options load_options(const YAML::Node & yaml)
@@ -54,6 +59,7 @@ Options load_options(const YAML::Node & yaml)
   if (y["jpeg_quality"]) o.jpeg_quality = std::clamp(y["jpeg_quality"].as<int>(), 1, 100);
   if (y["publish_raw"]) o.publish_raw = y["publish_raw"].as<bool>();
   if (y["publish_yolo_input"]) o.publish_yolo_input = y["publish_yolo_input"].as<bool>();
+  if (y["pnp_check"]) o.pnp_check = y["pnp_check"].as<bool>();
   return o;
 }
 
@@ -83,6 +89,37 @@ RoiCfg load_roi(const YAML::Node & yaml)
     }
   }
   return r;
+}
+
+// ---------------- PnP 一级校验的内参 ----------------
+
+// 与 Solver 完全同源：读同一个 yaml 的 camera_matrix / distort_coeffs。
+// 一级校验只依赖内参，不碰 R_camera2gimbal / IMU，所以看到的重投影残差
+// 可以直接归因到「检测点 + PnP」本身。
+struct PnpCfg
+{
+  cv::Mat camera_matrix;   // 3x3 CV_64F，空 = 未配置
+  cv::Mat distort_coeffs;  // 1xN CV_64F，可空（= 无畸变）
+
+  bool ready() const { return camera_matrix.rows == 3 && camera_matrix.cols == 3; }
+};
+
+PnpCfg load_pnp_cfg(const YAML::Node & yaml)
+{
+  PnpCfg c;
+  try {
+    if (yaml["camera_matrix"]) {
+      auto d = yaml["camera_matrix"].as<std::vector<double>>();
+      if (d.size() == 9) c.camera_matrix = cv::Mat(3, 3, CV_64F, d.data()).clone();
+    }
+    if (yaml["distort_coeffs"]) {
+      auto d = yaml["distort_coeffs"].as<std::vector<double>>();
+      if (!d.empty()) c.distort_coeffs = cv::Mat(1, static_cast<int>(d.size()), CV_64F, d.data()).clone();
+    }
+  } catch (const std::exception &) {
+    c = PnpCfg{};
+  }
+  return c;
 }
 
 // ---------------- 图像处理（全部在工作线程执行） ----------------
@@ -150,10 +187,124 @@ void draw_panel(cv::Mat & img, const std::vector<std::string> & lines, double s)
   }
 }
 
-// 在原始图像上叠加：YOLO 检测框 + 敌人数字标记 + FPS/位姿文字
+// ---------------------------------------------------------------------------
+//  PnP 一级校验（只看内参，不含外参 / IMU）
+//
+//  对每块装甲板重跑一次 solve_pnp_armor()（与 Solver::solve 同一份内核），
+//  然后把解出来的位姿重新投影回图像：
+//      · 绿色十字   = 4 个模型点按解出位姿重投影的位置
+//      · 连线       = 检测点 -> 重投影点，<1px 绿 / <3px 黄 / 更大 红
+//      · 三色细线    = R_armor2camera 的三列（X 红 / Y 绿 / Z 蓝），即装甲板姿态
+//      · 框角 px 数字 = 该板的 reprojection_error（4 点平均）
+//  位姿正确时十字应精确压住检测点，连线长度就是残差。
+//  注意：这里在调试工作线程重新解算，主线程零额外开销。
+// ---------------------------------------------------------------------------
+struct PnpStats
+{
+  int solved = 0;       // 成功解算的装甲板数
+  double mean_px = 0;   // 各板 reprojection_error 的均值
+  double max_px = 0;    // 单板最差
+};
+
+PnpStats draw_pnp_check(
+  cv::Mat & img, const std::list<Armor> & armors, const PnpCfg & cfg, double s)
+{
+  PnpStats st;
+  if (!cfg.ready() || armors.empty()) return st;
+
+  const int thick = std::max(1, static_cast<int>(std::round(1.2 * s)));
+  const int cross = std::max(4, static_cast<int>(std::round(7 * s)));
+  const cv::Vec3d zero(0, 0, 0);
+
+  for (const auto & armor : armors) {
+    const auto pnp = solve_pnp_armor(armor, cfg.camera_matrix, cfg.distort_coeffs);
+    if (!pnp.success) continue;
+
+    // 位姿 -> rvec/tvec：直接复用内核给出的 R / t，不在调试侧重新求解
+    cv::Mat rmat;
+    cv::eigen2cv(pnp.R_armor2camera, rmat);
+    cv::Vec3d rvec;
+    cv::Rodrigues(rmat, rvec);
+    const cv::Vec3d tvec(
+      pnp.xyz_in_camera.x(), pnp.xyz_in_camera.y(), pnp.xyz_in_camera.z());
+
+    // --- 1) 4 个模型点重投影：与检测点逐点比对 ---
+    const auto & object_points = armor_object_points(armor.type);
+    std::vector<cv::Point2f> reprojected;
+    cv::projectPoints(
+      object_points, rvec, tvec, cfg.camera_matrix, cfg.distort_coeffs, reprojected);
+    if (reprojected.size() != armor.points.size()) continue;
+
+    for (std::size_t i = 0; i < reprojected.size(); ++i) {
+      const double e = cv::norm(armor.points[i] - reprojected[i]);
+      const cv::Scalar c = (e < 1.0)   ? cv::Scalar(0, 255, 0)
+                           : (e < 3.0) ? cv::Scalar(0, 255, 255)
+                                       : cv::Scalar(0, 0, 255);
+      cv::line(img, armor.points[i], reprojected[i], c, thick, cv::LINE_AA);
+      cv::drawMarker(img, reprojected[i], c, cv::MARKER_CROSS, cross, thick, cv::LINE_AA);
+    }
+
+    // --- 2) 板面三轴：R 的三列就是三根正交单位向量，投到图上即姿态 ---
+    //     点在相机系下给出，所以 rvec = tvec = 0；z<=0 说明解跑到相机后方，跳过
+    const double axis_len = (armor.type == ArmorType::big) ? 0.14 : 0.09;
+    const Eigen::Vector3d & c0 = pnp.xyz_in_camera;
+    std::vector<cv::Point3f> cam_points;
+    cam_points.emplace_back(
+      static_cast<float>(c0.x()), static_cast<float>(c0.y()), static_cast<float>(c0.z()));
+    for (int i = 0; i < 3; ++i) {
+      const Eigen::Vector3d p = c0 + pnp.R_armor2camera.col(i) * axis_len;
+      cam_points.emplace_back(
+        static_cast<float>(p.x()), static_cast<float>(p.y()), static_cast<float>(p.z()));
+    }
+
+    if (cam_points[0].z > 1e-3) {
+      std::vector<cv::Point2f> axis_px;
+      cv::projectPoints(cam_points, zero, zero, cfg.camera_matrix, cfg.distort_coeffs, axis_px);
+      // BGR：X 红 / Y 绿 / Z 蓝
+      const cv::Scalar axis_color[3] = {
+        cv::Scalar(0, 0, 255), cv::Scalar(0, 255, 0), cv::Scalar(255, 0, 0)};
+      const char * axis_name[3] = {"X", "Y", "Z"};
+      for (int i = 0; i < 3; ++i) {
+        cv::line(img, axis_px[0], axis_px[i + 1], axis_color[i], thick, cv::LINE_AA);
+        cv::putText(
+          img, axis_name[i],
+          cv::Point(
+            static_cast<int>(axis_px[i + 1].x + 3 * s), static_cast<int>(axis_px[i + 1].y - 3 * s)),
+          cv::FONT_HERSHEY_SIMPLEX, 0.5 * s, axis_color[i], thick, cv::LINE_AA);
+      }
+    }
+
+    // --- 3) 该板的「重投影误差 + 距离」，贴在框下方（避开左上角标签与中心数字）---
+    //     距离可以直接拿卷尺量着核对：单目尺度全由大/小装甲板宽度决定，
+    //     type 判错时距离会成比例偏掉。
+    const std::string text =
+      fmt::format("{:.1f}px {:.2f}m", pnp.reprojection_error, pnp.xyz_in_camera.norm());
+    const cv::Scalar tc = (pnp.reprojection_error < 1.0)   ? cv::Scalar(0, 255, 0)
+                          : (pnp.reprojection_error < 3.0) ? cv::Scalar(0, 255, 255)
+                                                           : cv::Scalar(0, 0, 255);
+    int base = 0;
+    const auto tsize = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5 * s, thick, &base);
+    const cv::Point org(
+      std::max(0, std::min(armor.box.x, img.cols - tsize.width - 1)),
+      std::max(
+        tsize.height + 2,
+        std::min(armor.box.y + armor.box.height + tsize.height + 2, img.rows - 2)));
+    cv::putText(img, text, org, cv::FONT_HERSHEY_SIMPLEX, 0.5 * s, tc, thick, cv::LINE_AA);
+
+    st.solved += 1;
+    st.mean_px += pnp.reprojection_error;
+    st.max_px = std::max(st.max_px, pnp.reprojection_error);
+  }
+
+  if (st.solved > 0) st.mean_px /= st.solved;
+  return st;
+}
+
+// 在原始图像上叠加：YOLO 检测框 + 敌人数字标记 + PnP 校验 + FPS/位姿文字
 void annotate(
   cv::Mat & img, const std::list<Armor> & armors, const DebugStatus & status, double loop_fps,
-  double yolo_fps, double yolo_ms, const std::string & tag)
+  double yolo_fps, double yolo_ms, const std::string & tag, const PnpCfg & pnp_cfg,
+  bool pnp_check)
 {
   const double s = std::max(0.5, img.cols / 1280.0);
   const int thick = std::max(1, static_cast<int>(std::round(2 * s)));
@@ -189,6 +340,10 @@ void annotate(
     for (const auto & p : armor.points) cv::circle(img, p, std::max(2, thick + 1), color, -1);
   }
 
+  // PnP 一级校验：检测点 vs 重投影点 + 板面三轴（画在框和关键点之上）
+  PnpStats pnp_stats;
+  if (pnp_check) pnp_stats = draw_pnp_check(img, armors, pnp_cfg, s);
+
   std::vector<std::string> lines;
   lines.push_back(fmt::format(
     "[{}] YOLO {:.1f} FPS ({:.1f} ms)  loop {:.1f} Hz  boxes {}", tag, yolo_fps, yolo_ms, loop_fps,
@@ -208,6 +363,19 @@ void annotate(
     "delta   yaw {:+.1f}  pitch {:+.1f}  (deg)   {}",
     (status.target_ypr[0] - status.gimbal_ypr[0]) * kRad2Deg,
     (status.target_ypr[1] - status.gimbal_ypr[1]) * kRad2Deg, status.shoot ? "FIRE" : ""));
+
+  // PnP 校验结果：绿色十字 = 重投影，连线 = 残差，三色细线 = 板面 X/Y/Z 轴
+  if (pnp_check) {
+    if (!pnp_cfg.ready()) {
+      lines.push_back("pnp    [!] 缺少 camera_matrix，一级校验未绘制");
+    } else if (pnp_stats.solved == 0) {
+      lines.push_back("pnp    no solution");
+    } else {
+      lines.push_back(fmt::format(
+        "pnp    reproj mean {:.2f} px  max {:.2f} px  ({}/{})", pnp_stats.mean_px, pnp_stats.max_px,
+        pnp_stats.solved, armors.size()));
+    }
+  }
 
   if (!status.note.empty()) lines.push_back(status.note);
 
@@ -268,6 +436,7 @@ struct DebugStream::Impl
 {
   Options opt;
   RoiCfg roi;
+  PnpCfg pnp_cfg;
   int input_size = 640;
   bool on = false;
   std::string tag;
@@ -333,6 +502,7 @@ DebugStream::Impl::Impl(const std::string & config_path, std::string tag_) : tag
   opt = load_options(yaml);
   roi = load_roi(yaml);
   input_size = load_input_size(yaml);
+  pnp_cfg = load_pnp_cfg(yaml);
 
   if (!opt.enable) return;
   while (!opt.ns.empty() && opt.ns.back() == '/') opt.ns.pop_back();
@@ -367,6 +537,17 @@ DebugStream::Impl::Impl(const std::string & config_path, std::string tag_) : tag
     RCLCPP_INFO(
       node->get_logger(), "调试数据流已启动：%s/{image,image_raw,yolo_input,status,gimbal_pose,target_pose}",
       prefix.c_str());
+
+    // PnP 一级校验的状态提示：缺内参时不会画，先说清楚，免得以为是没实现
+    if (!opt.pnp_check) {
+      RCLCPP_INFO(node->get_logger(), "PnP 一级校验：关闭（debug_ros2.pnp_check=false）");
+    } else if (!pnp_cfg.ready()) {
+      RCLCPP_WARN(
+        node->get_logger(), "PnP 一级校验：已开启但未读到 camera_matrix（需 9 个数），叠加层不绘制");
+    } else {
+      RCLCPP_INFO(
+        node->get_logger(), "PnP 一级校验：已叠加到 image 话题（检测点 vs 重投影点 + 板面三轴）");
+    }
   } catch (const std::exception & e) {
     std::fprintf(stderr, "[DebugStream] ROS2 初始化失败（%s），调试数据流关闭\n", e.what());
     on = false;
@@ -438,7 +619,9 @@ void DebugStream::Impl::emit(Job & job)
   }
 
   // 3) 原图 + 检测框 + 数字编号 + FPS/位姿叠加
-  annotate(job.raw, job.armors, job.status, job.loop_fps, job.yolo_fps, job.yolo_ms, tag);
+  annotate(
+    job.raw, job.armors, job.status, job.loop_fps, job.yolo_fps, job.yolo_ms, tag, pnp_cfg,
+    opt.pnp_check);
   publish_jpeg(pub_image, job.raw, stamp, frame_id, opt.jpeg_quality);
 
   // 4) 状态 JSON

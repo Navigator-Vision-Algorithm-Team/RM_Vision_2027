@@ -83,3 +83,7 @@ debug_ros2:
   jpeg_quality: 75        # 1-100，越小带宽越低
   publish_raw: false      # 是否额外推送相机原图
   publish_yolo_input: true # 是否推送 YOLO 预处理后的输入图（ROI + letterbox）
+  # PnP 一级校验：在 image 话题的图上叠加「检测点 vs 重投影点 + 残差 + 板面三轴」。
+  # 只依赖上面的 camera_matrix / distort_coeffs，用来单独验证 PnP 本身对不对；
+  # 内参缺失时自动不绘制（不影响其他叠加层）。
+  pnp_check: true
