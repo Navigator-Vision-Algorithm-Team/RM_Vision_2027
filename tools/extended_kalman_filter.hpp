@@ -36,18 +36,23 @@ public:
 
   /// dt 为本次更新对应的时间间隔（秒），仅用于 NIS 的按时间窗口统计；
   /// 传入 <=0 时沿用上一次的时间间隔
+  ///
+  /// R          : 实际参与状态更新的观测噪声（可含在线自适应因子）
+  /// R_monitor  : NIS 监控用的观测噪声，留空则退回 R。
+  ///              传入「未乘自适应因子的基准 R」可切断 R 与 NIS 的自指回路，
+  ///              保证 nis_failure_rate / Tracker 的 lost 判据口径不变
   Eigen::VectorXd update(
     const Eigen::VectorXd & z, const Eigen::MatrixXd & H, const Eigen::MatrixXd & R,
     std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract =
       [](const Eigen::VectorXd & a, const Eigen::VectorXd & b) { return a - b; },
-    double dt = -1.0);
+    double dt = -1.0, const Eigen::MatrixXd & R_monitor = Eigen::MatrixXd());
 
   Eigen::VectorXd update(
     const Eigen::VectorXd & z, const Eigen::MatrixXd & H, const Eigen::MatrixXd & R,
     std::function<Eigen::VectorXd(const Eigen::VectorXd &)> h,
     std::function<Eigen::VectorXd(const Eigen::VectorXd &, const Eigen::VectorXd &)> z_subtract =
       [](const Eigen::VectorXd & a, const Eigen::VectorXd & b) { return a - b; },
-    double dt = -1.0);
+    double dt = -1.0, const Eigen::MatrixXd & R_monitor = Eigen::MatrixXd());
 
   // 便捷重载：线性观测 + 只指定时间间隔
   Eigen::VectorXd update(
