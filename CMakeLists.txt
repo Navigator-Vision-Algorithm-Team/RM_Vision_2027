@@ -113,7 +113,9 @@ foreach(ex ${ALL_EXES})
 endforeach()
 
 # 2) 相机 SDK 动态库（目录由 cmake/platform.cmake 按架构给出，打包进 bin/ 以便 $ORIGIN 找到）
-install(FILES "${SP_HIKROBOT_LIB_DIR}/libMvCameraControl.so" DESTINATION bin)
+#    海康的 libMvUsb3vTL.so / libMediaProcess.so 等必须与 libMvCameraControl.so 同目录，
+#    SDK 才能找到 USB3 传输层（否则枚举直接返回 MV_E_RESOURCE），所以整目录一起打包
+install(DIRECTORY "${SP_HIKROBOT_LIB_DIR}/" DESTINATION bin FILES_MATCHING PATTERN "*.so*")
 install(FILES "${SP_MINDVISION_LIB_DIR}/libMVSDK.so" DESTINATION bin)
 
 # 3) OpenVINO 运行库 + TBB（仅当链接的是项目内置 3rd_part 版本时打包，使 install/ 自包含）

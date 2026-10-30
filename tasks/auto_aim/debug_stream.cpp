@@ -561,9 +561,18 @@ void DebugStream::end_yolo()
   auto & d = *impl_;
   if (!d.on) return;
 
+  const double ms =
+    std::chrono::duration<double, std::milli>(Clock::now() - d.t_yolo_begin).count();
+  yolo_sample(ms);
+}
+
+void DebugStream::yolo_sample(double infer_ms)
+{
+  auto & d = *impl_;
+  if (!d.on) return;
+
   const auto now = Clock::now();
-  const double ms = std::chrono::duration<double, std::milli>(now - d.t_yolo_begin).count();
-  d.yolo_ms = d.yolo_ms <= 0 ? ms : 0.9 * d.yolo_ms + 0.1 * ms;
+  d.yolo_ms = d.yolo_ms <= 0 ? infer_ms : 0.9 * d.yolo_ms + 0.1 * infer_ms;
 
   if (d.have_yolo_last) {
     const double dt = std::chrono::duration<double>(now - d.t_yolo_last).count();

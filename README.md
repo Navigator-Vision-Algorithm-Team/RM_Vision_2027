@@ -55,11 +55,24 @@
 
    **1.3 相机 SDK（arm64 动态库已随仓库提供，无需额外安装 SDK 本体）：**
    - [MindVision SDK](https://mindvision.com.cn/category/software/sdk-installation-package/)或[HikRobot SDK](https://www.hikrobotics.com/cn2/source/support/software/MVS_STD_GML_V2.1.2_231116.zip)
-   - 仅需从上述 SDK 安装包中提取 **udev 规则**（如 `51-mvs.rules`），否则无权限访问 USB 相机：
+   - 仅需从上述 SDK 安装包中提取 **udev 规则**（如 `51-mvs.rules`），否则无权限访问 USB 相机。
+     仓库已附带一份等价规则 `io/hikrobot/udev/51-mvs.rules`，直接安装即可：
    ```bash
-   sudo cp <SDK中的>.rules /etc/udev/rules.d/
-   sudo udevadm control --reload && sudo udevadm trigger
+   sudo cp io/hikrobot/udev/51-mvs.rules /etc/udev/rules.d/
+   sudo udevadm control --reload-rules && sudo udevadm trigger
+   # 然后重新插拔相机
    ```
+   - **海康运行时库必须与 `libMvCameraControl.so` 同目录**：SDK 内部只从自身所在目录
+     加载 `libMvUsb3vTL.so`（USB3 传输层）与 `libMediaProcess.so` 等辅助库，缺库时
+     `MV_CC_EnumDevices` 会返回 `MV_E_RESOURCE (0x80000006)`，现象是一台相机都枚举不到。
+     仓库已在 `io/hikrobot/lib/{amd64,arm64}/` 中提供这套运行库，安装时会一起复制到
+     `install/bin/`。
+   - **海康 SDK 版本锁定为 `3.2.1.0`**：`io/hikrobot/include`、`lib/{amd64,arm64}` 下的
+     控制库、传输层、图像处理库与头文件必须来自**同一个 MVS 版本**。只换其中一部分时，
+     枚举（`MV_CC_EnumDevices`）往往还能过，但一开设备（`MV_CC_OpenDevice`）就返回
+     `MV_E_VERSION (0x80000009)` —— 本项目踩过这个坑：控制库 4.1.2.2 + 传输层 3.2.1.0。
+     升级 SDK 请整套替换（include + `libMvCameraControl.so` + `libMvUsb3vTL.so` +
+     `libMediaProcess.so` + `libMVRender.so` + `libFormatConversion.so`）。
    - 运行时库路径配置：**用 `install/` 部署时不需要任何配置**（`bin/` 内 `.so` 通过
      `$ORIGIN` 自包含）；只有在 `build/` 里直接运行时可执行文件才需要下面二选一：
    ```bash

@@ -4,11 +4,22 @@
 #include <string>
 #include <vector>
 
+// AngleAxisd 定义在 Geometry 里；omni_pnp.hpp 只引了 <Eigen/Core>（Matrix/Vector），
+// 所以这里显式补上，避免依赖 tasks/auto_aim/pnp.hpp 的传导包含。
+#include <Eigen/Geometry>
+
 #include "tasks/auto_aim/pnp.hpp"
 #include "tools/logger.hpp"
 
 namespace omniperception
 {
+// -----------------------------------------------------------------------------
+//  数据来源（实车配置 configs/sentry_example.yaml）：
+//    · 内参 K / 畸变 D <- yaml 的 omni_camera_matrix_N / omni_distort_coeffs_N
+//    · 外参 R / t      <- 入口查 tf 树 tf.frames.omni_cam_N（本文件只负责接收参数）
+//    · 本文件两个近似函数（approximate_camera_matrix / mount_to_R_camera2gimbal）
+//      只在标定值缺失时作为兜底被 decider.cpp 调用，正常不会执行。
+// -----------------------------------------------------------------------------
 
 void load_omni_pnp_config(OmniCameraConfig & cfg, const YAML::Node & yaml, int index)
 {
@@ -20,6 +31,7 @@ void load_omni_pnp_config(OmniCameraConfig & cfg, const YAML::Node & yaml, int i
 
   // ---- 内参 ----
   if (exists("omni_camera_matrix_")) {
+    // 注意：这里没有 try/catch，值不是数字时会抛 YAML::TypedBadConversion（健壮性缺口）
     auto d = yaml["omni_camera_matrix_" + suffix].as<std::vector<double>>();
     if (d.size() == 9) {
       // yaml 里按行优先填写，转成 Eigen 行优先矩阵后再转 cv::Mat
@@ -46,7 +58,18 @@ void load_omni_pnp_config(OmniCameraConfig & cfg, const YAML::Node & yaml, int i
   }
   // 未配置 => 保持空 Mat => solvePnP 视为无畸变
 
-  // ---- 外参（R 与 t 必须成对）----
+  // ---- 外参（R 与 t 必须成对；实车由 tf 树覆盖，这里只作兜底）----
+  //
+  //  日志策略（重要）：
+  //    · 键【不存在】时这里不打 warn。本函数看不到 tf 树，不知道入口会不会用
+  //      tf.frames.omni_cam_N 兜底（实车就是这种情况）；此时若报警
+  //      "将用安装角近似"，会与实际行为矛盾，属于误导。
+  //    · 键存在但【个数不对】仍然 warn：那是配置写错了，无论 tf 有没有兜底都该修。
+  //    · "是否真的落到安装角近似"由调用方（sentry_multithread.cpp）在查完 tf
+  //      之后统一判断并打日志，见那里的三态说明。
+  //
+  //  出口状态：函数返回时 cfg.has_extrinsic 恰好表示「yaml 是否提供了有效外参」，
+  //            调用方直接读它即可，不需要额外的返回值。
   const bool has_R = exists("omni_R_camera2gimbal_");
   const bool has_t = exists("omni_t_camera2gimbal_");
   if (has_R && has_t) {
@@ -62,12 +85,8 @@ void load_omni_pnp_config(OmniCameraConfig & cfg, const YAML::Node & yaml, int i
         "[omni{}] omni_R_camera2gimbal_{} 需要 9 个数、omni_t_camera2gimbal_{} 需要 3 个数，已忽略",
         index, index, index);
     }
-  } else {
-    tools::logger()->warn(
-      "[omni{}] 未配置 omni_R_camera2gimbal_{}/omni_t_camera2gimbal_{} -> "
-      "将用安装角 mount_yaw/mount_pitch 近似外参（占位方案）",
-      index, index, index);
   }
+  // 未配置 -> cfg.has_extrinsic 保持 false，外参来源交给调用方决定
 }
 
 namespace
@@ -80,10 +99,11 @@ constexpr double MAX_TARGET_DISTANCE = 30.0;  // m
 constexpr double MIN_CAMERA_Z = 1e-3;         // m，相机系 z 太小说明点在相机后方/镜面上
 }  // namespace
 
+//内参K未配置时用FOV估计：
 cv::Mat approximate_camera_matrix(
   const cv::Size & image_size, double fov_h_deg, double fov_v_deg)
 {
-  // 参数不合法时返回空 Mat，调用方会据此回退到旧方法。
+  // 参数不合法时返回空 Mat，调用方（decider）会据此回退到旧的像素线性近似。
   if (image_size.width <= 0 || image_size.height <= 0 || fov_h_deg <= 0 || fov_v_deg <= 0) {
     return {};
   }

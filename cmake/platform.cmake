@@ -48,6 +48,21 @@ foreach(_sdk_lib
   endif()
 endforeach()
 
+# 海康 SDK 的 USB3 传输层与图像处理库必须与 libMvCameraControl.so 同目录：
+# SDK 内部按“自身所在目录”去加载它们，缺失时 MV_CC_EnumDevices 会直接返回
+# MV_E_RESOURCE(0x80000006)，表现为“一台相机都枚举不到”。
+# 这里在配置阶段就拦住，避免又打出一个跑不起来的包。
+foreach(_hik_runtime
+    libMvUsb3vTL.so libMediaProcess.so libMVRender.so libFormatConversion.so)
+  if(NOT EXISTS "${SP_HIKROBOT_LIB_DIR}/${_hik_runtime}")
+    message(FATAL_ERROR
+      "[platform] 缺少海康 SDK 运行时库：${SP_HIKROBOT_LIB_DIR}/${_hik_runtime}\n"
+      "海康 SDK 只从 libMvCameraControl.so 所在目录加载传输层/图像处理库，"
+      "缺库会导致枚举返回 MV_E_RESOURCE(0x80000006)。\n"
+      "请从对应架构的 MVS 安装包（lib/64，arm64 为 lib/aarch64）补齐后重试。")
+  endif()
+endforeach()
+
 # ---------- OpenVINO ----------
 # 仓库自带两套官方运行库（架构相关，必须分开存放）：
 #   3rd_part/openvino_2024.6.0/aarch64/runtime/  l_openvino_toolkit_ubuntu20_2024.6.0_arm64

@@ -4,6 +4,7 @@
 #include <chrono>
 
 #include "hik_camera_manager.hpp"
+#include "hik_error.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
 
@@ -180,7 +181,8 @@ bool HikRobot::capture_start()
       tools::logger()->info("[{}] MV_CC_{} OK, handle={}", device_name_, step, fmt::ptr(handle_));
     else
       tools::logger()->warn(
-        "[{}] MV_CC_{} failed: {:#x}, handle={}", device_name_, step, ret_code, fmt::ptr(handle_));
+        "[{}] MV_CC_{} failed: {:#x} ({}), handle={}", device_name_, step, ret_code,
+        hik_error_name(ret_code), fmt::ptr(handle_));
   };
 
   // 致命步骤失败：统一走 capture_stop() 释放句柄与已打开的设备

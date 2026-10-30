@@ -207,24 +207,28 @@ bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
   return armors.empty();
 }
 
-/*
-  设置装甲板的优先级。
-  TODO: 这里的优先级逻辑需要根据实际比赛情况进行调整，确保优先攻击最有价值的目标。
-*/
-void Decider::set_priority(std::list<auto_aim::Armor> & armors)
-{
-  if (armors.empty()) return;
+// 【已停用】后续无法可靠判断兵种(ArmorName)，暂停按兵种设置优先级。
+// 停用后所有装甲板保持 ArmorPriority::fifth 默认值，Tracker 里的优先级比较
+// 全部退化为相等，目标选择实际依赖“离图像中心最近”这一 tie-break。
+// 恢复时取消下面注释，并同时恢复 decider.hpp 的声明、映射表与两处调用。
+// /*
+//   设置装甲板的优先级。
+//   TODO: 这里的优先级逻辑需要根据实际比赛情况进行调整，确保优先攻击最有价值的目标。
+// */
+// void Decider::set_priority(std::list<auto_aim::Armor> & armors)
+// {
+//   if (armors.empty()) return;
+//
+//   const PriorityMap & priority_map = (mode_ == MODE_ONE) ? mode1 : mode2;
+//
+//   if (!armors.empty()) {
+//     for (auto & armor : armors) {
+//       armor.priority = priority_map.at(armor.name);
+//     }
+//   }
+// }
 
-  const PriorityMap & priority_map = (mode_ == MODE_ONE) ? mode1 : mode2;
-
-  if (!armors.empty()) {
-    for (auto & armor : armors) {
-      armor.priority = priority_map.at(armor.name);
-    }
-  }
-}
-
-// armors 的过滤、优先级设置与排序已在 Perceptron 内完成（那里才有相机几何参数，
+// armors 的过滤、优先级设置与排序已在 omni_jobs 的推理线程内完成（那里才有相机几何参数，
 // 才能保证 delta_yaw/delta_pitch 与 armors.front() 始终指同一块装甲板；
 // 若在这里再过滤一次，front() 可能被移除而使角度失效）。
 // 这里只做两件事：丢弃空结果（否则下面的比较器会对空 list 取 front，属于未定义行为），

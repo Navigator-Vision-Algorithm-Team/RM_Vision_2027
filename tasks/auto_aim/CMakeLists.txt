@@ -30,6 +30,8 @@ add_library(auto_aim OBJECT
     yolos/yolo11.cpp
     multithread/commandgener.cpp
     multithread/mt_detector.cpp
+    # 多相机推理池：一路相机一个 YOLO 实例 + 固定核线程 + 主相机优先的结果队列
+    multithread/yolo_pipeline.cpp
     # planner/planner.cpp            # MPC，暂不编译，见 docs/unused_code.md
 )
 
