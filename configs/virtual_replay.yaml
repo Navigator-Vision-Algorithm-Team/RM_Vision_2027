@@ -1,0 +1,42 @@
+# =============================================================================
+#  回放模式配置：按录制时间戳复现上一次 fake/real 运行（用于复现 bug）
+#
+#  用法：
+#    ./build/virtual_run configs/virtual_replay.yaml
+#    ./build/mt_standard  configs/virtual_replay.yaml
+#
+#  注意：回放时务必关闭记录（record.enable=false），否则会覆盖被回放的文件。
+# =============================================================================
+
+source_mode: "replay"
+fault_seed: 20261015
+
+# ------------------------------ 串口 / 四元数源 ------------------------------
+serial_mode: "replay"
+serial_replay_file: "logs/virtual_session/serial.bin"
+com_port: "/dev/ttyACM0"
+baud_rate: 921600
+bullet_speed: 28.0
+use_referee_system: false
+game_start_progress_threshold: 4
+
+# ------------------------------ 相机源 ------------------------------
+camera_mode: "replay"
+camera_name_main: "replay"
+camera_replay_dir: "logs/virtual_session"   # 含 camera.tsv 与 camera/*.png
+camera_width: 1440
+camera_height: 1080
+camera_frame_rate: 30.0
+
+# ------------------------------ 记录（回放时关闭） ------------------------------
+record:
+  enable: false
+  dir: "logs/virtual_session"
+  save_images: true
+
+# ------------------------------ 业务参数占位 ------------------------------
+enemy_color: "red"
+yolo_name: "yolov5"
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
+yolov5_model_path: "assets/yolov5.xml"
+min_confidence: 0.8

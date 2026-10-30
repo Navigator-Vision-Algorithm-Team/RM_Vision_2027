@@ -1,0 +1,187 @@
+#include "subscribe2nav.hpp"
+
+#include <chrono>
+#include <sstream>
+#include <utility>
+#include <vector>
+
+namespace io
+{
+
+Subscribe2Nav::Subscribe2Nav(std::function<void(const NavCommand &)> nav_sender)
+: Node("nav_subscriber"),
+  // enemy_statue_queue_(1),
+  // autoaim_target_queue_(1),
+  // enemy_status_counter_(0),
+  // autoaim_target_counter_(0),
+  move_info_queue_(1),
+  move_info_counter_(0),
+  nav_sender_(std::move(nav_sender))
+{
+  // enemy_status_subscription_ = this->create_subscription<sp_msgs::msg::EnemyStatusMsg>(
+  //   "enemy_status", 10,
+  //   std::bind(&Subscribe2Nav::enemy_status_callback, this, std::placeholders::_1));
+
+  // autoaim_target_subscription_ = this->create_subscription<sp_msgs::msg::AutoaimTargetMsg>(
+  //   "autoaim_target", 10,
+  //   std::bind(&Subscribe2Nav::autoaim_target_callback, this, std::placeholders::_1));
+
+  move_info_subscription_ = this->create_subscription<geometry_msgs::msg::Twist>(
+    "/red_standard_robot1/cmd_vel",
+    10,
+    std::bind(&Subscribe2Nav::move_info_callback, this, std::placeholders::_1)
+  );
+
+  RCLCPP_INFO(this->get_logger(), "nav_subscriber node initialized.");
+
+  // 启动独立线程：收到导航数据后立即发送，不依赖主循环节奏，
+  // 避免主链路（视觉处理）的耗时限慢导航指令下发。
+  if (nav_sender_) {
+    nav_forward_thread_ = std::thread(&Subscribe2Nav::nav_forward_loop, this);
+  }
+}
+
+Subscribe2Nav::~Subscribe2Nav()
+{
+  nav_quit_.store(true);
+  if (nav_forward_thread_.joinable()) nav_forward_thread_.join();
+
+  RCLCPP_INFO(this->get_logger(), "nav_subscriber node shutting down.");
+}
+
+// void Subscribe2Nav::enemy_status_callback(const sp_msgs::msg::EnemyStatusMsg::SharedPtr msg)
+// {
+//   enemy_statue_queue_.clear();
+//   enemy_statue_queue_.push(*msg);
+
+//   enemy_status_counter_++;
+
+//   if (enemy_status_counter_ >= 2) {
+//     if (enemy_status_timer_) {
+//       enemy_status_timer_->cancel();
+//     }
+//     enemy_status_timer_ = this->create_wall_timer(std::chrono::milliseconds(1500), [this]() {
+//       enemy_statue_queue_.clear();
+//       enemy_status_counter_ = 0;
+//       RCLCPP_INFO(
+//         this->get_logger(), "Enemy status queue cleared due to inactivity after two messages.");
+//     });
+//   }
+// }
+
+    // void Subscribe2Nav::autoaim_target_callback(const sp_msgs::msg::AutoaimTargetMsg::SharedPtr msg)
+    // {
+    //   autoaim_target_queue_.clear();
+    //   autoaim_target_queue_.push(*msg);
+
+    //   autoaim_target_counter_++;
+
+    //   if (autoaim_target_counter_ >= 2) {
+    //     if (autoaim_target_timer_) {
+    //       autoaim_target_timer_->cancel();
+    //     }
+    //     autoaim_target_timer_ = this->create_wall_timer(std::chrono::milliseconds(1500), [this]() {
+    //       autoaim_target_queue_.clear();
+    //       autoaim_target_counter_ = 0;
+    //       RCLCPP_INFO(
+    //         this->get_logger(), "Autoaim target queue cleared due to inactivity after two messages.");
+    //     });
+    //   }
+    // }
+
+void Subscribe2Nav::move_info_callback(const geometry_msgs::msg::Twist::SharedPtr msg){
+  move_info_queue_.clear();
+  move_info_queue_.push(*msg);
+
+  move_info_counter_++;
+
+  if (move_info_counter_ >= 2){
+    if(move_info_timer_){
+      move_info_timer_->cancel();
+    }
+  move_info_timer_ = this->create_wall_timer(std::chrono::milliseconds(1500), [this](){
+    move_info_queue_.clear();
+    move_info_counter_ = 0;
+    RCLCPP_INFO(
+      this->get_logger(), "move info queue cleared due to inactivity after two messages.");
+    });
+  }
+}
+
+void Subscribe2Nav::start()
+{
+  RCLCPP_INFO(this->get_logger(), "nav_subscriber node Starting to spin...");
+  rclcpp::spin(this->shared_from_this());
+}
+
+// std::vector<int8_t> Subscribe2Nav::subscribe_enemy_status()
+// {
+//   if (enemy_statue_queue_.empty()) {
+//     return std::vector<int8_t>();
+//   }
+//   sp_msgs::msg::EnemyStatusMsg msg;
+
+//   enemy_statue_queue_.back(msg);
+//   RCLCPP_INFO(
+//     this->get_logger(), "Subscribe enemy_status at: %d.%09u", msg.timestamp.sec,
+//     msg.timestamp.nanosec);
+
+//   return msg.invincible_enemy_ids;
+// }
+
+// std::vector<int8_t> Subscribe2Nav::subscribe_autoaim_target()
+// {
+//   if (autoaim_target_queue_.empty()) {
+//     return std::vector<int8_t>();
+//   }
+//   sp_msgs::msg::AutoaimTargetMsg msg;
+
+//   autoaim_target_queue_.back(msg);
+//   RCLCPP_INFO(
+//     this->get_logger(), "Subscribe autoaim_target at: %d.%09u", msg.timestamp.sec,
+//     msg.timestamp.nanosec);
+
+//   return msg.target_ids;
+// }
+
+NavCommand Subscribe2Nav::twist_to_nav_command(const geometry_msgs::msg::Twist & msg)
+{
+  NavCommand nav_command;
+
+  nav_command.vx = msg.linear.x;
+  nav_command.vy = msg.linear.y;
+  nav_command.wz = msg.angular.z;  // 与 Python serial_node / 导航规范一致：旋转角速度在 angular.z
+
+  return nav_command;
+}
+
+void Subscribe2Nav::nav_forward_loop()
+{
+  RCLCPP_INFO(this->get_logger(), "nav forward thread started (send on receive).");
+
+  while (!nav_quit_.load()) {
+    geometry_msgs::msg::Twist msg;
+
+    // 阻塞等待导航数据；超时后继续循环以检查退出标志
+    if (!move_info_queue_.try_pop_for(msg, std::chrono::milliseconds(100))) continue;
+
+    if (nav_sender_) nav_sender_(twist_to_nav_command(msg));
+  }
+
+  RCLCPP_INFO(this->get_logger(), "nav forward thread stopped.");
+}
+
+NavCommand Subscribe2Nav::subscribe_move_info(){
+  if (move_info_queue_.empty()) {
+    return NavCommand();
+  }
+  geometry_msgs::msg::Twist msg;
+
+  move_info_queue_.back(msg);
+  RCLCPP_INFO(
+    this->get_logger(), "Subscribe move");
+
+  return twist_to_nav_command(msg);
+}
+
+}  // namespace io

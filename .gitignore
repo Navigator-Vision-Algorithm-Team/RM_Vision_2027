@@ -1,69 +1,32 @@
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
-*.so.*
-
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
-
-# Executables
-*.exe
-*.out
-*.app
-
-# Build directories
+.vscode/
+.github/
 build/
-Build/
-build-*/
+Camera/
+logs/
+assets/img_with_q/
+records/
+records_auto_buff_big/
+records_new/
+imgs/
+MvSdkLog/
+testvideos/
+watchdog.sh
+records_24/
+records_25/
+.claude/
+.idea/
+patterns
+promote/
+build-debug/
 
-# CMake generated files
-CMakeFiles/
-CMakeCache.txt
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
+# mock-input 分支新增：本地构建产物（install/ 未纳入版本控制，882MB）
+install/
 
-# Temporary files
-*.tmp
-*.log
-*.bak
-*.swp
+# 标定采集的图片与结果（体积大，且因机器而异）
+calibration/out/
 
-# vcpkg
-vcpkg_installed/
+# mock-input 分支新增：Python 虚拟下位机的字节码缓存
+__pycache__/
+cmake-build-debug/
 
-# debug information files
-*.dwo
-
-# test output & cache
-Testing/
-.cache/
+.serena

@@ -1,0 +1,61 @@
+# =============================================================================
+#  异常注入配置：在伪数据上注入丢包 / 延迟 / 跳变 / 校验错误 / 黑屏 / 过曝 / 噪声
+#  （固定 fault_seed，异常序列可复现，用于测试算法鲁棒性）
+#
+#  用法：./build/virtual_run configs/virtual_fault.yaml --duration=10
+# =============================================================================
+
+source_mode: "fake"
+fault_seed: 20261015           # 固定种子 → 异常可复现
+
+# ------------------------------ 串口 / 四元数源 ------------------------------
+serial_mode: "fake"
+fake_serial_external: false
+com_port: "/dev/ttyACM0"
+baud_rate: 921600
+bullet_speed: 28.0
+use_referee_system: false
+game_start_progress_threshold: 4
+fake_imu_hz: 500.0
+fake_chassis_hz: 50.0
+fake_status_hz: 1.0
+fake_reset_period_s: 5.0       # 每 5 秒注入一次复位信号
+
+# ------------------------------ 相机源 ------------------------------
+camera_mode: "fake"
+camera_name_main: "fake"
+fake_camera_source: "synth"
+camera_width: 1440
+camera_height: 1080
+camera_frame_rate: 30.0
+
+# ------------------------------ 异常注入 ------------------------------
+fault:
+  # 串口 / IMU
+  imu_drop_rate: 0.02          # 2% 丢包
+  imu_delay_ms: 1.0            # 每帧额外 1ms 延迟
+  imu_spike_every: 200         # 每 200 帧跳变一次
+  imu_spike_rad: 1.5708        # 跳变 90°
+  imu_corrupt_crc_rate: 0.01   # 1% 校验错误（接收端应丢弃）
+  imu_noise_rad: 0.002         # 小幅角度噪声
+  # 相机
+  camera_drop_rate: 0.03       # 3% 丢帧
+  camera_duplicate_rate: 0.02  # 2% 重复帧
+  camera_black_rate: 0.01      # 1% 黑屏
+  camera_overexpose_rate: 0.01 # 1% 过曝
+  camera_freeze_rate: 0.02     # 2% 冻结
+  camera_noise_sigma: 5.0      # 像素噪声
+  camera_delay_ms: 0.0
+
+# ------------------------------ 记录 ------------------------------
+record:
+  enable: true
+  dir: "logs/virtual_fault_session"
+  save_images: false           # 只记录帧元信息+时间戳，体积小
+
+# ------------------------------ 业务参数占位 ------------------------------
+enemy_color: "red"
+yolo_name: "yolov5"
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
+yolov5_model_path: "assets/yolov5.xml"
+min_confidence: 0.8

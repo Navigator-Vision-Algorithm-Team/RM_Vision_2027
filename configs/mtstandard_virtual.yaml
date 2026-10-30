@@ -1,0 +1,108 @@
+# =============================================================================
+#  mt_standard 的“虚拟数据源”配置：与 configs/mtstandard.yaml 完全相同，
+#  仅把数据源相关键改成 fake —— 业务代码一行不改，即可在无下位机/无相机时跑通。
+#
+#  用法：./build/mt_standard configs/mtstandard_virtual.yaml
+#  回放：把 source_mode/camera_name 改成 replay，并指向录制目录
+# 串口用
+# =============================================================================
+
+enemy_color: "red"
+
+#####-----神经网络参数-----#####
+yolo_name: yolov5
+classify_model: assets/tiny_resnet.onnx
+yolo11_model_path: assets/yolo11.xml
+yolov8_model_path: assets/yolov8.xml
+yolov5_model_path: assets/yolov5.xml
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
+min_confidence: 0.8
+use_traditional: true
+
+#####-----ROI-----#####
+roi:
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+use_roi: false
+
+#####-----传统方法参数-----#####
+threshold: 150
+max_angle_error: 45 # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+
+#####-----tracker参数-----#####
+min_detect_count: 5
+max_temp_lost_count: 15
+outpost_max_temp_lost_count: 75
+
+#####-----aimer参数-----#####
+yaw_offset: 2 # degree
+pitch_offset: 6.5 # degree
+comming_angle: 55 # degree
+leaving_angle: 20 # degree
+decision_speed: 7 # rad/s
+high_speed_delay_time: 0.0 # s
+low_speed_delay_time: 0.0 # s
+
+#####-----shooter参数-----#####
+first_tolerance: 3 # 近距离射击容差，degree
+second_tolerance: 2 # 远距离射击容差，degree
+judge_distance: 2 # 距离判断阈值，m
+auto_fire: true # 是否由自瞄控制射击
+
+# ===================== 数据源（唯一改动处） =====================
+source_mode: "fake"        # real | fake | replay
+fault_seed: 20261015
+
+serial_mode: "fake"        # 串口四元数源：内置虚拟下位机（真实协议字节）
+fake_serial_external: false
+fake_imu_hz: 500.0
+serial_replay_file: "logs/mtstandard_virtual/serial.bin"
+
+camera_name: "fake"        # 相机源：伪相机（合成图案）；原值 "hikrobot"
+camera_mode: "fake"
+fake_camera_source: "synth"   # synth | sequence | video
+fake_camera_dir: "assets/fake_frames"
+fake_camera_video: "assets/test.avi"
+camera_width: 1440
+camera_height: 1080
+camera_frame_rate: 30.0
+camera_replay_dir: "logs/mtstandard_virtual"
+
+record:
+  enable: true
+  dir: "logs/mtstandard_virtual"
+  save_images: true
+# ==============================================================
+
+#####-----串口通信参数-----#####
+com_port: "/dev/gimbal"
+baud_rate: 921600
+bullet_speed: 28.0 # m/s
+use_referee_system: false
+game_start_progress_threshold: 4
+
+#####-----坐标系标定参数-----#####
+#  1  0  0
+#  0  1  0
+#  0  0  1
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+# 重投影误差: 0.1820px
+camera_matrix: [1785.4881526822305, 0, 672.4806478241826, 0, 1785.026019470562, 559.89603224794314, 0, 0, 1]
+distort_coeffs: [-0.076005079619881746, 0.11182817466388446, 0.0005362204787722057, -0.0027546300984895122, 0]
+
+# 相机同理想情况的偏角: yaw1.44 pitch-7.28 roll0.96 degree
+# 标定板到世界坐标系原点的水平距离: 1.13 m
+# 标定板同竖直摆放时的偏角: yaw7.61 pitch13.92 roll-0.46 degree
+R_camera2gimbal: [-0.027182119030230909, -0.12616154330853446, 0.99163723074269183, -0.99949106557517331, 0.019998323121329122, -0.024853106601381177, -0.016695575474690555, -0.99180811252093692, -0.12664093215554434]
+t_camera2gimbal: [0.13160669975045827, 0.10377721766577375, 0.024908271912914642]

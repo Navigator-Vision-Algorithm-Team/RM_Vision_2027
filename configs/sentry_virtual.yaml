@@ -1,0 +1,240 @@
+# =============================================================================
+#  sentry_multithread 示例配置文件
+#  使用方式: ./build/sentry_multithread configs/sentry_example.yaml
+#  串口用
+# =============================================================================
+
+# ----- 敌方颜色 -----
+# 可选值: "red" 或 "blue"
+enemy_color: "red"
+
+# ----- 串口通信 (SerialBoard) -----
+com_port: '/dev/ttyACM0'            # 串口设备路径
+baud_rate: 921600                    # 波特率
+bullet_speed: 28.0                   # 默认弹速 (m/s), 会被下位机数据覆盖
+
+# ----- 主相机 (sursign="main") -----
+# camera_name 决定相机类型: "hikrobot" | "mindvision" | "Usbcamera"
+camera_name_main: "fake"
+exposure_ms_main: 40.0               # 曝光时间 (ms)
+gain_main: 8.0                     # 增益 (HikRobot 用, MindVision 用 gamma_main)
+serial_number_main: "DA2024629"              # 相机序列号 (唯一匹配方式)
+transfer_size_main: 1048576            # USB 传输大小 (字节, 1MB)
+frame_rate_main: 120.0             
+
+
+# ----- 全向感知相机数量 -----
+# 0 = 不启用全向感知 (等价于普通自瞄)
+omni_camera_count: 0
+
+# ----- 单主相机（omni_camera_count = 0）丢失目标时的云台行为 -----
+# true  = 自旋扫描：云台按固定步长持续转动，扩大搜索范围（缺省值，保持旧行为）
+# false = 原地保持：停在当前朝向，不转动
+spin_when_no_omni: true
+
+# ----- 全向相机 1 (sursign="omni1") -----
+camera_name_omni1: "hikrobot"
+exposure_ms_omni1: 50.0
+gain_omni1: 8.0
+serial_number_omni1: "DA6415777"
+transfer_size_omni1: 1048576          # USB 传输大小 (字节, 1MB)
+frame_rate_omni1: 15.0              # 全向相机建议更保守
+grab_timeout_ms_omni1: 500
+omni_mount_yaw_1: 315.0              # 相机光轴相对机器人正前方的 yaw 偏移 (度)
+omni_mount_pitch_1: 0.0             # 相机光轴相对水平面的 pitch 偏移 (度)
+# 如果是640*480 因该是这
+omni_fov_h_1: 36.35                  # 相机水平 FOV (度)
+omni_fov_v_1: 27.60                  # 相机垂直 FOV (度)
+# 这是1440 1080
+# omni_fov_h_1: 72.8                  # 相机水平 FOV (度)
+# omni_fov_v_1: 57.9                  # 相机垂直 FOV (度)
+
+# --- 【新增】全向相机 1 的 PnP 标定参数（全部可选）---
+# 说明：全向相机现在改用与主相机相同的 PnP 解算装甲板方向（实现见
+#       tasks/omniperception/omni_pnp.cpp 与 decider.cpp::delta_angle）。
+#       下面 4 项留空时程序会自动用占位方案（仍走 PnP）：
+#         内参空 -> 用 omni_fov_h_1/omni_fov_v_1 + 图像尺寸估算针孔内参
+#         畸变空 -> 视为无畸变
+#         外参空 -> 用 omni_mount_yaw_1/omni_mount_pitch_1 近似构造旋转，平移置 0
+#       拿到标定结果后请取消注释并填入真实值，精度会明显提升。
+#
+# 内参 3x3（行优先，9 个数）：[fx, 0, cx, 0, fy, cy, 0, 0, 1]
+# omni_camera_matrix_1: [1000, 0, 320, 0, 1000, 240, 0, 0, 1]
+#
+# 畸变系数 (k1, k2, p1, p2, k3)
+# omni_distort_coeffs_1: [0, 0, 0, 0, 0]
+#
+# 相机 -> 大yaw 旋转 3x3（行优先，9 个数）。
+# 注意：本工程里 "gimbal/云台" 系 = 大yaw 系（IMU 与四个全向相机都装在大yaw上）。
+# 所以这里要标的是「相机 -> 大yaw(IMU参考系)」，可直接复用
+# calibration/calibrate_robotworld_handeye.cpp（它用 IMU 四元数作参考）。
+# 因为全向相机与 IMU 同连杆，全向路径不需要小yaw相对角 psi（主相机才需要）。
+# 下面是「光轴朝向大yaw正前方」的基准矩阵，仅作格式参考。
+# omni_R_camera2gimbal_1: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+#
+# 相机 -> 大yaw 平移（m，3 个数）
+# omni_t_camera2gimbal_1: [0, 0, 0]
+
+# ----- 全向相机 2 (sursign="omni2") -----
+#camera_name_omni2: "Usbcamera"      # USB 相机
+#open_name_omni2: "video0"           # USB 相机设备名 (/dev/video*)
+#omni_mount_yaw_2: -62.0
+#omni_mount_pitch_2: 0.0
+#omni_fov_h_2: 87.7
+#omni_fov_v_2: 56.7
+
+# ----- 全向相机 2 (sursign="omni2") -----
+camera_name_omni2: "hikrobot"
+exposure_ms_omni2: 50.0
+serial_number_omni2: "DA6415771"
+transfer_size_omni2: 1048576          # USB 传输大小 (字节, 1MB)
+frame_rate_omni2: 15.0              # 全向相机建议更保守
+grab_timeout_ms_omni2: 500
+gain_omni2: 8.0
+omni_mount_yaw_2: 225.0
+omni_mount_pitch_2: 0.0
+omni_fov_h_2: 36.35                  # 相机水平 FOV (度)
+omni_fov_v_2: 27.60                  # 相机垂直 FOV (度)
+
+# --- 【新增】全向相机 2 的 PnP 标定参数（格式与相机 1 相同，留空则用占位方案）---
+# omni_camera_matrix_2: [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+# omni_distort_coeffs_2: [0, 0, 0, 0, 0]
+# omni_R_camera2gimbal_2: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+# omni_t_camera2gimbal_2: [0, 0, 0]
+
+# ----- 全向相机 3 (sursign="omni3") -----
+camera_name_omni3: "hikrobot"
+exposure_ms_omni3: 50.0
+serial_number_omni3: "DA6242413"
+transfer_size_omni3: 1048576          # USB 传输大小 (字节, 1MB)
+frame_rate_omni3: 15.0              # 全向相机建议更保守
+grab_timeout_ms_omni3: 500
+gain_omni3: 8.0
+omni_mount_yaw_3: 135.0             # 后置相机
+omni_mount_pitch_3: 0.0
+omni_fov_h_3: 36.35                  # 相机水平 FOV (度)
+omni_fov_v_3: 27.60                  # 相机垂直 FOV (度)
+
+# --- 【新增】全向相机 3 的 PnP 标定参数（格式与相机 1 相同，留空则用占位方案）---
+# omni_camera_matrix_3: [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+# omni_distort_coeffs_3: [0, 0, 0, 0, 0]
+# omni_R_camera2gimbal_3: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+# omni_t_camera2gimbal_3: [0, 0, 0]
+
+# ----- 全向相机 4 (sursign="omni4") -----
+camera_name_omni4: "hikrobot"
+exposure_ms_omni4: 50.0
+serial_number_omni4: "DA6242418"
+transfer_size_omni4: 1048576          # USB 传输大小 (字节, 1MB)
+frame_rate_omni4: 15.0              # 全向相机建议更保守
+grab_timeout_ms_omni4: 500
+gain_omni4: 8.0
+omni_mount_yaw_4: 45.0
+omni_mount_pitch_4: 0.0
+omni_fov_h_4: 36.35                  # 相机水平 FOV (度)
+omni_fov_v_4: 27.60                  # 相机垂直 FOV (度)
+
+# --- 【新增】全向相机 4 的 PnP 标定参数（格式与相机 1 相同，留空则用占位方案）---
+# omni_camera_matrix_4: [fx, 0, cx, 0, fy, cy, 0, 0, 1]
+# omni_distort_coeffs_4: [0, 0, 0, 0, 0]
+# omni_R_camera2gimbal_4: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+# omni_t_camera2gimbal_4: [0, 0, 0]
+
+# ----- 神经网络 (YOLO) -----
+yolo_name: "yolov5"                 # 模型名: "yolov5" | "yolov8" | "yolo11"
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
+yolov5_model_path: "assets/yolov5.xml"
+yolov8_model_path: "assets/yolov8.xml"
+yolo11_model_path: "assets/yolo11.xml"
+classify_model: "assets/tiny_resnet.onnx"  # 分类器模型 (传统方法用)
+min_confidence: 0.8                 # 检测最小置信度
+use_traditional: true               # 是否启用传统视觉方法作为后备
+
+# ----- ROI (感兴趣区域) -----
+use_roi: false                      # 是否启用 ROI 裁剪
+roi:                                # ROI 区域 (像素坐标)
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+
+# ----- 传统视觉方法参数 -----
+threshold: 150                      # 二值化阈值
+max_angle_error: 45                 # 灯条最大角度误差 (度)
+min_lightbar_ratio: 1.5             # 灯条最小长宽比
+max_lightbar_ratio: 20              # 灯条最大长宽比
+min_lightbar_length: 8              # 灯条最小长度 (像素)
+min_armor_ratio: 1                  # 装甲板最小长宽比
+max_armor_ratio: 5                  # 装甲板最大长宽比
+max_side_ratio: 1.5                 # 配对灯条最大边长比
+max_rectangular_error: 25           # 最大矩形拟合误差 (度)
+
+# ----- 跟踪器 (Tracker/EKF) -----
+min_detect_count: 5                 # 连续检测到多少次后进入跟踪状态
+max_temp_lost_count: 25             # 普通目标最大临时丢失帧数
+outpost_max_temp_lost_count: 75     # 前哨站目标最大临时丢失帧数
+
+# ----- 瞄准器 (Aimer) -----
+yaw_offset: -0.8                    # yaw 整体偏移 (度)
+pitch_offset: -1.0                  # pitch 整体偏移 (度)
+comming_angle: 60                   # 陀螺旋转 coming angle 阈值 (度)
+leaving_angle: 20                   # 陀螺旋转 leaving angle 阈值 (度)
+left_yaw_offset: -1.0               # 左侧射击 yaw 偏置 (度, 哨兵双枪管用)
+right_yaw_offset: -0.6              # 右侧射击 yaw 偏置 (度, 哨兵双枪管用)
+decision_speed: 10                  # 高速/低速判定阈值 (rad/s)
+high_speed_delay_time: 0.026        # 高速状态下弹道延迟时间 (s)
+low_speed_delay_time: 0.010         # 低速状态下弹道延迟时间 (s)
+
+# ----- 射手 (Shooter) -----
+auto_fire: true                     # 是否由自瞄自动控制开火
+first_tolerance: 5                  # 近距离射击容差 (度)
+second_tolerance: 2                 # 远距离射击容差 (度)
+judge_distance: 3                   # 近/远距离判断阈值 (m)
+
+# ----- 决策器 (Decider) -----
+mode: 1                             # 决策模式 (影响全向感知的搜索行为)
+
+# ----- 相机标定 -----
+# 云台旋转矩阵 → IMU 本体坐标系 (3x3 行优先, 通常为单位阵)
+R_gimbal2imubody: [
+                    1, 0, 0,
+                    0, 1, 0,
+                    0, 0, 1
+                  ]
+
+# 相机内参矩阵 (3x3 行优先)
+camera_matrix: [
+                2414.9359264386621, 0, 717.26243105567414,
+                 0, 2418.0489262208148, 582.68540529942845, 
+                 0, 0, 1
+                ]
+
+# 畸变系数 (k1, k2, p1, p2, k3)
+distort_coeffs: [-0.0209453389287673, 0.15028138841073832, -0.0006517722113234505, -0.0016861906197686788, 0]
+
+# 手眼标定 — 相机到云台的旋转矩阵 (3x3 行优先)
+R_camera2gimbal: [0.01928451708725664, 0.00012696140743255463, 0.99981402834802846,
+                 -0.99981344688553653, -0.0010834913551969569, 0.019284643459122196,
+                  0.0010857382619952124, -0.99999940496346484, 0.00010604311483339372]
+
+# 手眼标定 — 相机到云台的平移向量 (m)
+t_camera2gimbal: [0.13089617453251859, 0.0038468007459533785, 0.094139945222010288]
+
+# 游戏控制相关
+
+use_referee_system: false
+game_state_progress_threshold: 4
+source_mode: "fake"           # real | fake | replay
+fault_seed: 20261015
+serial_mode: "fake"           # 内置虚拟下位机，按真实协议发 0x502/0x503/0x505/0x0001
+fake_serial_external: false
+fake_imu_hz: 500.0
+camera_mode: "fake"
+fake_camera_source: "synth"   # synth | sequence | video
+camera_width: 1440
+camera_height: 1080
+camera_frame_rate: 30.0
+record:
+  enable: false               # 需要录制再改 true（PNG 序列很占磁盘）
+  dir: "logs/sentry_virtual"
+  save_images: false

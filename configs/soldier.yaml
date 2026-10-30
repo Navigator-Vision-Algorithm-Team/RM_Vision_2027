@@ -1,0 +1,85 @@
+# soldier.cpp 专用配置：只包含 YOLO 检测 + PnP 定位所需的键
+# 键集合已按代码逐一核对，缺键会导致 tools::read / yaml .as<T>() 直接退出或抛异常
+# 不需要 tracker / aimer / shooter / planner / buff 相关键
+# can用
+
+#####-----兵种与敌我-----#####
+enemy_color: "red"
+# enemy_color: "blue"
+
+#####-----YOLO-----#####
+yolo_name: yolov5
+classify_model: assets/tiny_resnet.onnx  # YOLOV5 内部 Detector->Classifier 无条件加载，必填
+yolov5_model_path: assets/yolov5.xml
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
+min_confidence: 0.8                      # YOLO 后处理与传统 Detector 共用该键
+use_traditional: true                    # 传统方法二次矫正 YOLO 角点，影响 PnP 精度
+
+#####-----ROI-----#####
+# 即使 use_roi 为 false 也必须保留本块，代码无存在性判断
+roi:
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+use_roi: false
+
+#####-----传统方法参数（Detector 构造函数无条件读取，全部必填）-----#####
+threshold: 150            # 二值化阈值，仅传统方法使用
+max_angle_error: 45       # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+
+#####-----相机（当前采用 standard4 配置，后续自行修改）-----#####
+# TODO: 与本车实际相机核对。hikrobot 只读 camera_name / exposure_ms / gain，
+#       vid_pid 仅在 mindvision 下生效；换 mindvision 时注释下面三行并启用下方注释块
+camera_name: "hikrobot"
+exposure_ms: 2
+gain: 16
+# camera_name: "mindvision"
+# exposure_ms: 8
+# gamma: 0.6
+# vid_pid: "f622:d13a"
+
+#####-----串口（SerialBoard 构造时强制读取，缺任一键会直接退出）-----#####
+com_port: "/dev/gimbal"
+baud_rate: 921600
+bullet_speed: 28.0
+use_referee_system: false
+
+#####-----CBoard（CAN id 当前采用 standard4 配置，后续自行修改）-----#####
+# TODO: 与主控固件核对。注意 mvs.yaml / mtstandard.yaml 用的是 0x01 / 0x110，
+#       send_canid 虽不发送指令，但 CBoard::read_yaml 仍强制读取
+quaternion_canid: 0x100
+bullet_speed_canid: 0x101
+send_canid: 0xff
+can_interface: "can0"
+
+#####-----标定参数（当前采用 standard4 配置，决定 PnP 精度，务必替换为实车标定值）-----#####
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+# 重投影误差: 0.3145px
+camera_matrix: [1851.7070167840545, 0, 721.12585328714192, 0, 1851.8175594364079, 571.69879709276688, 0, 0, 1]
+distort_coeffs: [-0.093662536083526302, 0.18945726820633155, -0.00040424349861928674, -0.0040568403852123142, 0]
+
+# 相机同理想情况的偏角: yaw-1.61 pitch-0.82 roll-0.61 degree
+R_camera2gimbal: [0.02823004230930648, -0.014076983590428133, 0.99950232778328707, -0.99954530259354468, -0.010995644138609872, 0.028076393521179785, 0.010594940981141165, -0.99984045444409364, -0.014380990321749998]
+t_camera2gimbal: [0.045517325957791413, 0.10544338092767802, 0.034649710880185793]
+
+#####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
+# 整个 debug_ros2 段可以整段删除：没有这一段就不启动调试数据流。
+# 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,gimbal_pose,target_pose}
+# 用法：板子上起桥接 `ros2 launch foxglove_bridge foxglove_bridge_launch.xml`，
+#      桌面 Foxglove Studio -> Open connection -> Foxglove WebSocket -> ws://<板子IP>:8765
+debug_ros2:
+  enable: true            # false = 完全不启动 DDS（比赛时可关掉）
+  namespace: "/sp_debug"  # 话题前缀
+  image_hz: 15            # 图像推送频率上限，0 = 每帧都推（带宽会明显变大）
+  jpeg_quality: 75        # 1-100，越小带宽越低
+  publish_raw: false      # 是否额外推送相机原图
+  publish_yolo_input: true # 是否推送 YOLO 预处理后的输入图（ROI + letterbox）

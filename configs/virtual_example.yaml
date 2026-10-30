@@ -1,0 +1,80 @@
+# =============================================================================
+#  虚拟数据源示例配置（无真实下位机 / 无海康相机时使用）
+#
+#  用法：
+#    1) 全内置伪数据（推荐，无需任何外部进程）
+#         cmake --build build -j && ./build/virtual_run configs/virtual_example.yaml --show
+#    2) 外部 Python 虚拟下位机（pty 伪串口）
+#         python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts
+#         # 将下面 com_port 改为 python 打印的 /dev/pts/N，并设 fake_serial_external: true
+#         ./build/virtual_run configs/virtual_example.yaml
+#    3) 回放上次录制
+#         # 把 source_mode / camera_mode 改为 replay
+#         ./build/virtual_run configs/virtual_example.yaml
+#
+#  业务入口（如 mt_standard / standard）同样只认配置：
+#         ./build/mt_standard configs/virtual_example.yaml
+# =============================================================================
+
+# ------------------------------ 数据源总开关 ------------------------------
+source_mode: "fake"          # real | fake | replay（各源可用 serial_mode / camera_mode 单独覆盖）
+fault_seed: 20261015         # 异常注入随机种子（固定后异常序列可复现）
+
+# ------------------------------ 串口 / 四元数源 ------------------------------
+serial_mode: "fake"          # real | fake | replay
+com_port: "/dev/ttyACM0"     # real 使用；fake+external 填 Python 打印的 /dev/pts/N
+baud_rate: 921600
+bullet_speed: 28.0           # 默认弹速(m/s)，真实下位机会覆盖
+use_referee_system: false
+game_start_progress_threshold: 4
+
+fake_serial_external: false  # true: 由外部(Python)虚拟下位机经 pty 供数
+fake_imu_hz: 500.0           # 四元数(0x502)发送频率
+fake_chassis_hz: 50.0        # 底盘速度(0x503)频率
+fake_status_hz: 1.0          # 比赛状态(0x0001)频率
+fake_reset_period_s: 0.0     # 每 N 秒注入一次复位(0x505.reset=1)，0=关闭
+serial_replay_file: "logs/virtual_session/serial.bin"
+
+# ------------------------------ 相机源 ------------------------------
+camera_mode: "fake"          # real | fake | replay
+camera_name_main: "fake"     # io::Camera 工厂：fake=伪相机，replay=回放相机
+fake_camera_source: "synth"  # synth(合成图案) | sequence(图片序列) | video(视频文件)
+fake_camera_dir: "assets/fake_frames"     # sequence 模式图片目录
+fake_camera_video: "assets/test.avi"      # video 模式视频文件
+camera_width: 1440
+camera_height: 1080
+camera_frame_rate: 30.0
+camera_replay_dir: "logs/virtual_session" # replay 模式：含 camera.tsv 的会话目录
+
+# ------------------------------ 异常注入 ------------------------------
+# 全部置 0 即关闭注入；打开后可用于测试算法鲁棒性
+fault:
+  # 串口 / IMU
+  imu_drop_rate: 0.0           # 丢包概率 [0,1]
+  imu_delay_ms: 0.0            # 额外延迟 (ms)
+  imu_spike_every: 0           # 每 N 帧注入一次跳变 (0=关闭)
+  imu_spike_rad: 1.5708        # 跳变幅度 (rad)
+  imu_corrupt_crc_rate: 0.0    # 校验错误概率 [0,1]
+  imu_noise_rad: 0.0           # 角度噪声标准差 (rad)
+  # 相机
+  camera_drop_rate: 0.0        # 丢帧概率
+  camera_duplicate_rate: 0.0   # 重复帧概率
+  camera_black_rate: 0.0       # 黑屏概率
+  camera_overexpose_rate: 0.0  # 过曝概率
+  camera_freeze_rate: 0.0      # 冻结(重复上一帧)概率
+  camera_noise_sigma: 0.0      # 像素噪声标准差
+  camera_delay_ms: 0.0         # 帧延迟 (ms)
+
+# ------------------------------ 记录 ------------------------------
+record:
+  enable: true
+  dir: "logs/virtual_session"
+  save_images: true            # false 则只记录帧元信息+时间戳(体积小)
+
+# ------------------------------ 供 mt_standard 等业务入口使用的最小参数 ------------------------------
+# （使用 mt_standard 时需补全 yolo / 标定 / tracker / aimer 等参数，见 configs/mtstandard.yaml）
+enemy_color: "red"
+yolo_name: "yolov5"
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
+yolov5_model_path: "assets/yolov5.xml"
+min_confidence: 0.8
