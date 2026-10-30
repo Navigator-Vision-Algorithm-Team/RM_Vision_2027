@@ -16,7 +16,7 @@
 > 以下安装步骤以 **Ubuntu 26.04 LTS arm64（全新系统）** 为例；x86 开发机见 2.0 / 2.2。
 >
 > **保留但未参与构建的代码**（打符 `auto_buff`、`uav`、MPC `planner`/`tinympc` 等）
-> 的作用、停用原因与恢复方法，见 [docs/unused_code.md](docs/unused_code.md)。
+> 的作用、停用原因与恢复方法，见 `tasks/auto_aim/CMakeLists.txt` 与根 `CMakeLists.txt` 中的注释。
 
 1. 安装依赖项：
 
@@ -241,6 +241,12 @@ python3 sim/virtual_mcu.py --replay logs/virtual_session/serial.bin   # 回放�
 
 包含了敌人颜色，串口通信约定，相机参数配置，决策器等参数配置。
 
+##### configs/IMM.yaml
+
+跟踪器（IMM / EKF）的全部可调参数：三个运动模型的过程噪声、模型切换概率、观测噪声 R、初始协方差、Huber 软降权、一致性阈值。
+
+改完**不需要重新编译**，程序启动时会去主配置同目录找 `IMM.yaml`。每个参数的含义、单位、建议范围和调大调小的后果都写在该文件的注释里；按症状调参的速查表和调参流程见 [docs/ekf_imm_tuning.md](docs/ekf_imm_tuning.md)。
+
 #### IO
 
 里面包含了相机的通信代码，串口读取代码和串口的发送代码（现在还包含一些其他的，后面会删除的）
@@ -252,6 +258,18 @@ python3 sim/virtual_mcu.py --replay logs/virtual_session/serial.bin   # 回放�
 #### tasks
 
 我们真正的业务代码，里面包含了自瞄相关的决策代码，全向感知的相关代码，至于auto buff好像是为了做符用的，我们也用不上
+
+#### benchmarks
+
+离线评估工具。`benchmarks/ekf/ekf_bench` 用带真值的合成数据给跟踪器打分，**不需要相机、串口或 ROS2**：
+
+```bash
+./cmake-build-debug/benchmarks/ekf/ekf_bench gen                 # 生成 6 条场景（匀速/小陀螺/急停急起/变向/近距离高速/远距离弱观测）
+./cmake-build-debug/benchmarks/ekf/ekf_bench run  --out logs/ekf_bench/baseline
+./cmake-build-debug/benchmarks/ekf/ekf_bench compare --a baseline --b imm_huber
+```
+
+数据和报告落在 `logs/ekf_bench/`（已被 `.gitignore` 覆盖，不会进版本库）。指标定义与场景说明见 `benchmarks/ekf/` 下的源码注释。
 
 #### test
 

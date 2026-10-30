@@ -29,7 +29,7 @@ struct AdaptiveRConfig
 {
   bool enable = false;        // 默认关闭，需要显式开启
   double tau_seconds = 2.0;   // 反馈时间常数，越小平滑越差但收敛越快
-  double min_scale = 0.05;
+  double min_scale = 0.3;  // 与 configs/IMM.yaml 一致；0.05 会让近/中距离过冲
   double max_scale = 20.0;
   size_t start_samples = 30;  // 冷启动保护：前 N 次更新不调整
   double ratio_min = 0.25;    // 单帧 NIS/dof 限幅，防止一帧离群把 scale 拉飞
