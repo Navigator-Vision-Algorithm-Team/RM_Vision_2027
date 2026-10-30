@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <filesystem>
 #include <tuple>
 #include <vector>
 
@@ -10,12 +11,26 @@
 
 namespace auto_aim
 {
+namespace
+{
+// IMM 配置默认放在主 config 同目录，兼容项目根运行与 install/ 部署
+std::string resolve_imm_config(const std::string & config_path, const std::string & override_path)
+{
+  if (!override_path.empty()) return override_path;
+
+  std::filesystem::path p(config_path);
+  const auto dir = p.parent_path();
+  if (dir.empty()) return "IMM.yaml";
+  return (dir / "IMM.yaml").string();
+}
+}  // namespace
+
 Tracker::Tracker(
   const std::string & config_path, Solver & solver, bool solve_armors,
   const std::string & imm_config_path)
 : solver_{solver},
   solve_armors_{solve_armors},
-  target_config_(TargetConfig::load(imm_config_path)),
+  target_config_(TargetConfig::load(resolve_imm_config(config_path, imm_config_path))),
   detect_count_(0),
   temp_lost_count_(0),
   state_{"lost"},

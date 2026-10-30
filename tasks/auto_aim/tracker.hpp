@@ -19,10 +19,11 @@ class Tracker
 public:
   // solve_armors=false 时跳过 Solver::solve（供离线合成数据回放使用，
   // 此时 Armor 的 xyz/ypd 已由数据源直接给出）
-  // imm_config_path 指向 IMM/EKF 的可调参数文件，读不到时使用代码内默认值
+  // imm_config_path 为空时自动取主 config 同目录下的 IMM.yaml（如 configs/IMM.yaml），
+  // 这样项目根、install/ 下、以及任意自定义配置目录都能找到；读不到则用代码内默认值
   Tracker(
     const std::string & config_path, Solver & solver, bool solve_armors = true,
-    const std::string & imm_config_path = "configs/IMM.yaml");
+    const std::string & imm_config_path = "");
 
   std::string state() const;
   void reset();

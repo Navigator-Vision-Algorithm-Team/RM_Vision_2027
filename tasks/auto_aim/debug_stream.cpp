@@ -209,6 +209,21 @@ void annotate(
     (status.target_ypr[0] - status.gimbal_ypr[0]) * kRad2Deg,
     (status.target_ypr[1] - status.gimbal_ypr[1]) * kRad2Deg, status.shoot ? "FIRE" : ""));
 
+  // IMM / EKF 预测信息：目标中心、速度、角速度、半径、模型概率、NIS 一致性
+  if (status.has_ekf) {
+    const double dist = std::hypot(status.target_center.x(), status.target_center.y());
+    lines.push_back(fmt::format(
+      "ekf     pos ({:+.2f}, {:+.2f}, {:+.2f}) m   d {:.2f} m   r {:.3f} m",
+      status.target_center.x(), status.target_center.y(), status.target_center.z(), dist,
+      status.target_r));
+    lines.push_back(fmt::format(
+      "        vel ({:+.2f}, {:+.2f}) m/s   w {:+.2f} rad/s", status.target_vel.x(),
+      status.target_vel.y(), status.target_w));
+    lines.push_back(fmt::format(
+      "        mu {:.2f} / {:.2f} / {:.2f}   nis/dof {:.2f}", status.model_prob[0],
+      status.model_prob[1], status.model_prob[2], status.nis_ratio));
+  }
+
   if (!status.note.empty()) lines.push_back(status.note);
 
   draw_panel(img, lines, s);
@@ -443,19 +458,31 @@ void DebugStream::Impl::emit(Job & job)
 
   // 4) 状态 JSON
   if (pub_status) {
+    // IMM/EKF 预测信息只在业务侧填充了 has_ekf 时输出，保持 JSON 合法
+    std::string ekf_json;
+    if (job.status.has_ekf) {
+      ekf_json = fmt::format(
+        ",\"ekf\":{{\"center\":[{:.3f},{:.3f},{:.3f}],\"vel\":[{:.3f},{:.3f}],"
+        "\"w\":{:.3f},\"r\":{:.3f},\"mu\":[{:.3f},{:.3f},{:.3f}],\"nis_ratio\":{:.3f}}}",
+        job.status.target_center.x(), job.status.target_center.y(), job.status.target_center.z(),
+        job.status.target_vel.x(), job.status.target_vel.y(), job.status.target_w,
+        job.status.target_r, job.status.model_prob[0], job.status.model_prob[1],
+        job.status.model_prob[2], job.status.nis_ratio);
+    }
+
     std_msgs::msg::String msg;
     msg.data = fmt::format(
       "{{\"tag\":\"{}\",\"loop_fps\":{:.1f},\"yolo_fps\":{:.1f},\"infer_ms\":{:.1f},\"boxes\":{},"
       "\"state\":\"{}\",\"control\":{},\"shoot\":{},"
       "\"gimbal\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f},\"roll_deg\":{:.2f}}},"
       "\"target\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}},"
-      "\"error\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}}}}",
+      "\"error\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}}{}}}",
       tag, job.loop_fps, job.yolo_fps, job.yolo_ms, job.armors.size(), job.status.state,
       job.status.control, job.status.shoot, job.status.gimbal_ypr[0] * kRad2Deg,
       job.status.gimbal_ypr[1] * kRad2Deg, job.status.gimbal_ypr[2] * kRad2Deg,
       job.status.target_ypr[0] * kRad2Deg, job.status.target_ypr[1] * kRad2Deg,
       (job.status.target_ypr[0] - job.status.gimbal_ypr[0]) * kRad2Deg,
-      (job.status.target_ypr[1] - job.status.gimbal_ypr[1]) * kRad2Deg);
+      (job.status.target_ypr[1] - job.status.gimbal_ypr[1]) * kRad2Deg, ekf_json);
     pub_status->publish(msg);
   }
 

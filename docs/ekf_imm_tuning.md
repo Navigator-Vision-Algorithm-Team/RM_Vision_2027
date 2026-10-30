@@ -14,6 +14,8 @@
 
 **绝大多数调参只需要改 `configs/IMM.yaml`。**
 
+程序启动时会自动去**主 config 同目录**找 `IMM.yaml`（例如 `configs/sentry_example.yaml` → `configs/IMM.yaml`），所以部署到 `install/` 后同样成立；读不到时用代码内默认值，不会崩。
+
 ---
 
 ## 1. 怎么改

@@ -568,6 +568,17 @@ size_t Target::min_nis_samples() const
   return best;
 }
 
+Eigen::Vector3d Target::model_probabilities() const
+{
+  return Eigen::Vector3d(mu_[0], mu_[1], mu_[2]);
+}
+
+double Target::nis_ratio() const
+{
+  const auto & data = ekf_[0].data;
+  return data.count("nis_ratio") ? data.at("nis_ratio") : 0.0;
+}
+
 std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
 {
   std::vector<Eigen::Vector4d> _armor_xyza_list;

@@ -399,10 +399,26 @@ int main(int argc, char * argv[])
       command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
 
       // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
-      debug.publish(
-        armors, auto_aim::DebugStatus{
-                  gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
-                  command.shoot, tracker.state(), ""});
+      auto_aim::DebugStatus status{
+        gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
+        command.shoot, tracker.state(), ""};
+
+      // IMM/EKF 预测信息：目标中心、速度、角速度、半径、模型概率、NIS 一致性
+      if (!targets.empty()) {
+        const auto & target = targets.front();
+        const Eigen::VectorXd x = target.ekf_x();
+        if (x.size() >= 11) {
+          status.has_ekf = true;
+          status.target_center = Eigen::Vector3d(x[0], x[2], x[4]);
+          status.target_vel = Eigen::Vector2d(x[1], x[3]);
+          status.target_w = x[7];
+          status.target_r = x[8];
+          status.model_prob = target.model_probabilities();
+          status.nis_ratio = target.nis_ratio();
+        }
+      }
+
+      debug.publish(armors, status);
 
       // 绘制检测框和跟踪信息（用于赛后录像复盘）
       for (const auto & armor : armors) {
