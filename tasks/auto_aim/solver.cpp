@@ -98,7 +98,10 @@ std::vector<cv::Point2f> Solver::reproject_armor(
   auto sin_yaw = std::sin(yaw);
   auto cos_yaw = std::cos(yaw);
 
-  auto pitch = (name == ArmorName::outpost) ? -15.0 * CV_PI / 180.0 : 15.0 * CV_PI / 180.0;
+  // 3V3 无前哨站，前哨站装甲板的 -15° 倾斜已停用，所有装甲板统一按 +15° 处理
+  // auto pitch = (name == ArmorName::outpost) ? -15.0 * CV_PI / 180.0 : 15.0 * CV_PI / 180.0;
+  auto pitch = 15.0 * CV_PI / 180.0;
+  (void)name;  // 保留接口参数，前哨站分支停用后暂时用不到
   auto sin_pitch = std::sin(pitch);
   auto cos_pitch = std::cos(pitch);
 
