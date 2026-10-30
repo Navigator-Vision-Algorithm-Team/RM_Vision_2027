@@ -23,6 +23,16 @@ struct DebugStatus
   bool shoot = false;                                    // 本帧是否允许开火
   std::string state;                                     // 业务状态文本（tracker 状态等）
   std::string note;                                      // 额外一行文本，可留空
+
+  // 跟踪预测信息（可选，只有接入 Tracker 的入口才填）。
+  // has_track == false 时其余字段无意义，JSON 里输出 "track":{"ok":false}。
+  // 全部字段带默认值，未填写的调用方（如哨兵）行为完全不变。
+  bool has_track = false;
+  Eigen::Vector3d track_xyz = Eigen::Vector3d::Zero();  // 整车旋转中心世界坐标 (m)
+  Eigen::Vector3d track_vel = Eigen::Vector3d::Zero();  // 世界系速度 (m/s)
+  double track_w = 0.0;                                 // 角速度 (rad/s)
+  double track_r = 0.0;                                 // 整车半径 (m)
+  bool converged = false;                               // EKF 是否已收敛
 };
 
 // ROS2 -> Foxglove 实时调试数据流。

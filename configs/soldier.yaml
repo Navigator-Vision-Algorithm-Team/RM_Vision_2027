@@ -1,6 +1,6 @@
-# soldier.cpp 专用配置：只包含 YOLO 检测 + PnP 定位所需的键
+# soldier.cpp 专用配置：YOLO 检测 + PnP 定位 + 跟踪预测（EKF）+ 瞄准解算（弹道）
 # 键集合已按代码逐一核对，缺键会导致 tools::read / yaml .as<T>() 直接退出或抛异常
-# 不需要 tracker / aimer / shooter / planner / buff 相关键
+# 步兵只做瞄准、不接管发射，因此不需要 shooter（auto_fire / tolerance 等）与 planner / buff 键
 # can用
 
 #####-----兵种与敌我-----#####
@@ -34,6 +34,22 @@ min_armor_ratio: 1
 max_armor_ratio: 5
 max_side_ratio: 1.5
 max_rectangular_error: 25 # degree
+
+#####-----tracker参数（Tracker 构造时强制读取，缺键直接抛异常）-----#####
+min_detect_count: 5          # 连续检测到多少帧才进入 tracking（5 帧约 100~150ms）
+max_temp_lost_count: 15      # tracking 下允许连续丢帧数，期间靠 EKF 外推继续瞄准
+outpost_max_temp_lost_count: 75  # 步兵不打前哨站，仅为满足 Tracker 解析
+
+#####-----aimer参数（Aimer 构造时强制读取，缺键直接抛异常）-----#####
+# 下面两个 offset 是纯安装/标定残差，不含弹道下坠（下坠由 Aimer 内部 Trajectory 解算）。
+# 当前填 0 表示"未标定"，实车必须重新标定：目标在画面正中心时 cmd.yaw ≈ gimbal yaw。
+yaw_offset: 0.0              # degree
+pitch_offset: 0.0            # degree
+comming_angle: 55            # degree，小陀螺时"迎面而来"装甲板的选板角
+leaving_angle: 20            # degree，小陀螺时"正在离开"装甲板的选板角
+decision_speed: 7            # rad/s，角速度高于该值视为小陀螺，改用 high_speed_delay_time
+high_speed_delay_time: 0.0   # s，高速目标的发弹延时补偿
+low_speed_delay_time: 0.0    # s，低速目标的发弹延时补偿
 
 #####-----相机（当前采用 standard4 配置，后续自行修改）-----#####
 # TODO: 与本车实际相机核对。hikrobot 只读 camera_name / exposure_ms / gain，
@@ -74,6 +90,7 @@ t_camera2gimbal: [0.045517325957791413, 0.10544338092767802, 0.03464971088018579
 #####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
 # 整个 debug_ros2 段可以整段删除：没有这一段就不启动调试数据流。
 # 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,gimbal_pose,target_pose}
+# status 的 JSON 含跟踪预测：track.{ok,x,y,z,vx,vy,vz,w,r,dist,converged}（世界系，单位 m / m/s / rad/s）
 # 用法：板子上起桥接 `ros2 launch foxglove_bridge foxglove_bridge_launch.xml`，
 #      桌面 Foxglove Studio -> Open connection -> Foxglove WebSocket -> ws://<板子IP>:8765
 debug_ros2:

@@ -209,6 +209,14 @@ void annotate(
     (status.target_ypr[0] - status.gimbal_ypr[0]) * kRad2Deg,
     (status.target_ypr[1] - status.gimbal_ypr[1]) * kRad2Deg, status.shoot ? "FIRE" : ""));
 
+  if (status.has_track) {
+    const double distance = std::hypot(status.track_xyz[0], status.track_xyz[1]);
+    lines.push_back(fmt::format(
+      "track   d {:.2f}m  v({:+.2f},{:+.2f},{:+.2f})  w {:+.1f} deg/s  r {:.3f}m  {}", distance,
+      status.track_vel[0], status.track_vel[1], status.track_vel[2], status.track_w * kRad2Deg,
+      status.track_r, status.converged ? "converged" : "converging"));
+  }
+
   if (!status.note.empty()) lines.push_back(status.note);
 
   draw_panel(img, lines, s);
@@ -443,19 +451,32 @@ void DebugStream::Impl::emit(Job & job)
 
   // 4) 状态 JSON
   if (pub_status) {
+    // 跟踪预测信息：未接入 Tracker 的入口（如哨兵）恒输出 ok:false，其余字段保持不变
+    const std::string track_json =
+      job.status.has_track
+        ? fmt::format(
+            "\"track\":{{\"ok\":true,\"x\":{:.3f},\"y\":{:.3f},\"z\":{:.3f},"
+            "\"vx\":{:.2f},\"vy\":{:.2f},\"vz\":{:.2f},"
+            "\"w\":{:.2f},\"r\":{:.3f},\"dist\":{:.2f},\"converged\":{}}}",
+            job.status.track_xyz[0], job.status.track_xyz[1], job.status.track_xyz[2],
+            job.status.track_vel[0], job.status.track_vel[1], job.status.track_vel[2],
+            job.status.track_w, job.status.track_r,
+            std::hypot(job.status.track_xyz[0], job.status.track_xyz[1]), job.status.converged)
+        : std::string{"\"track\":{\"ok\":false}"};
+
     std_msgs::msg::String msg;
     msg.data = fmt::format(
       "{{\"tag\":\"{}\",\"loop_fps\":{:.1f},\"yolo_fps\":{:.1f},\"infer_ms\":{:.1f},\"boxes\":{},"
       "\"state\":\"{}\",\"control\":{},\"shoot\":{},"
       "\"gimbal\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f},\"roll_deg\":{:.2f}}},"
       "\"target\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}},"
-      "\"error\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}}}}",
+      "\"error\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}},{}}}",
       tag, job.loop_fps, job.yolo_fps, job.yolo_ms, job.armors.size(), job.status.state,
       job.status.control, job.status.shoot, job.status.gimbal_ypr[0] * kRad2Deg,
       job.status.gimbal_ypr[1] * kRad2Deg, job.status.gimbal_ypr[2] * kRad2Deg,
       job.status.target_ypr[0] * kRad2Deg, job.status.target_ypr[1] * kRad2Deg,
       (job.status.target_ypr[0] - job.status.gimbal_ypr[0]) * kRad2Deg,
-      (job.status.target_ypr[1] - job.status.gimbal_ypr[1]) * kRad2Deg);
+      (job.status.target_ypr[1] - job.status.gimbal_ypr[1]) * kRad2Deg, track_json);
     pub_status->publish(msg);
   }
 
