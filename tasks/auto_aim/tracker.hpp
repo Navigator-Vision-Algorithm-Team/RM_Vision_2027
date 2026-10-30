@@ -19,7 +19,10 @@ class Tracker
 public:
   // solve_armors=false 时跳过 Solver::solve（供离线合成数据回放使用，
   // 此时 Armor 的 xyz/ypd 已由数据源直接给出）
-  Tracker(const std::string & config_path, Solver & solver, bool solve_armors = true);
+  // imm_config_path 指向 IMM/EKF 的可调参数文件，读不到时使用代码内默认值
+  Tracker(
+    const std::string & config_path, Solver & solver, bool solve_armors = true,
+    const std::string & imm_config_path = "configs/IMM.yaml");
 
   std::string state() const;
   void reset();
@@ -35,6 +38,7 @@ public:
 private:
   Solver & solver_;
   bool solve_armors_;
+  TargetConfig target_config_;
   Color enemy_color_;
   int min_detect_count_;
   int max_temp_lost_count_;
