@@ -73,7 +73,11 @@ std::list<Armor> Detector::detect(const cv::Mat & bgr_img, int frame_count)
       if (!check_geometry(armor)) continue;
 
       armor.pattern = get_pattern(bgr_img, armor);
-      classifier_.classify(armor);
+      // 【不判兵种】name 已不参与优先级与过滤（decider.set_priority 已停用），
+      // tiny_resnet 的分类结果在远距离/逆光下本身不可靠，只会引入噪声，故跳过推理。
+      // ⚠ Armor(Lightbar,Lightbar) 不初始化 name，注释后 name 为不确定值；
+      //   本函数（全量传统检测）当前无调用者，若将来启用需先给 name 赋确定值。
+      // classifier_.classify(armor);
       if (!check_name(armor)) continue;
 
       armor.type = get_type(armor);
