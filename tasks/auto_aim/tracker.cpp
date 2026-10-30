@@ -10,9 +10,12 @@
 
 namespace auto_aim
 {
-Tracker::Tracker(const std::string & config_path, Solver & solver, bool solve_armors)
+Tracker::Tracker(
+  const std::string & config_path, Solver & solver, bool solve_armors,
+  const std::string & imm_config_path)
 : solver_{solver},
   solve_armors_{solve_armors},
+  target_config_(TargetConfig::load(imm_config_path)),
   detect_count_(0),
   temp_lost_count_(0),
   state_{"lost"},
@@ -96,7 +99,7 @@ std::list<Target> Tracker::track(
   // 窗口内样本足够多才判失效，避免冷启动阶段的少量样本误杀
   if (
     target_.nis_window_samples() >= target_.min_nis_samples() &&
-    target_.nis_failure_rate() >= 0.4) {
+    target_.nis_failure_rate() >= target_config_.tracker_fail_rate) {
     // tools::logger()->debug("[Target] Bad Converge Found!");
     state_ = "lost";
     return {};
@@ -210,7 +213,7 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   if (state_ != "lost") {
     if (
       target_.nis_window_samples() >= target_.min_nis_samples() &&
-      target_.nis_failure_rate() >= 0.4) {
+      target_.nis_failure_rate() >= target_config_.tracker_fail_rate) {
       tools::logger()->debug("[Tracker] Bad converge found (NIS).");
       state_ = "lost";
       return {switch_target, {}};
@@ -316,11 +319,8 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   //     Target(armor, t, 0.2765, 3, Eigen::VectorXd{{1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0}});
   // } else {
   // 其余兵种（含哨兵、步兵、英雄）统一按 4 块装甲板、半径 0.2m 建模
-  // P0 顺序：x vx y vy z vz a w r l h ax ay az
-  // 加速度初始方差 25（σ=5 m/s^2），覆盖急停急起与变向的量级
-  target_ = Target(
-    armor, t, 0.2, 4,
-    Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1, 25, 25, 25}});
+  // P0 由 configs/IMM.yaml 的 initial_covariance 提供
+  target_ = Target(armor, t, 0.2, 4, {}, target_config_);
   // }
 
   return true;

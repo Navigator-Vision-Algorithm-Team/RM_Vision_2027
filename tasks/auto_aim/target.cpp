@@ -5,45 +5,119 @@
 #include <cstdlib>
 #include <numeric>
 
+#include <yaml-cpp/yaml.h>
+
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 
 namespace auto_aim
 {
-namespace
-{
-struct MotionModel
-{
-  double sa2;    // 每帧加速度增量的方差 (m/s^2)^2
-  double v2;     // 角加速度方差 (rad/s^2)^2
-  bool ca;       // true: 加速度状态延续（匀加速）；false: 每帧清零（匀速）
-  bool damping;  // true: 平移速度按 alpha 指数衰减（静止）
-};
 
-// M1 匀速 / M2 匀加速 / M3 静止
-// 现在 M1 与 M2 的 F 真正不同：M1 把加速度状态清零（CV），M2 保留并参与递推（CA）。
-// 这才是 IMM 意义上的“多运动模型”，而不是仅靠 Q 大小区分的两个同构滤波器。
-// sa2 是“每帧加速度增量的方差”。注意 CA 模型里速度噪声由加速度积分而来，
-// 每秒只累积 sqrt(sa2)，比直接给速度加噪声慢得多，所以 M2 的 sa2 要给到 10 量级
-// 才能覆盖 0.5s 内 4m/s 的急停急起（a ≈ 8 m/s^2）
-// CV 模型（M1/M3）里 sa2 直接决定速度的过程噪声：速度每帧标准差 = sqrt(sa2)*dt
-// 100Hz 下 sa2=10 -> 0.03 m/s，与旧版 v1=10 等价；M3 取 0.1 表示几乎不动
-constexpr MotionModel MOTION_MODELS[3] = {
-  {10.0, 150.0, false, false},  // M1 匀速
-  {10.0, 400.0, true, false},   // M2 匀加速
-  {0.1, 150.0, false, true},    // M3 静止
-};
-}  // namespace
+TargetConfig TargetConfig::load(const std::string & path)
+{
+  TargetConfig cfg;
+
+  try {
+    auto yaml = YAML::LoadFile(path);
+
+    if (yaml["models"] && yaml["models"].IsSequence()) {
+      int i = 0;
+      for (const auto & m : yaml["models"]) {
+        if (i >= static_cast<int>(cfg.models.size())) break;
+        auto & model = cfg.models[i];
+        if (m["sa2"]) model.sa2 = m["sa2"].as<double>();
+        if (m["v2"]) model.v2 = m["v2"].as<double>();
+        if (m["ca"]) model.ca = m["ca"].as<bool>();
+        if (m["damping"]) model.damping = m["damping"].as<bool>();
+        i++;
+      }
+    }
+
+    if (yaml["motion"]) {
+      const auto & motion = yaml["motion"];
+      if (motion["acc_damping"]) cfg.acc_damping = motion["acc_damping"].as<double>();
+      if (motion["damping_tau"]) cfg.damping_tau = motion["damping_tau"].as<double>();
+    }
+
+    if (yaml["transition"]) {
+      const auto & transition = yaml["transition"];
+      if (transition["diag"]) cfg.pi_diag = transition["diag"].as<double>();
+      if (transition["off_diag"]) cfg.pi_off = transition["off_diag"].as<double>();
+    }
+
+    if (yaml["probability"]) {
+      const auto & probability = yaml["probability"];
+      if (probability["initial"] && probability["initial"].IsSequence()) {
+        int i = 0;
+        for (const auto & v : probability["initial"]) {
+          if (i >= static_cast<int>(cfg.mu0.size())) break;
+          cfg.mu0[i] = v.as<double>();
+          i++;
+        }
+      }
+      if (probability["floor"]) cfg.mu_floor = probability["floor"].as<double>();
+    }
+
+    if (yaml["huber"]) {
+      const auto & huber = yaml["huber"];
+      if (huber["enable"]) cfg.huber_enable = huber["enable"].as<bool>();
+      if (huber["k"]) cfg.huber_k = huber["k"].as<double>();
+      if (huber["block_size"]) cfg.huber_block = huber["block_size"].as<size_t>();
+    }
+
+    if (yaml["consistency"]) {
+      const auto & consistency = yaml["consistency"];
+      if (consistency["window_seconds"])
+        cfg.window_seconds = consistency["window_seconds"].as<double>();
+      if (consistency["min_window_samples"])
+        cfg.min_window_samples = consistency["min_window_samples"].as<size_t>();
+      if (consistency["nis_threshold"])
+        cfg.nis_threshold = consistency["nis_threshold"].as<double>();
+      if (consistency["tracker_fail_rate"])
+        cfg.tracker_fail_rate = consistency["tracker_fail_rate"].as<double>();
+    }
+
+    if (yaml["measurement"]) {
+      const auto & m = yaml["measurement"];
+      if (m["yaw_var"]) cfg.yaw_var = m["yaw_var"].as<double>();
+      if (m["pitch_var"]) cfg.pitch_var = m["pitch_var"].as<double>();
+      if (m["distance_gain"]) cfg.dist_gain = m["distance_gain"].as<double>();
+      if (m["distance_offset"]) cfg.dist_offset = m["distance_offset"].as<double>();
+      if (m["armor_yaw_gain"]) cfg.ayaw_gain = m["armor_yaw_gain"].as<double>();
+      if (m["armor_yaw_offset"]) cfg.ayaw_offset = m["armor_yaw_offset"].as<double>();
+    }
+
+    if (yaml["initial_covariance"] && yaml["initial_covariance"].IsSequence()) {
+      int i = 0;
+      for (const auto & v : yaml["initial_covariance"]) {
+        if (i >= static_cast<int>(cfg.p0.size())) break;
+        cfg.p0[i] = v.as<double>();
+        i++;
+      }
+    }
+  } catch (const std::exception & e) {
+    tools::logger()->warn("[TargetConfig] 读取 {} 失败，使用默认值：{}", path, e.what());
+  }
+
+  // 转移矩阵的列和必须为 1，否则按对角重新归一
+  if (std::abs(cfg.pi_diag + 2.0 * cfg.pi_off - 1.0) > 1e-6) {
+    tools::logger()->warn("[TargetConfig] transition 列和 != 1，已按 diag 自动修正");
+    cfg.pi_off = (1.0 - cfg.pi_diag) / 2.0;
+  }
+
+  return cfg;
+}
 
 Target::Target(
   const Armor & armor, std::chrono::steady_clock::time_point t, double radius, int armor_num,
-  Eigen::VectorXd P0_dig)
+  Eigen::VectorXd P0_dig, const TargetConfig & config)
 : name(armor.name),
   armor_type(armor.type),
   jumped(false),
   last_id(0),
   update_count_(0),
   armor_num_(armor_num),
+  config_(config),
   t_(t),
   is_switch_(false),
   is_converged_(false),
@@ -87,12 +161,16 @@ Target::Target(
   // 索引：x vx y vy z vz a w r l h ax ay az
   Eigen::VectorXd x0{
     {center_x, 0, center_y, 0, center_z, 0, ypr[0], 0, r, 0, 0, 0, 0, 0}};  //初始化预测量
-  Eigen::MatrixXd P0 = P0_dig.asDiagonal();
+
+  // 未显式给 P0 时用配置文件里的 initial_covariance
+  const Eigen::VectorXd p0_dig = P0_dig.size() == 14 ? P0_dig : config_.p0_vector();
+  Eigen::MatrixXd P0 = p0_dig.asDiagonal();
 
   init_models(x0, P0);
 }
 
-Target::Target(double x, double vyaw, double radius, double h) : armor_num_(4)
+Target::Target(double x, double vyaw, double radius, double h, const TargetConfig & config)
+: armor_num_(4), config_(config)
 {
   Eigen::VectorXd x0{{x, 0, 0, 0, 0, 0, 0, vyaw, radius, 0, h, 0, 0, 0}};
   Eigen::VectorXd P0_dig{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
@@ -119,16 +197,21 @@ void Target::init_models(const Eigen::VectorXd & x0, const Eigen::MatrixXd & P0)
 
   for (int j = 0; j < MODEL_NUM; j++) {
     ekf_[j] = tools::ExtendedKalmanFilter(x0, P0, x_add);
+
     // 量测是 4 维一组（yaw/pitch/distance/armor_yaw），逐板做 Huber 降权
-    ekf_[j].huber_block_size = 4;
+    ekf_[j].enable_huber = config_.huber_enable;
+    ekf_[j].huber_k = config_.huber_k;
+    ekf_[j].huber_block_size = config_.huber_block;
+    ekf_[j].window_seconds = config_.window_seconds;
+    ekf_[j].min_window_samples = config_.min_window_samples;
+    ekf_[j].nis_threshold = config_.nis_threshold;
   }
 
-  // 模型转移矩阵：对角线 0.90，非对角 0.05（列为随机向量，列和为 1）
-  // 对角过大会让模型切换滞后，急变向/起转时需要 0.1s 量级完成切换
-  Pi_ = Eigen::MatrixXd::Constant(MODEL_NUM, MODEL_NUM, 0.05);
-  Pi_.diagonal().setConstant(0.90);
+  // 模型转移矩阵（列为随机向量，列和为 1）
+  Pi_ = Eigen::MatrixXd::Constant(MODEL_NUM, MODEL_NUM, config_.pi_off);
+  Pi_.diagonal().setConstant(config_.pi_diag);
 
-  mu_ = {{0.8, 0.15, 0.05}};
+  mu_ = config_.mu0;
   x_fused_ = x0;
   P_fused_ = P0;
 }
@@ -206,14 +289,13 @@ void Target::predict(double dt)
   const double q_va = dt;               // 速度-加速度
 
   // M3 静止模型的速度衰减时间常数（太小会拖累小陀螺的 w 估计）
-  constexpr double DAMPING_TAU = 0.30;
-  const double alpha = std::exp(-std::abs(dt) / DAMPING_TAU);
+  const double alpha = std::exp(-std::abs(dt) / config_.damping_tau);
 
   for (int j = 0; j < MODEL_NUM; j++) {
     ekf_[j].x = x_mix[j];
     ekf_[j].P = P_mix[j];
 
-    const auto & model = MOTION_MODELS[j];
+    const auto & model = config_.models[j];
 
     Eigen::MatrixXd F = Eigen::MatrixXd::Identity(state_dim, state_dim);
     F(6, 7) = dt;  // 角度：a' = a + w*dt
@@ -230,12 +312,11 @@ void Target::predict(double dt)
         // 匀加速：位置与速度都吃加速度项。
         // 加速度自身带 0.95 的轻微阻尼：纯随机游走会让加速度无界漂移，
         // 远距离弱观测时（far_noisy）会把位置和 yaw 一起带抖
-        constexpr double ACC_DAMPING = 0.90;
         F(p, v) = dt;
         F(p, acc) = 0.5 * dt * dt;
         F(v, v) = 1.0;
         F(v, acc) = dt;
-        F(acc, acc) = ACC_DAMPING;
+        F(acc, acc) = config_.acc_damping;
       } else {
         // 匀速：加速度每帧清零，不参与位置/速度递推
         F(p, v) = dt;
@@ -360,8 +441,9 @@ Eigen::VectorXd Target::measurement_noise(const Armor & armor) const
   auto center_yaw = std::atan2(armor.xyz_in_world[1], armor.xyz_in_world[0]);
   auto delta_angle = tools::limit_rad(armor.ypr_in_world[0] - center_yaw);
   return Eigen::VectorXd{
-    {4e-3, 4e-3, std::log(std::abs(delta_angle) + 1) + 1,
-     std::log(std::abs(armor.ypd_in_world[2]) + 1) / 200 + 9e-2}};
+    {config_.yaw_var, config_.pitch_var,
+     config_.dist_gain * std::log(std::abs(delta_angle) + 1) + config_.dist_offset,
+     config_.ayaw_gain * std::log(std::abs(armor.ypd_in_world[2]) + 1) + config_.ayaw_offset}};
 }
 
 void Target::update_ypda(const std::vector<MatchedArmor> & matched, double dt)
@@ -442,7 +524,7 @@ void Target::update_ypda(const std::vector<MatchedArmor> & matched, double dt)
 
   // 概率下限 1e-3：避免某个模型被永久锁死后再也回不来
   sum = std::max(sum, 1e-9);
-  for (int j = 0; j < MODEL_NUM; j++) mu_[j] = std::max(mu_[j] / sum, 1e-3);
+  for (int j = 0; j < MODEL_NUM; j++) mu_[j] = std::max(mu_[j] / sum, config_.mu_floor);
 
   double normalize = 0.0;
   for (int j = 0; j < MODEL_NUM; j++) normalize += mu_[j];
