@@ -41,4 +41,8 @@ target_link_libraries(
     sentry_multithread_debug
     ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can)
 
-install(TARGETS soldier_debug sentry_multithread_debug RUNTIME DESTINATION bin)
+# 仅测试主相机 YOLO：不启动串口、PnP 或多相机处理链路。
+add_executable(yolodebug yolodebug.cpp)
+target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
+
+install(TARGETS soldier_debug sentry_multithread_debug yolodebug RUNTIME DESTINATION bin)
