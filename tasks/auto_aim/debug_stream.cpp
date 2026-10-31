@@ -328,14 +328,16 @@ struct DebugStream::Impl
   bool own_context = false;
 #endif
 
-  Impl(const std::string & config_path, std::string tag_);
+  Impl(const std::string & config_path, std::string tag_, bool force_publish_raw);
   ~Impl();
 
   void run();
   void emit(Job & job);
 };
 
-DebugStream::Impl::Impl(const std::string & config_path, std::string tag_) : tag(std::move(tag_))
+DebugStream::Impl::Impl(
+  const std::string & config_path, std::string tag_, bool force_publish_raw)
+: tag(std::move(tag_))
 {
   YAML::Node yaml;
   try {
@@ -346,6 +348,7 @@ DebugStream::Impl::Impl(const std::string & config_path, std::string tag_) : tag
   }
 
   opt = load_options(yaml);
+  opt.publish_raw = opt.publish_raw || force_publish_raw;
   roi = load_roi(yaml);
   input_size = load_input_size(yaml);
 
@@ -496,8 +499,9 @@ void DebugStream::Impl::emit(Job & job)
 
 // ---------------- 对外接口 ----------------
 
-DebugStream::DebugStream(const std::string & config_path, const std::string & tag)
-: impl_(std::make_unique<Impl>(config_path, tag))
+DebugStream::DebugStream(
+  const std::string & config_path, const std::string & tag, bool force_publish_raw)
+: impl_(std::make_unique<Impl>(config_path, tag, force_publish_raw))
 {
 }
 

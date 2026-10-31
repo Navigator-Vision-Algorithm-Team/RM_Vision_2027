@@ -54,8 +54,10 @@ class DebugStream
 {
 public:
   // config_path: 与业务相同的 yaml，读取其中的 debug_ros2 段（缺省则关闭）；
-  // tag: 进程标识（如 "sentry" / "soldier"），同时用于节点名与话题前缀。
-  DebugStream(const std::string & config_path, const std::string & tag);
+  // tag: 进程标识（如 "sentry" / "soldier"），同时用于节点名与话题前缀；
+  // force_publish_raw: 无视配置中的 publish_raw，始终推送相机原图。
+  DebugStream(
+    const std::string & config_path, const std::string & tag, bool force_publish_raw = false);
   ~DebugStream();
 
   DebugStream(const DebugStream &) = delete;
