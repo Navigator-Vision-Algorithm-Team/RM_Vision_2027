@@ -53,10 +53,12 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
         cfg.recorder->record(display_img, Eigen::Quaterniond::Identity(), ts);
       }
 
-      // 先过滤、定优先级、排序，再算角度：保证 delta_yaw/delta_pitch 描述的目标
+      // 先过滤、排序，再算角度：保证 delta_yaw/delta_pitch 描述的目标
       // 与 armors.front() 始终一致（否则角度会指向已被过滤掉的装甲板）。
       decider->armor_filter(armors);
-      decider->set_priority(armors);
+      // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级（与 sentry_multithread 保持一致）；
+      // 下方按 priority 的排序在全相等时退化为稳定排序，实际由“离图像中心最近”决定。
+      // decider->set_priority(armors);
       armors.sort([](const auto_aim::Armor & a, const auto_aim::Armor & b) {
         return a.priority < b.priority;
       });

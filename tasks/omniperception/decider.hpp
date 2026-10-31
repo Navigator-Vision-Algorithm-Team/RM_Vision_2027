@@ -39,7 +39,8 @@ public:
 
   bool armor_filter(std::list<auto_aim::Armor> & armors);
 
-  void set_priority(std::list<auto_aim::Armor> & armors);
+  // 【已停用】后续无法可靠判断兵种(ArmorName)，暂停按兵种设置优先级
+  // void set_priority(std::list<auto_aim::Armor> & armors);
   //对队列中的每一个DetectionResult进行过滤，同时将DetectionResult排序
   void sort(std::vector<DetectionResult> & detection_queue);
 
@@ -62,30 +63,32 @@ private:
   auto_aim::Color enemy_color_;
   std::vector<auto_aim::ArmorName> invincible_armor_;  //无敌状态机器人编号,英雄为1，哨兵为6
 
-  // 定义ArmorName到ArmorPriority的映射类型
-  using PriorityMap = std::unordered_map<auto_aim::ArmorName, auto_aim::ArmorPriority>;
-
-  const PriorityMap mode1 = {
-    {auto_aim::ArmorName::one, auto_aim::ArmorPriority::second},
-    {auto_aim::ArmorName::two, auto_aim::ArmorPriority::forth},
-    {auto_aim::ArmorName::three, auto_aim::ArmorPriority::first},
-    {auto_aim::ArmorName::four, auto_aim::ArmorPriority::first},
-    {auto_aim::ArmorName::five, auto_aim::ArmorPriority::third},
-    {auto_aim::ArmorName::sentry, auto_aim::ArmorPriority::third},
-    {auto_aim::ArmorName::outpost, auto_aim::ArmorPriority::fifth},
-    {auto_aim::ArmorName::base, auto_aim::ArmorPriority::fifth},
-    {auto_aim::ArmorName::not_armor, auto_aim::ArmorPriority::fifth}};
-
-  const PriorityMap mode2 = {
-    {auto_aim::ArmorName::two, auto_aim::ArmorPriority::first},
-    {auto_aim::ArmorName::one, auto_aim::ArmorPriority::second},
-    {auto_aim::ArmorName::three, auto_aim::ArmorPriority::second},
-    {auto_aim::ArmorName::four, auto_aim::ArmorPriority::second},
-    {auto_aim::ArmorName::five, auto_aim::ArmorPriority::second},
-    {auto_aim::ArmorName::sentry, auto_aim::ArmorPriority::third},
-    {auto_aim::ArmorName::outpost, auto_aim::ArmorPriority::third},
-    {auto_aim::ArmorName::base, auto_aim::ArmorPriority::third},
-    {auto_aim::ArmorName::not_armor, auto_aim::ArmorPriority::third}};
+  // 【已停用】兵种→优先级映射表：后续无法可靠判断兵种(ArmorName)，整段停用
+  // 恢复时取消下面注释，并同时恢复 set_priority 的声明/定义与两处调用
+  // // 定义ArmorName到ArmorPriority的映射类型
+  // using PriorityMap = std::unordered_map<auto_aim::ArmorName, auto_aim::ArmorPriority>;
+  //
+  // const PriorityMap mode1 = {
+  //   {auto_aim::ArmorName::one, auto_aim::ArmorPriority::second},
+  //   {auto_aim::ArmorName::two, auto_aim::ArmorPriority::forth},
+  //   {auto_aim::ArmorName::three, auto_aim::ArmorPriority::first},
+  //   {auto_aim::ArmorName::four, auto_aim::ArmorPriority::first},
+  //   {auto_aim::ArmorName::five, auto_aim::ArmorPriority::third},
+  //   {auto_aim::ArmorName::sentry, auto_aim::ArmorPriority::third},
+  //   {auto_aim::ArmorName::outpost, auto_aim::ArmorPriority::fifth},
+  //   {auto_aim::ArmorName::base, auto_aim::ArmorPriority::fifth},
+  //   {auto_aim::ArmorName::not_armor, auto_aim::ArmorPriority::fifth}};
+  //
+  // const PriorityMap mode2 = {
+  //   {auto_aim::ArmorName::two, auto_aim::ArmorPriority::first},
+  //   {auto_aim::ArmorName::one, auto_aim::ArmorPriority::second},
+  //   {auto_aim::ArmorName::three, auto_aim::ArmorPriority::second},
+  //   {auto_aim::ArmorName::four, auto_aim::ArmorPriority::second},
+  //   {auto_aim::ArmorName::five, auto_aim::ArmorPriority::second},
+  //   {auto_aim::ArmorName::sentry, auto_aim::ArmorPriority::third},
+  //   {auto_aim::ArmorName::outpost, auto_aim::ArmorPriority::third},
+  //   {auto_aim::ArmorName::base, auto_aim::ArmorPriority::third},
+  //   {auto_aim::ArmorName::not_armor, auto_aim::ArmorPriority::third}};
 };
 
 enum PriorityMode
