@@ -6,6 +6,7 @@
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/tuning.hpp"
 
 namespace auto_aim
 {
@@ -24,6 +25,9 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
+
+  // 卡尔曼/跟踪器的可调参数（tuning: 段），必须在任何 Target 创建之前加载
+  tools::load_tuning(config_path);
 }
 
 std::string Tracker::state() const { return state_; }
@@ -45,7 +49,7 @@ std::list<Target> Tracker::track(
   last_timestamp_ = t;
 
   // 时间间隔过长，说明可能发生了相机离线
-  if (state_ != "lost" && dt > 0.1) {
+  if (state_ != "lost" && dt > tools::tuning().max_dt) {
     tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
     state_ = "lost";
   }
@@ -60,8 +64,9 @@ std::list<Target> Tracker::track(
   // });
 
   // 优先选择靠近图像中心的装甲板
-  armors.sort([](const Armor & a, const Armor & b) {
-    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO
+  const auto & tune_img = tools::tuning();
+  const cv::Point2f img_center(tune_img.image_width / 2.f, tune_img.image_height / 2.f);
+  armors.sort([&](const Armor & a, const Armor & b) {
     auto distance_1 = cv::norm(a.center - img_center);
     auto distance_2 = cv::norm(b.center - img_center);
     return distance_1 < distance_2;
@@ -132,7 +137,7 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   last_timestamp_ = t;
 
   // 时间间隔过长，说明可能发生了相机离线
-  if (state_ != "lost" && dt > 0.1) {
+  if (state_ != "lost" && dt > tools::tuning().max_dt) {
     tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
     state_ = "lost";
   }
@@ -141,9 +146,10 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   // 并且有一个致命的问题，这个的地方写死了图像的大小就是（1440, 1080），这显然是有一些不合理的。
 
   // 优先选择靠近图像中心的装甲板
-  // 【修复】原来写成 (1440, 1080)（图像右下角），与注释"靠近图像中心"矛盾，
-  // 等价于优先选右下角的装甲板。改为真正的中心 (720, 540)。
-  const cv::Point2f img_center(720.f, 540.f);
+  // 图像尺寸来自 tuning: 段的 image_width/image_height（默认 1440x1080）
+  const auto & tune_center = tools::tuning();
+  const cv::Point2f img_center(
+    tune_center.image_width / 2.f, tune_center.image_height / 2.f);
 
   armors.sort([&](const Armor & a, const Armor & b) {
     if (a.priority != b.priority) return a.priority < b.priority;
@@ -303,21 +309,12 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   //   Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
   //   target_ = Target(armor, t, 0.2, 4, P0_dig);
   // }
-  switch (armor.name) {
-    case ArmorName::sentry:
-      target_ = Target(armor, t, 0.2, 4, Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}});
-      break;
-    case ArmorName::one:
-      target_ = Target(armor, t, 0.2, 4, Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}});
-      break;
-    case ArmorName::three:
-      target_ = Target(armor, t, 0.2, 4, Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}});
-      break;
-    
-    default:
-      target_ = Target(armor, t, 0.2, 4, Eigen::VectorXd{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}});
-      break;
-  }
+  // 初始化参数统一来自 tuning: 段（armor_num / radius / P0），
+  // 原来四个分支的取值完全相同，这里合并成一条，行为不变。
+  const auto & tune_init = tools::tuning();
+  Eigen::VectorXd P0_dig(tune_init.P0.size());
+  for (size_t i = 0; i < tune_init.P0.size(); ++i) P0_dig[static_cast<Eigen::Index>(i)] = tune_init.P0[i];
+  target_ = Target(armor, t, tune_init.radius, tune_init.armor_num, P0_dig);
 
   return true;
 }

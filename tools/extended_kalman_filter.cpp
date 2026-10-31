@@ -2,6 +2,8 @@
 
 #include <numeric>
 
+#include "tools/tuning.hpp"
+
 namespace tools
 {
 ExtendedKalmanFilter::ExtendedKalmanFilter(
@@ -62,9 +64,10 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
   double nis = residual.transpose() * S.inverse() * residual;
   double nees = (x - x_prior).transpose() * P.inverse() * (x - x_prior);
 
-  // 卡方检验阈值（自由度=4，取置信水平95%）
-  constexpr double nis_threshold = 0.711;
-  constexpr double nees_threshold = 0.711;
+  // 卡方检验阈值（来自 tuning: 段，默认自由度=4、置信水平95% 的历史取值）
+  const auto & tune = tuning();
+  const double nis_threshold = tune.nis_threshold;
+  const double nees_threshold = tune.nees_threshold;
 
   if (nis > nis_threshold) nis_count_++, data["nis_fail"] = 1;
   if (nees > nees_threshold) nees_count_++, data["nees_fail"] = 1;
@@ -73,6 +76,7 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
 
   recent_nis_failures.push_back(nis > nis_threshold ? 1 : 0);
 
+  window_size = static_cast<size_t>(tune.nis_window);
   if (recent_nis_failures.size() > window_size) {
     recent_nis_failures.pop_front();
   }

@@ -227,6 +227,51 @@ min_detect_count: 5                 # 连续检测到多少次后进入跟踪状
 max_temp_lost_count: 25             # 普通目标最大临时丢失帧数
 outpost_max_temp_lost_count: 75     # 前哨站目标最大临时丢失帧数
 
+# =============================================================================
+#  卡尔曼滤波 / 跟踪器可调参数（tuning 段）
+#  —— 没写的键会用代码里的默认值，默认值 = 搬进 yaml 之前的硬编码值，行为不变
+#  —— 改完重启进程即可生效，**不需要重新编译**
+#  —— 只写你要改的那几行也可以
+# =============================================================================
+tuning:
+  # ---- 过程噪声 Q：调大 = 更信新观测（跟得快，但静止时更抖）----
+  v1: 100.0                 # 普通目标加速度方差
+  v2: 400.0                 # 普通目标角加速度方差（小陀螺跟随能力）
+  v1_outpost: 10.0
+  v2_outpost: 0.1
+  outpost_w_trigger: 2.0    # 前哨站转速超过该值开始限幅
+  outpost_w_limit: 2.51     # 限幅后的转速上限 (rad/s)
+
+  # ---- 观测噪声 R：调大 = 更平滑（滞后），调小 = 更灵敏（抖）----
+  R_yaw: 0.004              # yaw 观测方差 (rad^2)，0.004 ≈ 3.6° 标准差
+  R_pitch: 0.004            # pitch 观测方差 (rad^2)
+  R_dist_log_gain: 1.0      # 距离项 log(|Δangle|+1) 的系数
+  R_dist_base: 1.0          # 距离项常数偏置
+  R_armor_log_gain: 0.005   # 装甲板朝向项 log(dist+1) 的系数（原为 /200）
+  R_armor_base: 0.09        # 装甲板朝向项常数偏置
+
+  # ---- 新目标初始化（只对新建目标生效）----
+  #     顺序: x vx y vy z vz a w r l h
+  P0: [1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1]
+  radius: 0.2               # 初始半径 (m)
+  armor_num: 4              # 装甲板数量
+
+  # ---- 判据 ----
+  r_min: 0.05               # diverged(): 半径下限，低于即判丢
+  r_max: 0.5                # diverged(): 半径上限
+  converged_update_count: 3
+  outpost_converged_update_count: 10
+  max_dt: 0.1               # 帧间隔超过该值直接判丢 (s)
+
+  # ---- 图像尺寸（选板时用于算画面中心）----
+  image_width: 1440
+  image_height: 1080
+
+  # ---- NIS / NEES ----
+  nis_window: 100
+  nis_threshold: 0.711
+  nees_threshold: 0.711
+
 # ----- 瞄准器 (Aimer) -----
 yaw_offset: -0.8                    # yaw 整体偏移 (度)，单枪管只调这一个
 pitch_offset: -1.0                  # pitch 整体偏移 (度)

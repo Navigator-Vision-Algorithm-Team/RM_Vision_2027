@@ -4,6 +4,7 @@
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/tuning.hpp"
 
 namespace auto_aim
 {
@@ -109,12 +110,13 @@ void Target::predict(double dt)
   // Piecewise White Noise Model
   // https://github.com/rlabbe/Kalman-and-Bayesian-Filters-in-Python/blob/master/07-Kalman-Filter-Math.ipynb
   double v1, v2;
+  const auto & tune = tools::tuning();
   if (name == ArmorName::outpost) {
-    v1 = 10;   // 前哨站加速度方差
-    v2 = 0.1;  // 前哨站角加速度方差
+    v1 = tune.v1_outpost;  // 前哨站加速度方差
+    v2 = tune.v2_outpost;  // 前哨站角加速度方差
   } else {
-    v1 = 100;  // 加速度方差
-    v2 = 400;  // 角加速度方差
+    v1 = tune.v1;  // 加速度方差
+    v2 = tune.v2;  // 角加速度方差
   }
   auto a = dt * dt * dt * dt / 4;
   auto b = dt * dt * dt / 2;
@@ -144,8 +146,10 @@ void Target::predict(double dt)
   };
 
   // 前哨站转速特判
-  if (this->convergened() && this->name == ArmorName::outpost && std::abs(this->ekf_.x[7]) > 2)
-    this->ekf_.x[7] = this->ekf_.x[7] > 0 ? 2.51 : -2.51;
+  if (
+    this->convergened() && this->name == ArmorName::outpost &&
+    std::abs(this->ekf_.x[7]) > tune.outpost_w_trigger)
+    this->ekf_.x[7] = this->ekf_.x[7] > 0 ? tune.outpost_w_limit : -tune.outpost_w_limit;
 
   ekf_.predict(F, Q, f);
 }
@@ -206,9 +210,11 @@ void Target::update_ypda(const Armor & armor, int id)
   // Eigen::VectorXd R_dig{{4e-3, 4e-3, 1, 9e-2}};
   auto center_yaw = std::atan2(armor.xyz_in_world[1], armor.xyz_in_world[0]);
   auto delta_angle = tools::limit_rad(armor.ypr_in_world[0] - center_yaw);
+  const auto & tune_r = tools::tuning();
   Eigen::VectorXd R_dig{
-    {4e-3, 4e-3, log(std::abs(delta_angle) + 1) + 1,
-     log(std::abs(armor.ypd_in_world[2]) + 1) / 200 + 9e-2}};
+    {tune_r.R_yaw, tune_r.R_pitch,
+     tune_r.R_dist_log_gain * log(std::abs(delta_angle) + 1) + tune_r.R_dist_base,
+     tune_r.R_armor_log_gain * log(std::abs(armor.ypd_in_world[2]) + 1) + tune_r.R_armor_base}};
 
   //测量过程噪声偏差的方差
   Eigen::MatrixXd R = R_dig.asDiagonal();
@@ -255,8 +261,9 @@ std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
 
 bool Target::diverged() const
 {
-  auto r_ok = ekf_.x[8] > 0.05 && ekf_.x[8] < 0.5;
-  auto l_ok = ekf_.x[8] + ekf_.x[9] > 0.05 && ekf_.x[8] + ekf_.x[9] < 0.5;
+  const auto & tune = tools::tuning();
+  auto r_ok = ekf_.x[8] > tune.r_min && ekf_.x[8] < tune.r_max;
+  auto l_ok = ekf_.x[8] + ekf_.x[9] > tune.r_min && ekf_.x[8] + ekf_.x[9] < tune.r_max;
 
   if (r_ok && l_ok) return false;
 
@@ -266,12 +273,17 @@ bool Target::diverged() const
 
 bool Target::convergened()
 {
-  if (this->name != ArmorName::outpost && update_count_ > 3 && !this->diverged()) {
+  const auto & tune = tools::tuning();
+  if (
+    this->name != ArmorName::outpost && update_count_ > tune.converged_update_count &&
+    !this->diverged()) {
     is_converged_ = true;
   }
 
   //前哨站特殊判断
-  if (this->name == ArmorName::outpost && update_count_ > 10 && !this->diverged()) {
+  if (
+    this->name == ArmorName::outpost && update_count_ > tune.outpost_converged_update_count &&
+    !this->diverged()) {
     is_converged_ = true;
   }
 
