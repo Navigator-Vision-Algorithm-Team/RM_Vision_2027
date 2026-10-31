@@ -10,6 +10,13 @@ add_executable(serial_communication_test
     ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
 target_link_libraries(serial_communication_test serial)
 
+# 交互式云台响应测试：输入绝对 yaw/pitch（度），每行发送一条 0x0402 指令。
+add_executable(testgimbalspeed testgimbalspeed.cpp)
+target_link_libraries(
+    testgimbalspeed
+    ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io io_can)
+install(TARGETS testgimbalspeed RUNTIME DESTINATION bin)
+
 # ============================================================================
 #  调试版入口（仅供局域网内 Foxglove 实时观瞄，正式比赛请用 src/ 下的目标）
 #
