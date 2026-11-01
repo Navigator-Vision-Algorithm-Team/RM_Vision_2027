@@ -5,7 +5,7 @@
 //  auto_aim::DebugStream（ROS2 -> Foxglove）的若干调用，用于开发板上没有
 //  桌面端时，在局域网内实时观测：
 //      相机原图 / YOLO 预处理后的输入图 / 检测框 + 敌人数字编号 /
-//      YOLO 处理帧率(FPS) / 当前云台位姿 / 下发给云台的目标位姿
+//      YOLO 处理帧率(FPS) / PnP 与提前瞄准点 / EKF 收敛指标 / 云台位姿
 //  调试数据只在 DebugStream 内部流转，不参与任何控制指令的生成。
 //  删除 yaml 里的 debug_ros2 段或置 enable: false 即可整体关闭。
 // ============================================================================
@@ -438,6 +438,20 @@ int main(int argc, char * argv[])
           status.target_r = x[8];
           status.model_prob = target.model_probabilities();
           status.nis_ratio = target.nis_ratio();
+          const auto convergence = target.debug_convergence_metrics();
+          status.has_ekf_convergence = true;
+          status.ekf_converged = convergence.converged;
+          status.ekf_convergence_score = convergence.score;
+          status.ekf_covariance_score = convergence.covariance_score;
+          status.ekf_consistency_score = convergence.consistency_score;
+          status.ekf_position_std = convergence.position_std;
+          status.ekf_velocity_std = convergence.velocity_std;
+          status.ekf_yaw_std = convergence.yaw_std;
+          status.ekf_angular_velocity_std = convergence.angular_velocity_std;
+          status.ekf_geometry_std = convergence.geometry_std;
+          status.ekf_nis_failure_rate = convergence.nis_failure_rate;
+          status.ekf_samples = convergence.samples;
+          status.ekf_min_samples = convergence.min_samples;
         }
       }
 

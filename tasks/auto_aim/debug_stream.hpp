@@ -40,6 +40,19 @@ struct DebugStatus
   double target_w = 0.0;                                    // 角速度（rad/s）
   double target_r = 0.0;                                    // 估计半径（m）
   Eigen::Vector3d model_prob = Eigen::Vector3d::Zero();     // IMM 三个模型的概率
+  bool has_ekf_convergence = false;
+  bool ekf_converged = false;
+  double ekf_convergence_score = 0.0;
+  double ekf_covariance_score = 0.0;
+  double ekf_consistency_score = 0.0;
+  double ekf_position_std = 0.0;           // m
+  double ekf_velocity_std = 0.0;           // m/s
+  double ekf_yaw_std = 0.0;                // rad
+  double ekf_angular_velocity_std = 0.0;   // rad/s
+  double ekf_geometry_std = 0.0;           // m
+  double ekf_nis_failure_rate = 0.0;
+  size_t ekf_samples = 0;
+  size_t ekf_min_samples = 0;
   double nis_ratio = 0.0;                                   // NIS/dof，理想 1
   std::vector<PnpDebugInfo> pnp_results;                    // 装甲板 PnP 结果（主相机/gimbal 系）
   bool has_aim_prediction = false;
@@ -84,6 +97,7 @@ struct DebugStatus
 //   image_raw     sensor_msgs/CompressedImage  相机原图（可选）
 //   yolo_input    sensor_msgs/CompressedImage  YOLO 预处理后的输入图（可选）
 //   status        std_msgs/String              JSON：FPS / 推理耗时 / 云台位姿 / 目标位姿
+//   ekf_convergence std_msgs/String            JSON：EKF 收敛分数、分项与样本数
 //   gimbal_pose   geometry_msgs/PoseStamped    当前云台位姿（世界系）
 //   target_pose   geometry_msgs/PoseStamped    下发给云台的目标位姿（世界系）
 //   ekf           std_msgs/Float64MultiArray   EKF 遥测（仅跟踪成功时发布），data 顺序：
