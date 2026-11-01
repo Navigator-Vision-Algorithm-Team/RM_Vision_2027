@@ -87,6 +87,23 @@ struct TargetConfig
   static TargetConfig load(const std::string & path);
 };
 
+struct EkfConvergenceMetrics
+{
+  double score = 0.0;
+  double covariance_score = 0.0;
+  double consistency_score = 0.0;
+  double position_std = 0.0;
+  double velocity_std = 0.0;
+  double yaw_std = 0.0;
+  double angular_velocity_std = 0.0;
+  double geometry_std = 0.0;
+  double nis_ratio = 0.0;
+  double nis_failure_rate = 0.0;
+  size_t samples = 0;
+  size_t min_samples = 0;
+  bool converged = false;
+};
+
 class Target
 {
 public:
@@ -124,6 +141,8 @@ public:
   Eigen::Vector3d model_probabilities() const;
   // 主模型（M1）的 NIS/dof，理想值 1
   double nis_ratio() const;
+  // Debug-only diagnostic; does not affect target tracking or switching decisions.
+  EkfConvergenceMetrics debug_convergence_metrics() const;
   // R 的当前在线自适应缩放因子（未开启时恒为 1）
   double r_scale() const { return r_scale_; }
 

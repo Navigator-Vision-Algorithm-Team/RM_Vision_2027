@@ -258,6 +258,18 @@ void annotate(
       status.model_prob[1], status.model_prob[2], status.nis_ratio));
   }
 
+  if (status.has_ekf_convergence) {
+    lines.push_back(fmt::format(
+      "ekf convergence {:.0f}/100 {}  cov {:.0f}  nis {:.0f}  samples {}/{}",
+      status.ekf_convergence_score, status.ekf_converged ? "CONVERGED" : "not converged",
+      status.ekf_covariance_score, status.ekf_consistency_score, status.ekf_samples,
+      status.ekf_min_samples));
+    lines.push_back(fmt::format(
+      "        sigma pos {:.3f}m vel {:.2f}m/s yaw {:.1f}deg w {:.2f}rad/s geom {:.3f}m",
+      status.ekf_position_std, status.ekf_velocity_std, status.ekf_yaw_std * kRad2Deg,
+      status.ekf_angular_velocity_std, status.ekf_geometry_std));
+  }
+
   if (status.has_aim_prediction) {
     lines.push_back(fmt::format(
       "lead aim ({:+.2f}, {:+.2f}, {:+.2f}) m", status.aim_prediction_world.x(),
@@ -363,6 +375,7 @@ struct DebugStream::Impl
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_raw;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_input;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_status;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_ekf_convergence;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_gimbal;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_target;
   bool own_context = false;
@@ -414,6 +427,8 @@ DebugStream::Impl::Impl(
       pub_input =
         node->create_publisher<sensor_msgs::msg::CompressedImage>(prefix + "/yolo_input", rclcpp::QoS(1));
     pub_status = node->create_publisher<std_msgs::msg::String>(prefix + "/status", rclcpp::QoS(10));
+    pub_ekf_convergence =
+      node->create_publisher<std_msgs::msg::String>(prefix + "/ekf_convergence", rclcpp::QoS(10));
     pub_gimbal =
       node->create_publisher<geometry_msgs::msg::PoseStamped>(prefix + "/gimbal_pose", rclcpp::QoS(10));
     pub_target =
@@ -423,7 +438,8 @@ DebugStream::Impl::Impl(
     worker = std::thread([this] { run(); });
 
     RCLCPP_INFO(
-      node->get_logger(), "调试数据流已启动：%s/{image,image_raw,yolo_input,status,gimbal_pose,target_pose}",
+      node->get_logger(),
+      "调试数据流已启动：%s/{image,image_raw,yolo_input,status,ekf_convergence,gimbal_pose,target_pose}",
       prefix.c_str());
   } catch (const std::exception & e) {
     std::fprintf(stderr, "[DebugStream] ROS2 初始化失败（%s），调试数据流关闭\n", e.what());
@@ -449,6 +465,7 @@ DebugStream::Impl::~Impl()
   pub_raw.reset();
   pub_input.reset();
   pub_status.reset();
+  pub_ekf_convergence.reset();
   pub_gimbal.reset();
   pub_target.reset();
   node.reset();
@@ -519,14 +536,46 @@ void DebugStream::Impl::emit(Job & job)
       "\"state\":\"{}\",\"control\":{},\"shoot\":{},"
       "\"gimbal\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f},\"roll_deg\":{:.2f}}},"
       "\"target\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}},"
-      "\"error\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}}{}}}",
+      "\"error\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}}}}",
       tag, job.loop_fps, job.yolo_fps, job.yolo_ms, job.armors.size(), job.status.state,
       job.status.control, job.status.shoot, job.status.gimbal_ypr[0] * kRad2Deg,
       job.status.gimbal_ypr[1] * kRad2Deg, job.status.gimbal_ypr[2] * kRad2Deg,
       job.status.target_ypr[0] * kRad2Deg, job.status.target_ypr[1] * kRad2Deg,
       (job.status.target_ypr[0] - job.status.gimbal_ypr[0]) * kRad2Deg,
-      (job.status.target_ypr[1] - job.status.gimbal_ypr[1]) * kRad2Deg, ekf_json);
+      (job.status.target_ypr[1] - job.status.gimbal_ypr[1]) * kRad2Deg);
+    msg.data.pop_back();
+    msg.data += ekf_json;
+    msg.data += fmt::format(
+      ",\"ekf_convergence\":{{\"available\":{},\"converged\":{},\"score\":{:.1f},"
+      "\"covariance_score\":{:.1f},\"consistency_score\":{:.1f},\"samples\":{},"
+      "\"min_samples\":{},\"position_std_m\":{:.4f},\"velocity_std_mps\":{:.4f},"
+      "\"yaw_std_rad\":{:.5f},\"angular_velocity_std_radps\":{:.4f},"
+      "\"geometry_std_m\":{:.4f},\"nis_ratio\":{:.4f},\"nis_failure_rate\":{:.4f}}}",
+      job.status.has_ekf_convergence, job.status.ekf_converged,
+      job.status.ekf_convergence_score, job.status.ekf_covariance_score,
+      job.status.ekf_consistency_score, job.status.ekf_samples, job.status.ekf_min_samples,
+      job.status.ekf_position_std, job.status.ekf_velocity_std, job.status.ekf_yaw_std,
+      job.status.ekf_angular_velocity_std, job.status.ekf_geometry_std, job.status.nis_ratio,
+      job.status.ekf_nis_failure_rate);
+    msg.data += "}";
     pub_status->publish(msg);
+  }
+
+  if (pub_ekf_convergence) {
+    std_msgs::msg::String msg;
+    msg.data = fmt::format(
+      "{{\"available\":{},\"converged\":{},\"score\":{:.1f},"
+      "\"covariance_score\":{:.1f},\"consistency_score\":{:.1f},\"samples\":{},"
+      "\"min_samples\":{},\"position_std_m\":{:.4f},\"velocity_std_mps\":{:.4f},"
+      "\"yaw_std_rad\":{:.5f},\"angular_velocity_std_radps\":{:.4f},"
+      "\"geometry_std_m\":{:.4f},\"nis_ratio\":{:.4f},\"nis_failure_rate\":{:.4f}}}",
+      job.status.has_ekf_convergence, job.status.ekf_converged,
+      job.status.ekf_convergence_score, job.status.ekf_covariance_score,
+      job.status.ekf_consistency_score, job.status.ekf_samples, job.status.ekf_min_samples,
+      job.status.ekf_position_std, job.status.ekf_velocity_std, job.status.ekf_yaw_std,
+      job.status.ekf_angular_velocity_std, job.status.ekf_geometry_std, job.status.nis_ratio,
+      job.status.ekf_nis_failure_rate);
+    pub_ekf_convergence->publish(msg);
   }
 
   // 5) 云台位姿 / 目标位姿（Foxglove 3D 面板可直接看朝向；位置为单位方向向量）

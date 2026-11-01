@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <initializer_list>
+#include <limits>
 #include <numeric>
 
 #include <yaml-cpp/yaml.h>
@@ -624,6 +626,81 @@ double Target::nis_ratio() const
 {
   const auto & data = ekf_[0].data;
   return data.count("nis_ratio") ? data.at("nis_ratio") : 0.0;
+}
+
+EkfConvergenceMetrics Target::debug_convergence_metrics() const
+{
+  EkfConvergenceMetrics metrics;
+  metrics.samples = std::numeric_limits<size_t>::max();
+  for (const auto & filter : ekf_) {
+    metrics.samples = std::min(metrics.samples, filter.nis_window_samples());
+    metrics.min_samples = std::max(metrics.min_samples, filter.min_window_samples);
+  }
+  if (metrics.samples == std::numeric_limits<size_t>::max()) metrics.samples = 0;
+  metrics.nis_ratio = nis_ratio();
+  metrics.nis_failure_rate = nis_failure_rate();
+
+  if (P_fused_.rows() < 11 || P_fused_.cols() < 11 || !P_fused_.allFinite()) return metrics;
+
+  const auto max_std = [this](std::initializer_list<Eigen::Index> indices) {
+    double variance = 0.0;
+    for (const auto index : indices) {
+      if (P_fused_(index, index) < 0.0) return std::numeric_limits<double>::quiet_NaN();
+      variance = std::max(variance, P_fused_(index, index));
+    }
+    return std::sqrt(variance);
+  };
+
+  metrics.position_std = max_std({0, 2, 4});
+  metrics.velocity_std = max_std({1, 3, 5});
+  metrics.yaw_std = max_std({6});
+  metrics.angular_velocity_std = max_std({7});
+  metrics.geometry_std = max_std({8, 9, 10});
+
+  if (!std::isfinite(metrics.position_std) || !std::isfinite(metrics.velocity_std) ||
+      !std::isfinite(metrics.yaw_std) || !std::isfinite(metrics.angular_velocity_std) ||
+      !std::isfinite(metrics.geometry_std)) {
+    return metrics;
+  }
+
+  // Score each state group against a practical one-sigma tolerance. IMM's fused
+  // covariance includes both within-model uncertainty and between-model spread.
+  const auto uncertainty_score = [](double sigma, double tolerance) {
+    return std::clamp(1.0 - sigma / tolerance, 0.0, 1.0);
+  };
+  constexpr double kPositionToleranceM = 0.10;
+  constexpr double kVelocityToleranceMps = 0.50;
+  constexpr double kYawToleranceRad = 0.08726646259971647;  // 5 degrees
+  constexpr double kAngularVelocityToleranceRadps = 0.50;
+  constexpr double kRadiusToleranceM = 0.03;
+
+  metrics.covariance_score =
+    100.0 *
+    (0.30 * uncertainty_score(metrics.position_std, kPositionToleranceM) +
+     0.15 * uncertainty_score(metrics.velocity_std, kVelocityToleranceMps) +
+     0.20 * uncertainty_score(metrics.yaw_std, kYawToleranceRad) +
+     0.15 * uncertainty_score(
+              metrics.angular_velocity_std, kAngularVelocityToleranceRadps) +
+     0.20 * uncertainty_score(metrics.geometry_std, kRadiusToleranceM));
+
+  // For a correctly modelled filter, mean NIS / dof is near 1. Penalize
+  // deviations outside [0.25, 4] and separately account for 95%-gate failures.
+  double nis_ratio_score = 0.0;
+  if (std::isfinite(metrics.nis_ratio) && metrics.nis_ratio > 0.0) {
+    nis_ratio_score = std::clamp(
+      1.0 - std::abs(std::log(metrics.nis_ratio)) / std::log(4.0), 0.0, 1.0);
+  }
+  const double max_failure_rate = std::max(config_.tracker_fail_rate, 1e-6);
+  const double nis_failure_score =
+    std::clamp(1.0 - metrics.nis_failure_rate / max_failure_rate, 0.0, 1.0);
+  metrics.consistency_score = 100.0 * (0.6 * nis_ratio_score + 0.4 * nis_failure_score);
+  metrics.score = 0.65 * metrics.covariance_score + 0.35 * metrics.consistency_score;
+  metrics.converged =
+    metrics.samples >= metrics.min_samples && !diverged() && metrics.score >= 70.0 &&
+    metrics.covariance_score >= 60.0 && metrics.consistency_score >= 60.0 &&
+    metrics.nis_failure_rate < max_failure_rate;
+
+  return metrics;
 }
 
 std::vector<Eigen::Vector4d> Target::armor_xyza_list() const
