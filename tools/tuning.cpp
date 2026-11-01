@@ -59,6 +59,11 @@ void load_tuning(const std::string & config_path)
       set_if(n, "radius", t.radius);
       set_if(n, "armor_num", t.armor_num);
 
+      // 半径限幅
+      set_if(n, "r_clamp_min", t.r_clamp_min);
+      set_if(n, "r_clamp_max", t.r_clamp_max);
+      set_if(n, "l_clamp", t.l_clamp);
+
       // 判据
       set_if(n, "r_min", t.r_min);
       set_if(n, "r_max", t.r_max);

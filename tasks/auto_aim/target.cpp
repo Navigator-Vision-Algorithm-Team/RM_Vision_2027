@@ -1,5 +1,6 @@
 #include "target.hpp"
 
+#include <algorithm>
 #include <numeric>
 
 #include "tools/logger.hpp"
@@ -241,6 +242,12 @@ void Target::update_ypda(const Armor & armor, int id)
   Eigen::VectorXd z{{ypd[0], ypd[1], ypd[2], ypr[0]}};  //获得观测量
 
   ekf_.update(z, H, R, h, z_subtract);
+
+  // 半径 / 半径差物理限幅：单板、画面偏暗或远距离时，r 会被观测推飞，
+  // 一旦触及 diverged() 的下限就瞬间判丢。标准车半径约 0.2m。
+  const auto & tune_c = tools::tuning();
+  ekf_.x[8] = std::clamp(ekf_.x[8], tune_c.r_clamp_min, tune_c.r_clamp_max);
+  ekf_.x[9] = std::clamp(ekf_.x[9], -tune_c.l_clamp, tune_c.l_clamp);
 }
 
 Eigen::VectorXd Target::ekf_x() const { return ekf_.x; }

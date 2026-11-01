@@ -33,9 +33,15 @@ struct Tuning
   double R_armor_base = 9e-2;       // 装甲板朝向项：常数偏置
 
   // ---- 初始化（tracker.cpp 的 P0 / radius / armor_num）----
-  std::array<double, 11> P0{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1};
+  // r 的方差从 1 收到 0.02：单板/画面偏暗时 r 会被观测推飞，触到 diverged() 下限就判丢
+  std::array<double, 11> P0{1, 64, 1, 64, 1, 64, 0.4, 100, 0.02, 0.01, 0.01};
   double radius = 0.2;
   int armor_num = 4;
+
+  // ---- 半径物理限幅（每次 update 之后强制夹住）----
+  double r_clamp_min = 0.10;  // r 下限（标准车半径约 0.2m）
+  double r_clamp_max = 0.40;  // r 上限
+  double l_clamp = 0.04;      // |半径差| 上限；配合 r_clamp_min 保证 r+l 也不越界
 
   // ---- 判据 / 状态机 ----
   double r_min = 0.05;                     // diverged(): r 下限
