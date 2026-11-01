@@ -341,6 +341,40 @@ void annotate(
     for (const auto & p : armor.points) cv::circle(img, p, std::max(2, thick + 1), color, -1);
   }
 
+  for (const auto & pnp : status.pnp_results) {
+    if (!pnp.xyz_in_gimbal.allFinite()) continue;
+
+    const std::string label = fmt::format(
+      "PnP gimbal ({:+.2f}, {:+.2f}, {:+.2f}) m  d {:.2f} m", pnp.xyz_in_gimbal.x(),
+      pnp.xyz_in_gimbal.y(), pnp.xyz_in_gimbal.z(), pnp.xyz_in_gimbal.norm());
+    int base = 0;
+    const auto text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.48 * s, thick, &base);
+    const int x = std::clamp(pnp.box.x, 0, std::max(0, img.cols - text_size.width - 8));
+    const int y = std::clamp(pnp.box.y + pnp.box.height + text_size.height + 8,
+                             text_size.height + 4, std::max(text_size.height + 4, img.rows - base - 2));
+    cv::rectangle(
+      img, cv::Point(x, y - text_size.height - 4),
+      cv::Point(std::min(x + text_size.width + 8, img.cols - 1), y + base), cv::Scalar(80, 80, 0),
+      cv::FILLED);
+    cv::putText(
+      img, label, cv::Point(x + 4, y), cv::FONT_HERSHEY_SIMPLEX, 0.48 * s,
+      cv::Scalar(255, 255, 0), thick, cv::LINE_AA);
+  }
+
+  if (status.has_aim_prediction_pixel) {
+    const cv::Point point(
+      cvRound(status.aim_prediction_pixel.x), cvRound(status.aim_prediction_pixel.y));
+    if (point.x >= 0 && point.x < img.cols && point.y >= 0 && point.y < img.rows) {
+      cv::drawMarker(
+        img, point, cv::Scalar(255, 0, 255), cv::MARKER_CROSS,
+        std::max(18, static_cast<int>(32 * s)), thick + 1, cv::LINE_AA);
+      cv::circle(img, point, std::max(8, static_cast<int>(14 * s)), cv::Scalar(255, 0, 255), thick);
+      cv::putText(
+        img, "LEAD AIM", point + cv::Point(10, -10), cv::FONT_HERSHEY_SIMPLEX, 0.6 * s,
+        cv::Scalar(255, 0, 255), thick, cv::LINE_AA);
+    }
+  }
+
   // PnP 一级校验：检测点 vs 重投影点 + 板面三轴（画在框和关键点之上）
   PnpStats pnp_stats;
   if (pnp_check) pnp_stats = draw_pnp_check(img, armors, pnp_cfg, s);
@@ -406,6 +440,12 @@ void annotate(
     lines.push_back(fmt::format(
       "        mu {:.2f} / {:.2f} / {:.2f}   nis/dof {:.2f}", status.model_prob[0],
       status.model_prob[1], status.model_prob[2], status.nis_ratio));
+  }
+
+  if (status.has_aim_prediction) {
+    lines.push_back(fmt::format(
+      "lead aim ({:+.2f}, {:+.2f}, {:+.2f}) m", status.aim_prediction_world.x(),
+      status.aim_prediction_world.y(), status.aim_prediction_world.z()));
   }
 
   // PnP 校验结果：绿色十字 = 重投影，连线 = 残差，三色细线 = 板面 X/Y/Z 轴
@@ -749,12 +789,12 @@ DebugStream::~DebugStream() = default;
 
 bool DebugStream::enabled() const { return impl_ && impl_->on; }
 
-void DebugStream::frame(const cv::Mat & raw_img)
+bool DebugStream::frame(const cv::Mat & raw_img)
 {
   auto & d = *impl_;
   if (!d.on || raw_img.empty()) {
     d.armed = false;
-    return;
+    return false;
   }
 
   const auto now = Clock::now();
@@ -770,7 +810,7 @@ void DebugStream::frame(const cv::Mat & raw_img)
     const auto period = std::chrono::duration<double>(1.0 / d.opt.image_hz);
     if (now - d.t_frame < std::chrono::duration_cast<Clock::duration>(period)) {
       d.armed = false;
-      return;
+      return false;
     }
   }
   d.t_frame = now;
@@ -780,6 +820,7 @@ void DebugStream::frame(const cv::Mat & raw_img)
     raw_img.copyTo(d.staging.raw);
   }
   d.armed = true;
+  return true;
 }
 
 void DebugStream::publish(const std::list<Armor> & armors, const DebugStatus & status)
