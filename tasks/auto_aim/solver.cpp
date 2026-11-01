@@ -56,11 +56,11 @@ void Solver::set_extrinsic(
 //          armor.points  装甲板在 2D 图像中的点
 //          camera_matrix_ 相机内参, distort_coeffs_ 畸变
 //          rvec 旋转量, tvec 平移量, SOLVEPNP_IPPE 平面四点解法
-void Solver::solve(Armor & armor) const
+bool Solver::solve(Armor & armor) const
 {
   const auto pnp = solve_pnp_armor(armor, camera_matrix_, distort_coeffs_);
   // 【改动】解算失败时直接返回，避免把未初始化的位姿写进 armor 再传给 tracker。
-  if (!pnp.success) return;
+  if (!pnp.success) return false;
 
   const Eigen::Vector3d & xyz_in_camera = pnp.xyz_in_camera;
   // 【改动】使用带小yaw修正的外参（offset 默认 0 时与原来完全等价）
@@ -87,9 +87,10 @@ void Solver::solve(Armor & armor) const
   auto is_balance = (armor.type == ArmorType::big) &&
                     (armor.name == ArmorName::three || armor.name == ArmorName::four ||
                      armor.name == ArmorName::five);
-  if (is_balance) return;
+  if (is_balance) return true;
 
   optimize_yaw(armor);
+  return true;
 }
 
 std::vector<cv::Point2f> Solver::reproject_armor(

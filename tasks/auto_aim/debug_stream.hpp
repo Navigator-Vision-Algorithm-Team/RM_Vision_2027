@@ -6,11 +6,18 @@
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <string>
+#include <vector>
 
 #include "armor.hpp"
 
 namespace auto_aim
 {
+
+struct PnpDebugInfo
+{
+  cv::Rect box;
+  Eigen::Vector3d xyz_in_gimbal = Eigen::Vector3d::Zero();
+};
 
 // 一帧调试状态：只填「业务侧才知道」的量。
 // FPS / 推理耗时由 DebugStream 自己统计，图像由 DebugStream 自己持有，调用方不必准备。
@@ -33,6 +40,11 @@ struct DebugStatus
   double target_r = 0.0;                                    // 估计半径（m）
   Eigen::Vector3d model_prob = Eigen::Vector3d::Zero();     // IMM 三个模型的概率
   double nis_ratio = 0.0;                                   // NIS/dof，理想 1
+  std::vector<PnpDebugInfo> pnp_results;                    // 装甲板 PnP 结果（主相机/gimbal 系）
+  bool has_aim_prediction = false;
+  Eigen::Vector3d aim_prediction_world = Eigen::Vector3d::Zero();  // Aimer 最终提前瞄准点
+  bool has_aim_prediction_pixel = false;
+  cv::Point2f aim_prediction_pixel;
 };
 
 // ROS2 -> Foxglove 实时调试数据流。
@@ -66,7 +78,8 @@ public:
   bool enabled() const;
 
   // 帧首调用（相机出图后、任何绘制之前）：按 image_hz 节流，被节流时不拷贝图像。
-  void frame(const cv::Mat & raw_img);
+  // 返回 true 表示本帧已被选中发布，可按需计算较耗时的可视化数据。
+  bool frame(const cv::Mat & raw_img);
 
   // 帧尾调用，必须与 frame() 成对：提交本帧检测结果与状态。
   void publish(const std::list<Armor> & armors, const DebugStatus & status);

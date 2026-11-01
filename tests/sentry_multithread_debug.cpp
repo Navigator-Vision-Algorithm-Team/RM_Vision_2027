@@ -250,7 +250,8 @@ int main(int argc, char * argv[])
     const auto timestamp = frame.timestamp;
     auto armors = std::move(frame.armors);
 
-    debug.frame(img);  // 【新增】抓取本帧原图（内部按 image_hz 节流）
+    const bool debug_frame_requested =
+      debug.frame(img);  // 【新增】按 image_hz 节流抓取原图
     debug.yolo_sample(frame.inference_ms);  // 【新增】推理耗时由推理线程直接给出
 
     // 双yaw 姿态：大yaw 只有 yaw，pitch/roll 属于小yaw（主相机所在板）
@@ -313,6 +314,7 @@ int main(int argc, char * argv[])
     }
 
     io::Command command{false, false, 0, 0};
+    aimer.debug_aim_point.valid = false;
 
     // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
     // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
@@ -402,6 +404,27 @@ int main(int argc, char * argv[])
       auto_aim::DebugStatus status{
         gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
         command.shoot, tracker.state(), ""};
+
+      if (debug_frame_requested) {
+        for (auto & armor : armors) {
+          if (solver.solve(armor)) {
+            status.pnp_results.push_back({armor.box, armor.xyz_in_gimbal});
+          }
+        }
+      }
+
+      if (debug_frame_requested && aimer.debug_aim_point.valid) {
+        status.has_aim_prediction = true;
+        status.aim_prediction_world = aimer.debug_aim_point.xyza.head<3>();
+        const auto pixels = solver.world2pixel({cv::Point3f(
+          static_cast<float>(status.aim_prediction_world.x()),
+          static_cast<float>(status.aim_prediction_world.y()),
+          static_cast<float>(status.aim_prediction_world.z()))});
+        if (!pixels.empty()) {
+          status.has_aim_prediction_pixel = true;
+          status.aim_prediction_pixel = pixels.front();
+        }
+      }
 
       // IMM/EKF 预测信息：目标中心、速度、角速度、半径、模型概率、NIS 一致性
       if (!targets.empty()) {
