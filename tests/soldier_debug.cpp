@@ -1,26 +1,30 @@
 // ============================================================================
 //  【调试入口】soldier 的调试副本（正式比赛请用 src/ 下的目标）
 //
-//  业务逻辑与 src/soldier.cpp 完全一致，只额外插入了 auto_aim::DebugStream
-//  （ROS2 -> Foxglove）的若干调用，用于开发板上没有桌面端时，在局域网内实时观测：
+//  业务逻辑与 src/soldier.cpp 完全一致（YOLO -> Tracker(EKF) -> Aimer），
+//  只额外插入 auto_aim::DebugStream（ROS2 -> Foxglove）的若干调用，用于开发板上
+//  没有桌面端时，在局域网内实时观测：
 //      相机原图 / YOLO 预处理后的输入图 / 检测框 + 敌人数字编号 /
-//      YOLO 处理帧率(FPS) / 当前云台位姿 / 下发给云台的目标位姿
+//      YOLO 处理帧率(FPS) / 当前云台位姿 / 下发给云台的目标位姿 /
+//      EKF 遥测（观测残差、NIS、角速度、半径）/ 预测命中点 / 4 块装甲板预测位置
 //  调试数据只在 DebugStream 内部流转，不参与任何控制指令的生成。
 //  删除 yaml 里的 debug_ros2 段或置 enable: false 即可整体关闭。
 // ============================================================================
 
 #include <chrono>
 #include <cmath>
-#include <limits>
 #include <opencv2/opencv.hpp>
 #include <thread>
+#include <vector>
 
 #include "io/camera.hpp"
 #include "io/can/cboard.hpp"
 #include "io/serial/serial_board.hpp"
+#include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/debug_stream.hpp"
 #include "tasks/auto_aim/solver.hpp"
+#include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/yolo.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
@@ -60,16 +64,20 @@ int main(int argc, char * argv[])
   auto enemy_color =
     (yaml["enemy_color"].as<std::string>("red") == "red") ? auto_aim::red : auto_aim::blue;
 
-  tools::Exiter exiter;
-
   io::Camera camera(config_path);  // 不带 sursign：读取 camera_name / exposure_ms / gain
   io::SerialBoard serial_board(config_path);
 
   auto_aim::YOLO detector(config_path, false);
   auto_aim::Solver solver(config_path);
+  auto_aim::Tracker tracker(config_path, solver);
+  auto_aim::Aimer aimer(config_path);
 
-  // 【新增】ROS2 调试数据流（Foxglove 实时画面）：只读上面的业务数据，不参与控制
+  // 【新增】ROS2 调试数据流（Foxglove 实时画面）：只读业务数据，不参与控制
   auto_aim::DebugStream debug(config_path, "soldier");
+
+  // Exiter 必须在 DebugStream 之后构造：DebugStream 内部的 rclcpp::init 会用自己的
+  // signal handler 接管 SIGINT/SIGTERM，后安装的 handler 才能让 Ctrl+C 重新置位退出标志。
+  tools::Exiter exiter;
 
   cv::Mat img;
   Eigen::Quaterniond q;
@@ -98,7 +106,7 @@ int main(int argc, char * argv[])
       continue;
     }
 
-    // YOLO 检测
+    // YOLO 检测。颜色先按步兵配置过滤，Tracker 仍负责连续帧目标关联与状态管理。
     debug.begin_yolo();  // 【新增】统计 YOLO 处理帧率与推理耗时
     auto armors = detector.detect(img);
     debug.end_yolo();  // 【新增】
@@ -106,41 +114,75 @@ int main(int argc, char * argv[])
       return armor.color != enemy_color;
     });
 
-    // PnP 解算：逐块求位姿，并选出离图像中心最近的一块作为当前目标
-    const cv::Point2f img_center(img.cols / 2.0f, img.rows / 2.0f);
-    auto target = armors.end();
-    auto min_offset = std::numeric_limits<double>::max();
-    for (auto it = armors.begin(); it != armors.end(); ++it) {
-      solver.solve(*it);
-      auto offset = cv::norm(it->center - img_center);
-      if (offset < min_offset) {
-        min_offset = offset;
-        target = it;
-      }
-    }
+    // 下位机复位信号：清空跟踪状态，避免用上一局的目标继续外推
+    if (serial_board.reset_pending()) tracker.reset();
 
-    // 默认指令：保持当前朝向、不开火
+    // Tracker 内部完成 PnP、目标关联、EKF 预测与观测更新。
+    // 使用相机帧时间戳 t，让滤波时间间隔对应真实帧间隔。
+    auto targets = tracker.track(armors, t);
+
+    // 没有可用跟踪目标时保持当前云台角度；有效跟踪时由 Aimer 做未来位置和弹道预测。
     io::Command command{false, false, gimbal_pos[0], gimbal_pos[1]};
-
-    if (target != armors.end()) {
-      const Eigen::Vector3d & xyz = target->xyz_in_world;
-      const double horizon = std::hypot(xyz.x(), xyz.y());
-
-      command.control = true;
-      command.shoot = false;  // 本程序不接管发射
-      command.yaw = std::atan2(xyz.y(), xyz.x());
-      // 与 Aimer 约定一致：世界系下 pitch 向上为负
-      command.pitch = -std::atan2(xyz.z(), horizon);
+    if (!targets.empty()) {
+      command = aimer.aim(targets, t, serial_board.bullet_speed);
+      // Aimer 在无效瞄准点或弹道不可解时返回 control=false、角度为 0；
+      // 串口仍携带角度字段，因此退回当前云台角，避免无效指令造成跳转。
+      if (!command.control) {
+        command.yaw = gimbal_pos[0];
+        command.pitch = gimbal_pos[1];
+      }
+      command.shoot = false;  // 步兵程序不接管发射
     }
 
     // 0x0402 下发到下位机，由下位机驱动云台；shoot 恒为 0
     serial_board.send(command);
 
-    // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
-    debug.publish(
-      armors, auto_aim::DebugStatus{
-                gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
-                command.shoot, target != armors.end() ? "aim" : "no_target", ""});
+    // 【新增】调试数据流：检测框 + YOLO FPS + 云台/目标位姿 + EKF 遥测 + 预测命中点
+    auto_aim::DebugStatus dbg_status{
+      gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control, command.shoot,
+      tracker.state(), ""};
+
+    // EKF 遥测：只在 tracker 真正产出 Target 时才有意义
+    if (!targets.empty()) {
+      const auto & ekf = targets.front().ekf();
+      auto & e = dbg_status.ekf;
+      e.valid = true;
+      e.residual_yaw = ekf.data.at("residual_yaw");
+      e.residual_pitch = ekf.data.at("residual_pitch");
+      e.residual_distance = ekf.data.at("residual_distance");
+      e.residual_angle = ekf.data.at("residual_angle");
+      e.nis = ekf.data.at("nis");
+      e.nis_failure_rate = ekf.data.at("recent_nis_failures");
+      e.w = ekf.x[7];
+      e.r = ekf.x[8];
+      e.l = ekf.x[9];
+      e.h = ekf.x[10];
+
+      // 4 块装甲板在当前时刻的预测位置 -> 像素。
+      // 逐点投影：world2pixel 会过滤相机后方的点，批量投影会让索引错位。
+      for (const auto & xyza : targets.front().armor_xyza_list()) {
+        const std::vector<cv::Point3f> pts{
+          {static_cast<float>(xyza[0]), static_cast<float>(xyza[1]),
+           static_cast<float>(xyza[2])}};
+        const auto px = solver.world2pixel(pts);
+        // 无效点用 (-1,-1) 占位，保证 vector 下标始终等于装甲板 id
+        dbg_status.predicted_armor_pixels.push_back(px.empty() ? cv::Point2f(-1, -1) : px.front());
+      }
+    }
+
+    // 预测命中点（Aimer 已按发弹延迟 + 弹道飞行时间预测到未来时刻）
+    if (!targets.empty() && aimer.debug_aim_point.valid) {
+      const auto & p = aimer.debug_aim_point.xyza;
+      const std::vector<cv::Point3f> pts{
+        {static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])}};
+      const auto px = solver.world2pixel(pts);
+      if (!px.empty()) {
+        dbg_status.has_aim = true;
+        dbg_status.aim_pixel = px.front();
+      }
+    }
+
+    debug.publish(armors, dbg_status);
 
     // 画框与四个关键点（不做 imshow/imwrite，无显示器环境下安全）
     for (const auto & armor : armors) {
@@ -154,17 +196,18 @@ int main(int argc, char * argv[])
     const auto now = std::chrono::steady_clock::now();
     if (now - last_log_time > 500ms) {
       last_log_time = now;
-      if (target != armors.end()) {
-        const Eigen::Vector3d & xyz = target->xyz_in_world;
+      if (!targets.empty()) {
+        const auto & target = targets.front();
+        const Eigen::VectorXd x = target.ekf_x();
         tools::logger()->info(
-          "[soldier] {} {} {:.2f}m | world({:.2f}, {:.2f}, {:.2f}) | cmd yaw={:.1f} pitch={:.1f}",
-          auto_aim::COLORS[target->color], auto_aim::ARMOR_NAMES[target->name],
-          target->xyz_in_gimbal.norm(), xyz[0], xyz[1], xyz[2], command.yaw * 57.3,
-          command.pitch * 57.3);
+          "[soldier] state={} {} | EKF center({:.2f}, {:.2f}, {:.2f}) velocity({:.2f}, {:.2f}, "
+          "{:.2f}) | cmd yaw={:.1f} pitch={:.1f}",
+          tracker.state(), auto_aim::ARMOR_NAMES[target.name], x[0], x[2], x[4], x[1], x[3], x[5],
+          command.yaw * 57.3, command.pitch * 57.3);
       } else {
         tools::logger()->info(
-          "[soldier] 无目标 | 保持 yaw={:.1f} pitch={:.1f} | gimbal yaw={:.1f}",
-          command.yaw * 57.3, command.pitch * 57.3, gimbal_pos[0] * 57.3);
+          "[soldier] state={} 无有效跟踪目标 | 保持 yaw={:.1f} pitch={:.1f} | gimbal yaw={:.1f}",
+          tracker.state(), command.yaw * 57.3, command.pitch * 57.3, gimbal_pos[0] * 57.3);
       }
     }
   }

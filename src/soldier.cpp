@@ -92,6 +92,9 @@ int main(int argc, char * argv[])
       return armor.color != enemy_color;
     });
 
+    // 下位机复位信号：清空跟踪状态，避免用上一局的目标继续外推
+    if (serial_board.reset_pending()) tracker.reset();
+
     // Tracker 内部完成 PnP、目标关联、EKF 预测与观测更新。
     // 使用相机帧时间戳 t，让滤波时间间隔对应真实帧间隔。
     auto targets = tracker.track(armors, t);

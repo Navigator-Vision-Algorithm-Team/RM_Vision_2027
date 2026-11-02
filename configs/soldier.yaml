@@ -87,18 +87,20 @@ high_speed_delay_time: 0.026        # 高速状态下额外延迟 (s)，沿用�
 low_speed_delay_time: 0.010         # 低速状态下额外延迟 (s)，沿用哨兵示例值
 
 #####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
-# 整个 debug_ros2 段可以整段删除：没有这一段就不启动调试数据流。
-# 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,gimbal_pose,target_pose}
+# 【当前为关闭状态】没有 debug_ros2 段就不会启动调试数据流（DebugStream::Options::enable 默认 false）。
+# 需要调试时把下面的注释解开即可；正式比赛保持注释状态。
+# 注意：只有 tests/ 下的调试入口（soldier_debug）会读取本段，src/soldier.cpp 不接 DebugStream。
+# 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,ekf,gimbal_pose,target_pose}
 # 用法：板子上起桥接 `ros2 launch foxglove_bridge foxglove_bridge_launch.xml`，
 #      桌面 Foxglove Studio -> Open connection -> Foxglove WebSocket -> ws://<板子IP>:8765
-debug_ros2:
-  enable: true            # false = 完全不启动 DDS（比赛时可关掉）
-  namespace: "/sp_debug"  # 话题前缀
-  image_hz: 15            # 图像推送频率上限，0 = 每帧都推（带宽会明显变大）
-  jpeg_quality: 75        # 1-100，越小带宽越低
-  publish_raw: false      # 是否额外推送相机原图
-  publish_yolo_input: true # 是否推送 YOLO 预处理后的输入图（ROI + letterbox）
-  # PnP 一级校验：在 image 话题的图上叠加「检测点 vs 重投影点 + 残差 + 板面三轴」。
-  # 只依赖上面的 camera_matrix / distort_coeffs，用来单独验证 PnP 本身对不对；
-  # 内参缺失时自动不绘制（不影响其他叠加层）。
-  pnp_check: true
+#debug_ros2:
+#  enable: true            # false = 完全不启动 DDS（比赛时可关掉）
+#  namespace: "/sp_debug"  # 话题前缀
+#  image_hz: 15            # 图像推送频率上限，0 = 每帧都推（带宽会明显变大）
+#  jpeg_quality: 75        # 1-100，越小带宽越低
+#  publish_raw: false      # 是否额外推送相机原图
+#  publish_yolo_input: true # 是否推送 YOLO 预处理后的输入图（ROI + letterbox）
+#  # PnP 一级校验：在 image 话题的图上叠加「检测点 vs 重投影点 + 残差 + 板面三轴」。
+#  # 只依赖上面的 camera_matrix / distort_coeffs，用来单独验证 PnP 本身对不对；
+#  # 内参缺失时自动不绘制（不影响其他叠加层）。
+#  pnp_check: true
