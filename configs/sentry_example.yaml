@@ -25,6 +25,8 @@ frame_rate_main: 120.0
 
 # ----- 全向感知相机数量 -----
 # 0 = 不启用全向感知 (等价于普通自瞄)
+# YOLO 推理线程数自动按「1 路主相机 + omni_camera_count 路全向相机」分配物理核心，
+# 性能核优先；无需额外配置 CPU 核号。
 omni_camera_count: 0
 
 # ----- 单主相机（omni_camera_count = 0）丢失目标时的云台行为 -----
@@ -192,14 +194,6 @@ yolo11_model_path: "assets/yolo11.xml"
 classify_model: "assets/tiny_resnet.onnx"  # 分类器模型 (传统方法用)
 min_confidence: 0.8                 # 检测最小置信度
 use_traditional: true               # 是否启用传统视觉方法作为后备
-
-# ----- 多相机推理池的 CPU 绑核 (可选) -----
-# 每个相机（主相机 + 各路全向）各有一个独立的 YOLO 实例与推理线程，
-# 这里的列表按「主相机, omni1, omni2, ...」顺序给每个线程指定 CPU 核。
-# 列表比相机数少时循环复用；某项写负数表示该路不绑核。
-# 留空/删除该键则自动分配（0 号核留给系统与主循环，推理从 1 号核往后排）。
-# 例：4 路全向相机 + 主相机，共 5 个线程
-# yolo_cpu_cores: [1, 2, 3, 4, 5]
 
 # ----- ROI (感兴趣区域) -----
 use_roi: false                      # 是否启用 ROI 裁剪
