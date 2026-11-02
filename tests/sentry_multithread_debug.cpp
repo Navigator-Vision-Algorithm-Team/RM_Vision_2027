@@ -399,10 +399,54 @@ int main(int argc, char * argv[])
       command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
 
       // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
-      debug.publish(
-        armors, auto_aim::DebugStatus{
-                  gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
-                  command.shoot, tracker.state(), ""});
+      auto_aim::DebugStatus dbg_status{
+        gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
+        command.shoot, tracker.state(), ""};
+
+      // EKF 遥测：只在 tracker 真正产出 Target 时才有意义
+      if (!targets.empty()) {
+        const auto & ekf = targets.front().ekf();
+        auto & e = dbg_status.ekf;
+        e.valid = true;
+        e.residual_yaw = ekf.data.at("residual_yaw");
+        e.residual_pitch = ekf.data.at("residual_pitch");
+        e.residual_distance = ekf.data.at("residual_distance");
+        e.residual_angle = ekf.data.at("residual_angle");
+        e.nis = ekf.data.at("nis");
+        e.nis_failure_rate = ekf.data.at("recent_nis_failures");
+        e.w = ekf.x[7];
+        e.r = ekf.x[8];
+        e.l = ekf.x[9];
+        e.h = ekf.x[10];
+
+        // 4 块装甲板在当前时刻的预测位置 -> 像素。
+        // 逐点投影：world2pixel 会过滤相机后方的点，批量投影会让索引错位。
+        for (const auto & xyza : targets.front().armor_xyza_list()) {
+          const std::vector<cv::Point3f> pts{
+            {static_cast<float>(xyza[0]), static_cast<float>(xyza[1]),
+             static_cast<float>(xyza[2])}};
+          const auto px = solver.world2pixel(pts);
+          // 无效点用 (-1,-1) 占位，保证 vector 下标始终等于装甲板 id（P0..P3 不错位）
+          dbg_status.predicted_armor_pixels.push_back(px.empty() ? cv::Point2f(-1, -1) : px.front());
+        }
+      }
+
+      // 预测命中点（Aimer 已按发弹延迟 + 弹道飞行时间预测到未来时刻）。
+      // 只在 aimer 真正参与本帧解算时取，避免 switching/lost 时画上一帧的残留点。
+      if (
+        aimer.debug_aim_point.valid && tracker.state() != "switching" &&
+        tracker.state() != "lost") {
+        const auto & p = aimer.debug_aim_point.xyza;
+        const std::vector<cv::Point3f> pts{
+          {static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])}};
+        const auto px = solver.world2pixel(pts);
+        if (!px.empty()) {
+          dbg_status.has_aim = true;
+          dbg_status.aim_pixel = px.front();
+        }
+      }
+
+      debug.publish(armors, dbg_status);
 
       // 绘制检测框和跟踪信息（用于赛后录像复盘）
       for (const auto & armor : armors) {

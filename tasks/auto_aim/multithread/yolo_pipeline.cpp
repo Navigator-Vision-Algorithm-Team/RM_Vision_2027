@@ -6,9 +6,9 @@
 
 #include "tasks/auto_aim/yolo.hpp"
 #include "tools/cpu_affinity.hpp"
+#include "tools/cpu_core_manager.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
-#include "tools/yaml.hpp"
 
 namespace auto_aim
 {
@@ -23,36 +23,13 @@ constexpr auto kIdlePoll = std::chrono::milliseconds(5);
 // 每路推理的统计日志周期
 constexpr double kStatsPeriodS = 5.0;
 
-// 解析每路相机要绑定的核：
-//   · 配置了 yolo_cpu_cores 就按列表循环取（负数 = 该路不绑核）；
-//   · 没配置则自动分配：0 号核留给系统与主循环，推理线程从 1 号核往后排；
-//   · 越界的核号告警后不绑核，避免在核数不同的机器上启动失败。
-std::vector<int> resolve_cores(std::size_t count, const std::vector<int> & configured)
+std::vector<int> allocate_cores(std::size_t count, tools::CpuCoreManager & manager)
 {
-  const int hw = tools::hardware_concurrency();
   std::vector<int> cores(count, -1);
-
-  if (configured.empty() && hw > 1 && count > static_cast<std::size_t>(hw - 1)) {
-    tools::logger()->warn(
-      "[YoloPipeline] 相机路数 {} 超过可分配的推理核数 {}，部分推理线程会共享核心", count, hw - 1);
-  }
-
   for (std::size_t i = 0; i < count; i++) {
-    int core = -1;
-    if (!configured.empty()) {
-      core = configured[i % configured.size()];
-    } else if (hw > 1) {
-      core = 1 + static_cast<int>(i % static_cast<std::size_t>(hw - 1));
-    }
-
-    if (core >= hw) {
-      tools::logger()->warn(
-        "[YoloPipeline] 配置的 CPU {} 超出本机核数 {}，该路不绑定", core, hw);
-      core = -1;
-    }
-    cores[i] = core;
+    const auto cpu = manager.allocate_cpu();
+    if (cpu) cores[i] = *cpu;
   }
-
   return cores;
 }
 
@@ -75,12 +52,31 @@ YoloPipeline::YoloPipeline(
       std::to_string(main_count) + " 路");
   }
 
-  std::vector<int> configured;
-  const auto yaml = tools::load(config_path);
-  if (yaml["yolo_cpu_cores"]) {
-    for (const auto & node : yaml["yolo_cpu_cores"]) configured.push_back(node.as<int>());
+  cores_ = allocate_cores(jobs_.size(), cpu_manager_);
+  const auto & physical_cores = cpu_manager_.cores();
+  const auto performance_count = std::count_if(
+    physical_cores.begin(), physical_cores.end(), [](const tools::CpuCoreInfo & core) {
+      return core.type == tools::CpuCoreType::Performance;
+    });
+  const auto efficiency_count = std::count_if(
+    physical_cores.begin(), physical_cores.end(), [](const tools::CpuCoreInfo & core) {
+      return core.type == tools::CpuCoreType::Efficiency;
+    });
+  tools::logger()->info(
+    "[YoloPipeline] CPU 拓扑：物理核 {} 个（性能核 {}，能效核 {}），识别来源：{}",
+    physical_cores.size(), performance_count, efficiency_count,
+    cpu_manager_.classification_source());
+  const auto assigned_count = std::count_if(cores_.begin(), cores_.end(), [](int cpu) {
+    return cpu >= 0;
+  });
+  if (assigned_count < jobs_.size()) {
+    tools::logger()->warn(
+      "[YoloPipeline] 可分配的物理核不足（相机 {} 路，可独占分配 {} 路），超出部分不绑核",
+      jobs_.size(), assigned_count);
   }
-  cores_ = resolve_cores(jobs_.size(), configured);
+  if (physical_cores.empty()) {
+    tools::logger()->warn("[YoloPipeline] 无法读取可用 CPU 拓扑，推理线程将不绑定 CPU");
+  }
   max_omni_results_ = std::max<std::size_t>(8, jobs_.size() * 4);
 
   tools::logger()->info(
@@ -191,7 +187,11 @@ void YoloPipeline::run(std::size_t index)
   };
 
   try {
-    const bool bound = tools::bind_current_thread_to_cpu(target_cpu);
+    const bool bound = cpu_manager_.bind_current_thread_to_cpu(target_cpu);
+    if (target_cpu >= 0 && !bound) {
+      tools::logger()->warn(
+        "[YoloPipeline] '{}' 无法绑定到逻辑 CPU {}，将由调度器自由调度", name, target_cpu);
+    }
 
     // 关键顺序：先绑核、后编译模型。OpenVINO 的 CPU 插件在 compile_model 期间创建
     // 线程池，新线程继承创建线程的亲和性掩码，推理线程因此也只会跑在这颗核上。
