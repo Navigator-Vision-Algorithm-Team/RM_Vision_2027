@@ -25,12 +25,14 @@ frame_rate_main: 300.0
 
 # ----- 全向感知相机数量 -----
 # 0 = 不启用全向感知 (等价于普通自瞄)
+# YOLO 推理线程数自动按「1 路主相机 + omni_camera_count 路全向相机」分配物理核心，
+# 性能核优先；无需额外配置 CPU 核号。
 omni_camera_count: 0
 
 # ----- 单主相机（omni_camera_count = 0）丢失目标时的云台行为 -----
 # true  = 自旋扫描：云台按固定步长持续转动，扩大搜索范围（缺省值，保持旧行为）
 # false = 原地保持：停在当前朝向，不转动
-spin_when_no_omni: true
+spin_when_no_omni: false
 
 # ----- 全向相机 1 (sursign="omni1") -----
 camera_name_omni1: "hikrobot"
@@ -193,14 +195,6 @@ classify_model: "assets/tiny_resnet.onnx"  # 分类器模型 (传统方法用)
 min_confidence: 0.8                 # 检测最小置信度
 use_traditional: true               # 是否启用传统视觉方法作为后备
 
-# ----- 多相机推理池的 CPU 绑核 (可选) -----
-# 每个相机（主相机 + 各路全向）各有一个独立的 YOLO 实例与推理线程，
-# 这里的列表按「主相机, omni1, omni2, ...」顺序给每个线程指定 CPU 核。
-# 列表比相机数少时循环复用；某项写负数表示该路不绑核。
-# 留空/删除该键则自动分配（0 号核留给系统与主循环，推理从 1 号核往后排）。
-# 例：4 路全向相机 + 主相机，共 5 个线程
-# yolo_cpu_cores: [1, 2, 3, 4, 5]
-
 # ----- ROI (感兴趣区域) -----
 use_roi: false                      # 是否启用 ROI 裁剪
 roi:                                # ROI 区域 (像素坐标)
@@ -352,3 +346,5 @@ debug_ros2:
   jpeg_quality: 75
   publish_raw: false
   publish_yolo_input: true
+  # PnP 一级校验：在 image 话题的图上叠加「检测点 vs 重投影点 + 残差 + 板面三轴」
+  pnp_check: true

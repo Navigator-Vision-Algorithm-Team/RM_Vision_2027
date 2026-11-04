@@ -18,6 +18,7 @@
 
 #include "io/camera.hpp"
 #include "tasks/auto_aim/armor.hpp"
+#include "tools/cpu_core_manager.hpp"
 
 namespace auto_aim
 {
@@ -70,16 +71,15 @@ struct CameraJob
 // 多相机 YOLO 推理池：
 //   * 每个 CameraJob 一个独立 YOLO 实例 + 一个独立线程，相机数据只喂给自己的实例，
 //     彻底消除“多生产者抢一个消费者（OpenVINO InferRequest）”的串行瓶颈；
-//   * 线程启动时先绑定 CPU 核、再构造 YOLO：OpenVINO 在 compile_model 期间创建的
-//     CPU 线程池会继承创建者的亲和性掩码，推理线程因此也固定在同一颗核上；
+//   * 自动分配时按物理核心分配、性能核优先，每个物理核心只选一个逻辑 CPU；
+//     线程启动时先绑定、再构造 YOLO，使 OpenVINO 在线程初始化时继承该亲和性；
 //   * 结果进入同一个带优先级的队列：主相机结果永远最先被消费（且只保留最新一帧，
 //     主循环来不及处理时不追旧帧），全向结果按到达顺序排队。
 class YoloPipeline
 {
 public:
-  // config_path 里的可选键 yolo_cpu_cores: [core_main, core_omni1, ...]
-  //   缺省时自动分配（0 号核留给系统/主循环，推理从 1 号核依次往后）；
-  //   某项为负数表示该路不绑核。
+  // 按 jobs 数量自动分配 CPU：主相机与每路全向相机各占一个物理核心，
+  // 优先性能核；不需要单独配置 CPU 数量或逻辑 CPU ID。
   YoloPipeline(const std::string & config_path, std::vector<CameraJob> jobs, bool debug = false);
   ~YoloPipeline();
 
@@ -107,6 +107,7 @@ private:
   std::string config_path_;
   bool debug_;
   std::vector<CameraJob> jobs_;
+  tools::CpuCoreManager cpu_manager_;
   std::vector<int> cores_;
 
   std::vector<std::thread> threads_;
