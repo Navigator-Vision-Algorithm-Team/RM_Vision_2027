@@ -191,15 +191,14 @@ fake_camera_source: "synth"  # synth(合成图案) | sequence(图片序列) | vi
 record: { enable: true, dir: "logs/virtual_session", save_images: true }
 ```
 
-**3) 无硬件运行**
+**3) 无硬件运行（按兵种）**
 
-```bash
-# 纯内置伪数据（推荐）：四元数 500Hz + 合成图像 30fps，同时记录
-./build/virtual_run configs/virtual_example.yaml --duration=8 --show
+| 兵种 | 虚拟配置 | 启动命令 |
+| --- | --- | --- |
+| 哨兵 | `configs/sentry_virtual.yaml` | `./build/sentry_multithread configs/sentry_virtual.yaml` |
+| 步兵 | `configs/soldier_virtual.yaml` | `./build/soldier configs/soldier_virtual.yaml` |
 
-# 业务入口直接跑（只改配置：camera_name fake + source_mode fake）
-./build/mt_standard configs/mtstandard_virtual.yaml
-```
+每份虚拟配置只替换数据源（`camera_name: fake` + `serial_mode: fake`），业务参数与实车配置一致。
 
 **4) Python 虚拟下位机（pty 伪串口）**
 
