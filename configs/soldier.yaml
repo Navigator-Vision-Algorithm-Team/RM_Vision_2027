@@ -73,7 +73,7 @@ t_camera2gimbal: [0.045517325957791413, 0.10544338092767802, 0.03464971088018579
 
 #####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
 # 整个 debug_ros2 段可以整段删除：没有这一段就不启动调试数据流。
-# 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,gimbal_pose,target_pose}
+# 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,ekf_convergence,gimbal_pose,target_pose}
 # 用法：板子上起桥接 `ros2 launch foxglove_bridge foxglove_bridge_launch.xml`，
 #      桌面 Foxglove Studio -> Open connection -> Foxglove WebSocket -> ws://<板子IP>:8765
 debug_ros2:

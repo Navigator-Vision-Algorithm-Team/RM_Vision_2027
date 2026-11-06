@@ -24,7 +24,6 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
-#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #endif
 
@@ -341,37 +340,43 @@ void annotate(
     for (const auto & p : armor.points) cv::circle(img, p, std::max(2, thick + 1), color, -1);
   }
 
+  for (const auto & pnp : status.pnp_results) {
+    if (!pnp.xyz_in_gimbal.allFinite()) continue;
+
+    const std::string label = fmt::format(
+      "PnP gimbal ({:+.2f}, {:+.2f}, {:+.2f}) m  d {:.2f} m", pnp.xyz_in_gimbal.x(),
+      pnp.xyz_in_gimbal.y(), pnp.xyz_in_gimbal.z(), pnp.xyz_in_gimbal.norm());
+    int base = 0;
+    const auto text_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.48 * s, thick, &base);
+    const int x = std::clamp(pnp.box.x, 0, std::max(0, img.cols - text_size.width - 8));
+    const int y = std::clamp(pnp.box.y + pnp.box.height + text_size.height + 8,
+                             text_size.height + 4, std::max(text_size.height + 4, img.rows - base - 2));
+    cv::rectangle(
+      img, cv::Point(x, y - text_size.height - 4),
+      cv::Point(std::min(x + text_size.width + 8, img.cols - 1), y + base), cv::Scalar(80, 80, 0),
+      cv::FILLED);
+    cv::putText(
+      img, label, cv::Point(x + 4, y), cv::FONT_HERSHEY_SIMPLEX, 0.48 * s,
+      cv::Scalar(255, 255, 0), thick, cv::LINE_AA);
+  }
+
+  if (status.has_aim_prediction_pixel) {
+    const cv::Point point(
+      cvRound(status.aim_prediction_pixel.x), cvRound(status.aim_prediction_pixel.y));
+    if (point.x >= 0 && point.x < img.cols && point.y >= 0 && point.y < img.rows) {
+      cv::drawMarker(
+        img, point, cv::Scalar(255, 0, 255), cv::MARKER_CROSS,
+        std::max(18, static_cast<int>(32 * s)), thick + 1, cv::LINE_AA);
+      cv::circle(img, point, std::max(8, static_cast<int>(14 * s)), cv::Scalar(255, 0, 255), thick);
+      cv::putText(
+        img, "LEAD AIM", point + cv::Point(10, -10), cv::FONT_HERSHEY_SIMPLEX, 0.6 * s,
+        cv::Scalar(255, 0, 255), thick, cv::LINE_AA);
+    }
+  }
+
   // PnP 一级校验：检测点 vs 重投影点 + 板面三轴（画在框和关键点之上）
   PnpStats pnp_stats;
   if (pnp_check) pnp_stats = draw_pnp_check(img, armors, pnp_cfg, s);
-
-  // EKF 预测叠加：
-  //   黄色圈 P0..P3 = 当前时刻由 EKF 状态重建的四块装甲板位置
-  //   品红十字 + 箭头 = Aimer 的预测命中点（已补偿发弹延迟与弹道飞行时间）
-  // 像素由调用方用 Solver::world2pixel 算好，这里不重复相机模型。
-  for (std::size_t i = 0; i < status.predicted_armor_pixels.size(); ++i) {
-    const auto & p = status.predicted_armor_pixels[i];
-    if (p.x < 0 || p.y < 0 || p.x >= img.cols || p.y >= img.rows) continue;
-    const int rad = std::max(4, thick + 3);
-    cv::circle(img, p, rad, cv::Scalar(0, 255, 255), thick, cv::LINE_AA);
-    cv::putText(
-      img, fmt::format("P{}", i), p + cv::Point2f(rad + 2, -rad), cv::FONT_HERSHEY_SIMPLEX, 0.5 * s,
-      cv::Scalar(0, 255, 255), thick, cv::LINE_AA);
-  }
-
-  if (status.has_aim) {
-    const cv::Point2f center(img.cols / 2.0f, img.rows / 2.0f);
-    const cv::Point2f aim(
-      std::clamp(status.aim_pixel.x, 1.0f, static_cast<float>(img.cols - 2)),
-      std::clamp(status.aim_pixel.y, 1.0f, static_cast<float>(img.rows - 2)));
-    cv::arrowedLine(img, center, aim, cv::Scalar(255, 0, 255), thick + 1, cv::LINE_AA, 0, 0.15);
-    cv::drawMarker(
-      img, aim, cv::Scalar(255, 0, 255), cv::MARKER_CROSS, std::max(12, static_cast<int>(24 * s)),
-      thick + 1);
-    cv::putText(
-      img, "AIM(KF)", aim + cv::Point2f(10, -10), cv::FONT_HERSHEY_SIMPLEX, 0.55 * s,
-      cv::Scalar(255, 0, 255), thick, cv::LINE_AA);
-  }
 
   std::vector<std::string> lines;
   lines.push_back(fmt::format(
@@ -393,6 +398,39 @@ void annotate(
     (status.target_ypr[0] - status.gimbal_ypr[0]) * kRad2Deg,
     (status.target_ypr[1] - status.gimbal_ypr[1]) * kRad2Deg, status.shoot ? "FIRE" : ""));
 
+  // IMM / EKF 预测信息：目标中心、速度、角速度、半径、模型概率、NIS 一致性
+  if (status.has_ekf) {
+    const double dist = std::hypot(status.target_center.x(), status.target_center.y());
+    lines.push_back(fmt::format(
+      "ekf     pos ({:+.2f}, {:+.2f}, {:+.2f}) m   d {:.2f} m   r {:.3f} m",
+      status.target_center.x(), status.target_center.y(), status.target_center.z(), dist,
+      status.target_r));
+    lines.push_back(fmt::format(
+      "        vel ({:+.2f}, {:+.2f}) m/s   w {:+.2f} rad/s", status.target_vel.x(),
+      status.target_vel.y(), status.target_w));
+    lines.push_back(fmt::format(
+      "        mu {:.2f} / {:.2f} / {:.2f}   nis/dof {:.2f}", status.model_prob[0],
+      status.model_prob[1], status.model_prob[2], status.nis_ratio));
+  }
+
+  if (status.has_ekf_convergence) {
+    lines.push_back(fmt::format(
+      "ekf convergence {:.0f}/100 {}  cov {:.0f}  nis {:.0f}  samples {}/{}",
+      status.ekf_convergence_score, status.ekf_converged ? "CONVERGED" : "not converged",
+      status.ekf_covariance_score, status.ekf_consistency_score, status.ekf_samples,
+      status.ekf_min_samples));
+    lines.push_back(fmt::format(
+      "        sigma pos {:.3f}m vel {:.2f}m/s yaw {:.1f}deg w {:.2f}rad/s geom {:.3f}m",
+      status.ekf_position_std, status.ekf_velocity_std, status.ekf_yaw_std * kRad2Deg,
+      status.ekf_angular_velocity_std, status.ekf_geometry_std));
+  }
+
+  if (status.has_aim_prediction) {
+    lines.push_back(fmt::format(
+      "lead aim ({:+.2f}, {:+.2f}, {:+.2f}) m", status.aim_prediction_world.x(),
+      status.aim_prediction_world.y(), status.aim_prediction_world.z()));
+  }
+
   // PnP 校验结果：绿色十字 = 重投影，连线 = 残差，三色细线 = 板面 X/Y/Z 轴
   if (pnp_check) {
     if (!pnp_cfg.ready()) {
@@ -404,13 +442,6 @@ void annotate(
         "pnp    reproj mean {:.2f} px  max {:.2f} px  ({}/{})", pnp_stats.mean_px, pnp_stats.max_px,
         pnp_stats.solved, armors.size()));
     }
-  }
-
-  // EKF 状态：自转角速度 / 半径估计 / 当前残差与 NIS（详细曲线看 ekf 话题）
-  if (status.ekf.valid) {
-    lines.push_back(fmt::format(
-      "ekf    w {:+.2f} rad/s  r {:.3f}  l {:.3f}  h {:.3f}  nis {:.2f}", status.ekf.w,
-      status.ekf.r, status.ekf.l, status.ekf.h, status.ekf.nis));
   }
 
   if (!status.note.empty()) lines.push_back(status.note);
@@ -513,20 +544,22 @@ struct DebugStream::Impl
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_raw;
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_input;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_status;
-  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_ekf;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_ekf_convergence;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_gimbal;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_target;
   bool own_context = false;
 #endif
 
-  Impl(const std::string & config_path, std::string tag_);
+  Impl(const std::string & config_path, std::string tag_, bool force_publish_raw);
   ~Impl();
 
   void run();
   void emit(Job & job);
 };
 
-DebugStream::Impl::Impl(const std::string & config_path, std::string tag_) : tag(std::move(tag_))
+DebugStream::Impl::Impl(
+  const std::string & config_path, std::string tag_, bool force_publish_raw)
+: tag(std::move(tag_))
 {
   YAML::Node yaml;
   try {
@@ -537,6 +570,7 @@ DebugStream::Impl::Impl(const std::string & config_path, std::string tag_) : tag
   }
 
   opt = load_options(yaml);
+  opt.publish_raw = opt.publish_raw || force_publish_raw;
   roi = load_roi(yaml);
   input_size = load_input_size(yaml);
   pnp_cfg = load_pnp_cfg(yaml);
@@ -563,8 +597,8 @@ DebugStream::Impl::Impl(const std::string & config_path, std::string tag_) : tag
       pub_input =
         node->create_publisher<sensor_msgs::msg::CompressedImage>(prefix + "/yolo_input", rclcpp::QoS(1));
     pub_status = node->create_publisher<std_msgs::msg::String>(prefix + "/status", rclcpp::QoS(10));
-    pub_ekf =
-      node->create_publisher<std_msgs::msg::Float64MultiArray>(prefix + "/ekf", rclcpp::QoS(10));
+    pub_ekf_convergence =
+      node->create_publisher<std_msgs::msg::String>(prefix + "/ekf_convergence", rclcpp::QoS(10));
     pub_gimbal =
       node->create_publisher<geometry_msgs::msg::PoseStamped>(prefix + "/gimbal_pose", rclcpp::QoS(10));
     pub_target =
@@ -575,7 +609,8 @@ DebugStream::Impl::Impl(const std::string & config_path, std::string tag_) : tag
 
     RCLCPP_INFO(
       node->get_logger(),
-      "调试数据流已启动：%s/{image,image_raw,yolo_input,status,gimbal_pose,target_pose,ekf}",
+
+      "调试数据流已启动：%s/{image,image_raw,yolo_input,status,ekf_convergence,gimbal_pose,target_pose}",
       prefix.c_str());
 
     // PnP 一级校验的状态提示：缺内参时不会画，先说清楚，免得以为是没实现
@@ -612,7 +647,7 @@ DebugStream::Impl::~Impl()
   pub_raw.reset();
   pub_input.reset();
   pub_status.reset();
-  pub_ekf.reset();
+  pub_ekf_convergence.reset();
   pub_gimbal.reset();
   pub_target.reset();
   node.reset();
@@ -667,6 +702,18 @@ void DebugStream::Impl::emit(Job & job)
 
   // 4) 状态 JSON
   if (pub_status) {
+    // IMM/EKF 预测信息只在业务侧填充了 has_ekf 时输出，保持 JSON 合法
+    std::string ekf_json;
+    if (job.status.has_ekf) {
+      ekf_json = fmt::format(
+        ",\"ekf\":{{\"center\":[{:.3f},{:.3f},{:.3f}],\"vel\":[{:.3f},{:.3f}],"
+        "\"w\":{:.3f},\"r\":{:.3f},\"mu\":[{:.3f},{:.3f},{:.3f}],\"nis_ratio\":{:.3f}}}",
+        job.status.target_center.x(), job.status.target_center.y(), job.status.target_center.z(),
+        job.status.target_vel.x(), job.status.target_vel.y(), job.status.target_w,
+        job.status.target_r, job.status.model_prob[0], job.status.model_prob[1],
+        job.status.model_prob[2], job.status.nis_ratio);
+    }
+
     std_msgs::msg::String msg;
     msg.data = fmt::format(
       "{{\"tag\":\"{}\",\"loop_fps\":{:.1f},\"yolo_fps\":{:.1f},\"infer_ms\":{:.1f},\"boxes\":{},"
@@ -680,28 +727,45 @@ void DebugStream::Impl::emit(Job & job)
       job.status.target_ypr[0] * kRad2Deg, job.status.target_ypr[1] * kRad2Deg,
       (job.status.target_ypr[0] - job.status.gimbal_ypr[0]) * kRad2Deg,
       (job.status.target_ypr[1] - job.status.gimbal_ypr[1]) * kRad2Deg);
+    msg.data.pop_back();
+    msg.data += ekf_json;
+    msg.data += fmt::format(
+      ",\"ekf_convergence\":{{\"available\":{},\"converged\":{},\"score\":{:.1f},"
+      "\"covariance_score\":{:.1f},\"consistency_score\":{:.1f},\"samples\":{},"
+      "\"min_samples\":{},\"position_std_m\":{:.4f},\"velocity_std_mps\":{:.4f},"
+      "\"yaw_std_rad\":{:.5f},\"angular_velocity_std_radps\":{:.4f},"
+      "\"geometry_std_m\":{:.4f},\"nis_ratio\":{:.4f},\"nis_failure_rate\":{:.4f}}}",
+      job.status.has_ekf_convergence, job.status.ekf_converged,
+      job.status.ekf_convergence_score, job.status.ekf_covariance_score,
+      job.status.ekf_consistency_score, job.status.ekf_samples, job.status.ekf_min_samples,
+      job.status.ekf_position_std, job.status.ekf_velocity_std, job.status.ekf_yaw_std,
+      job.status.ekf_angular_velocity_std, job.status.ekf_geometry_std, job.status.nis_ratio,
+      job.status.ekf_nis_failure_rate);
+    msg.data += "}";
     pub_status->publish(msg);
+  }
+
+  if (pub_ekf_convergence) {
+    std_msgs::msg::String msg;
+    msg.data = fmt::format(
+      "{{\"available\":{},\"converged\":{},\"score\":{:.1f},"
+      "\"covariance_score\":{:.1f},\"consistency_score\":{:.1f},\"samples\":{},"
+      "\"min_samples\":{},\"position_std_m\":{:.4f},\"velocity_std_mps\":{:.4f},"
+      "\"yaw_std_rad\":{:.5f},\"angular_velocity_std_radps\":{:.4f},"
+      "\"geometry_std_m\":{:.4f},\"nis_ratio\":{:.4f},\"nis_failure_rate\":{:.4f}}}",
+      job.status.has_ekf_convergence, job.status.ekf_converged,
+      job.status.ekf_convergence_score, job.status.ekf_covariance_score,
+      job.status.ekf_consistency_score, job.status.ekf_samples, job.status.ekf_min_samples,
+      job.status.ekf_position_std, job.status.ekf_velocity_std, job.status.ekf_yaw_std,
+      job.status.ekf_angular_velocity_std, job.status.ekf_geometry_std, job.status.nis_ratio,
+      job.status.ekf_nis_failure_rate);
+    pub_ekf_convergence->publish(msg);
   }
 
   // 5) 云台位姿 / 目标位姿（Foxglove 3D 面板可直接看朝向；位置为单位方向向量）
   if (pub_gimbal) pub_gimbal->publish(make_pose(stamp, frame_id, job.status.gimbal_ypr));
   if (pub_target) pub_target->publish(make_pose(stamp, frame_id, job.status.target_ypr));
 
-  // 6) EKF 遥测：仅在跟踪成功时发布（无 tracker 的入口不会发）。
-  //    顺序与 debug_stream.hpp 的注释一致，Foxglove Plot 里画 data[0..9]。
-  if (pub_ekf && job.status.ekf.valid) {
-    const auto & e = job.status.ekf;
-    std_msgs::msg::Float64MultiArray msg;
-    msg.layout.dim.resize(1);
-    msg.layout.dim[0].label = "ekf";
-    msg.layout.dim[0].size = 10;
-    msg.layout.dim[0].stride = 10;
-    msg.data = {
-      e.residual_yaw,       e.residual_pitch, e.residual_distance, e.residual_angle,
-      e.nis,                e.nis_failure_rate, e.w,                 e.r,
-      e.l,                  e.h};
-    pub_ekf->publish(msg);
-  }
 #else
   (void)job;
 #endif
@@ -709,8 +773,9 @@ void DebugStream::Impl::emit(Job & job)
 
 // ---------------- 对外接口 ----------------
 
-DebugStream::DebugStream(const std::string & config_path, const std::string & tag)
-: impl_(std::make_unique<Impl>(config_path, tag))
+DebugStream::DebugStream(
+  const std::string & config_path, const std::string & tag, bool force_publish_raw)
+: impl_(std::make_unique<Impl>(config_path, tag, force_publish_raw))
 {
 }
 
@@ -718,12 +783,12 @@ DebugStream::~DebugStream() = default;
 
 bool DebugStream::enabled() const { return impl_ && impl_->on; }
 
-void DebugStream::frame(const cv::Mat & raw_img)
+bool DebugStream::frame(const cv::Mat & raw_img)
 {
   auto & d = *impl_;
   if (!d.on || raw_img.empty()) {
     d.armed = false;
-    return;
+    return false;
   }
 
   const auto now = Clock::now();
@@ -739,7 +804,7 @@ void DebugStream::frame(const cv::Mat & raw_img)
     const auto period = std::chrono::duration<double>(1.0 / d.opt.image_hz);
     if (now - d.t_frame < std::chrono::duration_cast<Clock::duration>(period)) {
       d.armed = false;
-      return;
+      return false;
     }
   }
   d.t_frame = now;
@@ -749,6 +814,7 @@ void DebugStream::frame(const cv::Mat & raw_img)
     raw_img.copyTo(d.staging.raw);
   }
   d.armed = true;
+  return true;
 }
 
 void DebugStream::publish(const std::list<Armor> & armors, const DebugStatus & status)

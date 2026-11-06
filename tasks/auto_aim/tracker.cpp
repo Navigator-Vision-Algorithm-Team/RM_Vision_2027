@@ -2,16 +2,35 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <filesystem>
 #include <tuple>
+#include <vector>
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
-#include "tools/tuning.hpp"
 
 namespace auto_aim
 {
-Tracker::Tracker(const std::string & config_path, Solver & solver)
+namespace
+{
+// IMM 配置默认放在主 config 同目录，兼容项目根运行与 install/ 部署
+std::string resolve_imm_config(const std::string & config_path, const std::string & override_path)
+{
+  if (!override_path.empty()) return override_path;
+
+  std::filesystem::path p(config_path);
+  const auto dir = p.parent_path();
+  if (dir.empty()) return "IMM.yaml";
+  return (dir / "IMM.yaml").string();
+}
+}  // namespace
+
+Tracker::Tracker(
+  const std::string & config_path, Solver & solver, bool solve_armors,
+  const std::string & imm_config_path)
 : solver_{solver},
+  solve_armors_{solve_armors},
+  target_config_(TargetConfig::load(resolve_imm_config(config_path, imm_config_path))),
   detect_count_(0),
   temp_lost_count_(0),
   state_{"lost"},
@@ -23,11 +42,9 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   enemy_color_ = (yaml["enemy_color"].as<std::string>() == "red") ? Color::red : Color::blue;
   min_detect_count_ = yaml["min_detect_count"].as<int>();
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
-  outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
+  // 3V3 无前哨站，前哨站专用丢失容忍计数已停用
+  // outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
-
-  // 卡尔曼/跟踪器的可调参数（tuning: 段），必须在任何 Target 创建之前加载
-  tools::load_tuning(config_path);
 }
 
 std::string Tracker::state() const { return state_; }
@@ -49,7 +66,7 @@ std::list<Target> Tracker::track(
   last_timestamp_ = t;
 
   // 时间间隔过长，说明可能发生了相机离线
-  if (state_ != "lost" && dt > tools::tuning().max_dt) {
+  if (state_ != "lost" && dt > 0.1) {
     tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
     state_ = "lost";
   }
@@ -64,9 +81,8 @@ std::list<Target> Tracker::track(
   // });
 
   // 优先选择靠近图像中心的装甲板
-  const auto & tune_img = tools::tuning();
-  const cv::Point2f img_center(tune_img.image_width / 2.f, tune_img.image_height / 2.f);
-  armors.sort([&](const Armor & a, const Armor & b) {
+  armors.sort([](const Armor & a, const Armor & b) {
+    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO
     auto distance_1 = cv::norm(a.center - img_center);
     auto distance_2 = cv::norm(b.center - img_center);
     return distance_1 < distance_2;
@@ -82,7 +98,7 @@ std::list<Target> Tracker::track(
   }
 
   else {
-    found = update_target(armors, t);
+    found = update_target(armors, t, dt);
   }
 
   state_machine(found);
@@ -94,11 +110,11 @@ std::list<Target> Tracker::track(
     return {};
   }
 
-  // 收敛效果检测：
+  // 收敛效果检测：按时间窗统计 NIS 超限比例（阈值由观测维度的卡方 95% 分位确定），
+  // 窗口内样本足够多才判失效，避免冷启动阶段的少量样本误杀
   if (
-    std::accumulate(
-      target_.ekf().recent_nis_failures.begin(), target_.ekf().recent_nis_failures.end(), 0) >=
-    (0.4 * target_.ekf().window_size)) {
+    target_.nis_window_samples() >= target_.min_nis_samples() &&
+    target_.nis_failure_rate() >= target_config_.tracker_fail_rate) {
     // tools::logger()->debug("[Target] Bad Converge Found!");
     state_ = "lost";
     return {};
@@ -137,7 +153,7 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   last_timestamp_ = t;
 
   // 时间间隔过长，说明可能发生了相机离线
-  if (state_ != "lost" && dt > tools::tuning().max_dt) {
+  if (state_ != "lost" && dt > 0.1) {
     tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
     state_ = "lost";
   }
@@ -146,10 +162,7 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   // 并且有一个致命的问题，这个的地方写死了图像的大小就是（1440, 1080），这显然是有一些不合理的。
 
   // 优先选择靠近图像中心的装甲板
-  // 图像尺寸来自 tuning: 段的 image_width/image_height（默认 1440x1080）
-  const auto & tune_center = tools::tuning();
-  const cv::Point2f img_center(
-    tune_center.image_width / 2.f, tune_center.image_height / 2.f);
+  const cv::Point2f img_center(1440.f, 1080.f);  // 后期有精力可以吧这个东西写在config文件中，因为后期我希望大改动一下现在的config文件的读取统一的问题，所以这个先不该动 TODO:
 
   armors.sort([&](const Armor & a, const Armor & b) {
     if (a.priority != b.priority) return a.priority < b.priority;
@@ -197,23 +210,29 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   }
 
   else {
-    found = update_target(armors, t);
+    found = update_target(armors, t, dt);
   }
 
   pre_state_ = state_;
   // 更新状态机
   state_machine(found);
 
-  // 【调试】状态切换打日志：原来代码里没有任何状态切换记录，掉锁原因无法从日志判断
-  if (state_ != pre_state_) {
-    tools::logger()->info("[Tracker] state: {} -> {} (found={})", pre_state_, state_, found);
-  }
-
   // 发散检测
   if (state_ != "lost" && target_.diverged()) {
     tools::logger()->debug("[Tracker] Target diverged!");
     state_ = "lost";
     return {switch_target, {}};  // 返回switch_target和空的targets
+  }
+
+  // 收敛效果检测：与主相机路径保持一致
+  if (state_ != "lost") {
+    if (
+      target_.nis_window_samples() >= target_.min_nis_samples() &&
+      target_.nis_failure_rate() >= target_config_.tracker_fail_rate) {
+      tools::logger()->debug("[Tracker] Bad converge found (NIS).");
+      state_ = "lost";
+      return {switch_target, {}};
+    }
   }
 
   if (state_ == "lost") return {switch_target, {}};  // 返回switch_target和空的targets
@@ -262,11 +281,11 @@ void Tracker::state_machine(bool found)
       state_ = "tracking";
     } else {
       temp_lost_count_++;
-      if (target_.name == ArmorName::outpost)
-        //前哨站的temp_lost_count需要设置的大一些
-        max_temp_lost_count_ = outpost_max_temp_lost_count_;
-      else
-        max_temp_lost_count_ = normal_temp_lost_count_;
+      // 3V3 无前哨站，前哨站的特殊丢失容忍已停用，统一使用普通目标阈值
+      // if (target_.name == ArmorName::outpost)
+      //   max_temp_lost_count_ = outpost_max_temp_lost_count_;
+      // else
+      max_temp_lost_count_ = normal_temp_lost_count_;
 
       if (temp_lost_count_ > max_temp_lost_count_) state_ = "lost";
     }
@@ -281,7 +300,7 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   if (armors.empty()) return false;
 
   auto & armor = armors.front();
-  solver_.solve(armor);
+  if (solve_armors_) solver_.solve(armor);
 
   // 根据兵种优化初始化参数
   //TODO:这个地方的决策要改，在之前的armers的构建通路中已经将装甲板约束在了0 1 3 之中
@@ -309,12 +328,15 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
   //   Eigen::VectorXd P0_dig{{1, 64, 1, 64, 1, 64, 0.4, 100, 1, 1, 1}};
   //   target_ = Target(armor, t, 0.2, 4, P0_dig);
   // }
-  // 初始化参数统一来自 tuning: 段（armor_num / radius / P0），
-  // 原来四个分支的取值完全相同，这里合并成一条，行为不变。
-  const auto & tune_init = tools::tuning();
-  Eigen::VectorXd P0_dig(tune_init.P0.size());
-  for (size_t i = 0; i < tune_init.P0.size(); ++i) P0_dig[static_cast<Eigen::Index>(i)] = tune_init.P0[i];
-  target_ = Target(armor, t, tune_init.radius, tune_init.armor_num, P0_dig);
+  // 3V3 无前哨站，前哨站的 3 板模型（120° 间隔、半径 0.2765m）已停用
+  // if (armor.name == ArmorName::outpost) {
+  //   target_ =
+  //     Target(armor, t, 0.2765, 3, Eigen::VectorXd{{1, 64, 1, 64, 1, 81, 0.4, 100, 1e-4, 0, 0}});
+  // } else {
+  // 其余兵种（含哨兵、步兵、英雄）统一按 4 块装甲板、半径 0.2m 建模
+  // P0 由 configs/IMM.yaml 的 initial_covariance 提供
+  target_ = Target(armor, t, 0.2, 4, {}, target_config_);
+  // }
 
   return true;
 }
@@ -322,34 +344,25 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
 /*
   在目标装甲板的基础上，使用卡尔曼滤波器来预测目标和更新目标的状态，返回是否找到了目标
 */
-bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
+bool Tracker::update_target(
+  std::list<Armor> & armors, std::chrono::steady_clock::time_point t, double dt)
 {
   // 卡尔曼滤波器找到目标
   target_.predict(t);
 
-  int found_count = 0;
-  double min_x = 1e10;  // 画面最左侧
-  // 在相机中找到和target，也就是目标一样的装甲板，并且累计找寻次数。
-  for (const auto & armor : armors) {
+  // 收集与当前目标同兵种、同装甲板类型的观测，同一帧的多块装甲板合并成一次批量量测更新
+  std::vector<Armor> matched;
+  for (auto & armor : armors) {
     if (armor.name != target_.name || armor.type != target_.armor_type) continue;
-    found_count++;
-    min_x = armor.center.x < min_x ? armor.center.x : min_x;
+
+    if (solve_armors_) solver_.solve(armor);
+    matched.push_back(armor);
   }
 
-  if (found_count == 0) return false;// 发现没有找到，就返回false，说明目标丢失了
+  // 发现没有找到，返回 false，说明目标丢失了
+  if (matched.empty()) return false;
 
-  // TODO: 理论上有问题，因为在这个地方我们会更新卡尔曼滤波器两次，如果这里面的armer确实同一个的话，是没有问题的，但是我们的敌人是有四个装甲板的，这意味着同一个armors中的检测到的同一个装甲板可能是同一个目标的两个装甲板，这样左边右边的装甲板对卡尔曼滤波器的更新有十分危险的影响。但是无论是实际的测试还是什么的情况下，这个预测都十分的稳定，并没有出现「看起来像是错误的情况」所以具体是否要改正还是要后续的实验的决策。
-  for (auto & armor : armors) {// 依旧找到了目标，开始新的结算和更新（相较于之前的卡尔曼滤波器和目标的位置）
-    if (
-      armor.name != target_.name || armor.type != target_.armor_type
-      //  || armor.center.x != min_x
-    )
-      continue;
-
-    solver_.solve(armor);
-
-    target_.update(armor);
-  }
+  target_.update(matched, dt);
 
   return true;
 }

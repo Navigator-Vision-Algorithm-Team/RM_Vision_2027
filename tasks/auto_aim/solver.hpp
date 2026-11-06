@@ -25,7 +25,8 @@ public:
   //   哨兵：小yaw 板（yaw=upper_yaw，带 pitch/roll），相机外参标成「相机 -> 小yaw」；
   //   单yaw 兵种：云台（yaw + pitch）。
   //   大yaw（全向相机所在轴，纯 yaw）不经过本类，见 io::tf::Tree 与哨兵入口。
-  void solve(Armor & armor) const;
+  // 解算成功返回 true；失败时不写入位姿字段。
+  bool solve(Armor & armor) const;
 
   std::vector<cv::Point2f> reproject_armor(
     const Eigen::Vector3d & xyz_in_world, double yaw, ArmorType type, ArmorName name) const;

@@ -1,279 +1,216 @@
-# BNBU 2027 Auto-Aim
+<div align="center">
+  <img src="assets-for-readme/logo.jpg" alt="BNBU NAVIGATOR 战队 Logo" width="180">
+  <h1>BNBU NAVIGATOR 视觉算法</h1>
+  <p>RoboMaster 2027 视觉识别与自瞄项目</p>
+</div>
 
-## 本项目重写了同济大学的自瞄（感谢同济开源喵）
+## 项目简介
 
-### 3.2 编译方式
+本仓库由 BNBU NAVIGATOR 战队维护，面向 RoboMaster 机器人视觉任务，提供目标检测、自瞄、位姿解算、目标跟踪、串口通信、相机标定以及无硬件仿真等功能。
 
-> **单一分支说明**：x86_64 与 aarch64 共用 `develop` 分支，源码完全一致，**架构差异只存在于
-> 构建系统**（`cmake/platform.cmake`）。该文件是项目中唯一允许出现架构判断的地方，它根据
-> `CMAKE_SYSTEM_PROCESSOR` 自动选择：相机 SDK 目录（`io/*/lib/amd64` 或 `io/*/lib/arm64`）、
-> OpenVINO 目录（`3rd_part/openvino_2024.6.0/{aarch64,x86_64}/runtime`）、安装包里打包的 `.so`。
-> 业务代码、配置文件、脚本都不需要按架构分叉。新增平台差异时只改这一个文件。
->
-> **两套内置二进制**：海康 / 迈德威视相机 SDK 提供 amd64 与 arm64 版
-> （`io/hikrobot/lib/{amd64,arm64}/libMvCameraControl.so`、`io/mindvision/lib/{amd64,arm64}/libMVSDK.so`），
-> OpenVINO 2024.6.0 也提供 aarch64 与 x86_64 两套运行库，均随仓库分发，**两个平台都无需系统安装**。
-> 以下安装步骤以 **Ubuntu 26.04 LTS arm64（全新系统）** 为例；x86 开发机见 2.0 / 2.2。
->
-> **保留但未参与构建的代码**（打符 `auto_buff`、`uav`、MPC `planner`/`tinympc` 等）
-> 的作用、停用原因与恢复方法，见 [docs/unused_code.md](docs/unused_code.md)。
+项目以 C++ 为主，使用 OpenCV 处理图像、OpenVINO 执行目标检测，并通过 YAML 配置模型、相机、通信和算法参数。仓库同时提供 x86_64 与 aarch64 平台所需的相机 SDK 运行库，以及 OpenVINO 2024.6.0 运行环境（具体平台选择由 CMake 自动完成）。
 
-1. 安装依赖项：
+> **项目来源说明**：本项目借鉴并重写了同济大学战队 TongjiSuperPower 开源的自瞄框架。当前代码已围绕 BNBU NAVIGATOR 的设备、通信协议与算法需求进行大量修改和扩展；我们仍尊重原项目的许可与来源，并在此明确致谢。仓库中的 [LICENSE](LICENSE) 保留了上游 MIT 许可证版权声明，请在再分发时一并保留。
 
-   **1.1 系统依赖（apt 源直接安装，arm64 原生）：**
-   ```bash
-   sudo apt update
-   sudo apt install -y \
-       git \
-       g++ \
-       cmake \
-       can-utils \
-       libopencv-dev \
-       libfmt-dev \
-       libeigen3-dev \
-       libspdlog-dev \
-       libyaml-cpp-dev \
-       libusb-1.0-0-dev \
-       nlohmann-json3-dev \
-       openssh-server \
-       screen
-   ```
+## 功能概览
 
-   **1.2 OpenVINO（已随仓库提供 aarch64 与 x86_64 两套运行库，无需安装）：**
-   ```
-   3rd_part/openvino_2024.6.0/
-     aarch64/runtime/   # 官方 l_openvino_toolkit_ubuntu20_2024.6.0_arm64
-     x86_64/runtime/    # 官方 l_openvino_toolkit_ubuntu22_2024.6.0_x86_64
-   ```
-   `cmake/platform.cmake` 按目标架构自动选择，两条硬件线共用同一个版本（2024.6.0），
-   因此不会出现"开发机 apt 装的是新版、板子上是 2024.6"的版本漂移。
-   来源、SHA256 校验值、裁剪内容与重新获取步骤见
-   [3rd_part/openvino_2024.6.0/README.md](3rd_part/openvino_2024.6.0/README.md)。
+- **装甲板检测与识别**：支持 YOLOv5、YOLOv8、YOLO11 推理后端；可配置传统图像处理辅助修正。
+- **位姿解算与坐标变换**：通过相机标定参数进行 PnP 解算，并结合云台姿态转换至世界坐标系。
+- **目标跟踪与自瞄**：包含跟踪、瞄准决策和射击控制模块；IMM/EKF 参数可在配置文件中调整。
+- **相机与通信**：集成海康、迈德威视相机适配，以及串口、CAN 和可选 ROS 2 接口。
+- **多相机哨兵感知**：提供哨兵多线程入口和全向感知任务；此入口仅在找到所需 ROS 2 依赖时构建。
+- **仿真与回放**：可用 fake 数据源模拟串口和相机输入，记录会话、注入异常并回放数据，无需连接真实下位机或相机。
+- **标定与调试**：提供相机内参、外参标定程序，以及协议文档和跟踪器调参手册。
 
-   想改用系统安装的 OpenVINO（如 apt 的 `libopenvino-dev`）时加
-   `-DOpenVINO_DIR=/path/to/runtime/cmake` 覆盖即可。
+## 仓库结构
 
-   **1.3 相机 SDK（arm64 动态库已随仓库提供，无需额外安装 SDK 本体）：**
-   - [MindVision SDK](https://mindvision.com.cn/category/software/sdk-installation-package/)或[HikRobot SDK](https://www.hikrobotics.com/cn2/source/support/software/MVS_STD_GML_V2.1.2_231116.zip)
-   - 仅需从上述 SDK 安装包中提取 **udev 规则**（如 `51-mvs.rules`），否则无权限访问 USB 相机。
-     仓库已附带一份等价规则 `io/hikrobot/udev/51-mvs.rules`，直接安装即可：
-   ```bash
-   sudo cp io/hikrobot/udev/51-mvs.rules /etc/udev/rules.d/
-   sudo udevadm control --reload-rules && sudo udevadm trigger
-   # 然后重新插拔相机
-   ```
-   - **海康运行时库必须与 `libMvCameraControl.so` 同目录**：SDK 内部只从自身所在目录
-     加载 `libMvUsb3vTL.so`（USB3 传输层）与 `libMediaProcess.so` 等辅助库，缺库时
-     `MV_CC_EnumDevices` 会返回 `MV_E_RESOURCE (0x80000006)`，现象是一台相机都枚举不到。
-     仓库已在 `io/hikrobot/lib/{amd64,arm64}/` 中提供这套运行库，安装时会一起复制到
-     `install/bin/`。
-   - **海康 SDK 版本锁定为 `3.2.1.0`**：`io/hikrobot/include`、`lib/{amd64,arm64}` 下的
-     控制库、传输层、图像处理库与头文件必须来自**同一个 MVS 版本**。只换其中一部分时，
-     枚举（`MV_CC_EnumDevices`）往往还能过，但一开设备（`MV_CC_OpenDevice`）就返回
-     `MV_E_VERSION (0x80000009)` —— 本项目踩过这个坑：控制库 4.1.2.2 + 传输层 3.2.1.0。
-     升级 SDK 请整套替换（include + `libMvCameraControl.so` + `libMvUsb3vTL.so` +
-     `libMediaProcess.so` + `libMVRender.so` + `libFormatConversion.so`）。
-   - 运行时库路径配置：**用 `install/` 部署时不需要任何配置**（`bin/` 内 `.so` 通过
-     `$ORIGIN` 自包含）；只有在 `build/` 里直接运行时可执行文件才需要下面二选一：
-   ```bash
-   # 方式一：ldconfig（推荐，一次性生效；注意 TBB 也必须配置）
-   echo "$(pwd)/3rd_part/openvino_2024.6.0/aarch64/runtime/lib/aarch64" | sudo tee /etc/ld.so.conf.d/openvino.conf
-   echo "$(pwd)/3rd_part/openvino_2024.6.0/aarch64/runtime/3rdparty/tbb/lib" | sudo tee -a /etc/ld.so.conf.d/openvino.conf
-   echo "$(pwd)/io/hikrobot/lib/arm64" | sudo tee /etc/ld.so.conf.d/mvs.conf
-   echo "$(pwd)/io/mindvision/lib/arm64" | sudo tee /etc/ld.so.conf.d/mvsdk.conf
-   sudo ldconfig
-
-   # 方式二：LD_LIBRARY_PATH（临时生效；x86 把 aarch64 换成 x86_64、arm64 换成 amd64）
-   export LD_LIBRARY_PATH="$(pwd)/3rd_part/openvino_2024.6.0/aarch64/runtime/lib/aarch64:$(pwd)/3rd_part/openvino_2024.6.0/aarch64/runtime/3rdparty/tbb/lib:$(pwd)/io/hikrobot/lib/arm64:$(pwd)/io/mindvision/lib/arm64:$LD_LIBRARY_PATH"
-   ```
-
-   **1.4 注意事项：**
-   - 推理设备统一写 `device: auto`：有可用 GPU 时自动用 GPU，否则回退 CPU。ARM 板没有 GPU
-      插件，会打印一行 `GPU 不可用，改用 CPU 推理` 后继续，属正常现象；也可显式写 `CPU` / `GPU`。
-   - ROS2（可选）：仅哨兵多线程目标需要，ARM 上可安装 ROS2 Humble arm64 官方包；不装则 CMake 自动跳过 ROS 相关目标。
-   - Ceres 已从构建中移除（代码从未使用），无需再安装 `libceres-dev`。
-
-   2. 编译：
-
-   **2.0 x86_64 本机编译（开发机默认）：**
-
-   ```bash
-   sudo apt install -y libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev \
-       libyaml-cpp-dev libusb-1.0-0-dev nlohmann-json3-dev
-   cmake -B build            # platform.cmake 自动识别 x86_64：内置 x86_64 OpenVINO + lib/amd64
-   cmake --build build -j$(nproc)
-   ```
-
-   **2.1 ARM 本机编译（aarch64 上直接编译）：**
-
-   ```bash
-   cmake -B build
-   cmake --build build -j$(nproc)
-   ```
-
-   > 三条命令唯一的区别就是 `-DCMAKE_TOOLCHAIN_FILE`，其余完全一致；架构选择由
-   > `cmake/platform.cmake` 依据 `CMAKE_SYSTEM_PROCESSOR` 自动完成。
-
-   **2.2 x86 开发机交叉编译到 ARM（工具链文件 `cmake/aarch64-linux-gnu.cmake`）：**
-
-   ```bash
-   # 安装交叉编译器（一次性）
-   sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-   # 配置（指定工具链文件即可：platform.cmake 会把 CMAKE_SYSTEM_PROCESSOR 识别为 aarch64，
-   # 自动指向 3rd_part/ 的 OpenVINO 与 io/*/lib/arm64 的相机 SDK）
-   cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.cmake
-   cmake --build build -j$(nproc)
-   ```
-
-   > 交叉编译需要 arm64 版的 apt 依赖（OpenCV / fmt / Eigen3 / spdlog / yaml-cpp /
-   > nlohmann_json / libusb-1.0 等），通过 sysroot 提供，二选一：
-   >
-   > **方式 A：从目标 ARM 板同步根文件系统**（依赖与目标机完全一致，最稳妥）
-   > ```bash
-   > rsync -a --exclude=/proc --exclude=/sys --exclude=/dev user@arm-board:/ /opt/arm64-sysroot/
-   > ```
-   >
-   > **方式 B：本地用 mmdebstrap 生成 arm64 rootfs 并装入依赖**（无需 ARM 板）
-   > ```bash
-   > sudo apt install -y mmdebstrap qemu-user-static
-   > CODENAME=$(lsb_release -cs)   # 26.04 为 resolute
-   > sudo mmdebstrap --arch=arm64 --variant=important "$CODENAME" /opt/arm64-sysroot \
-   >     http://ports.ubuntu.com/ubuntu-ports \
-   >     --hook='copy-in -v /usr/bin/qemu-aarch64-static /usr/bin/' \
-   >     --customize-hook='chroot "$1" apt-get update' \
-   >     --customize-hook='chroot "$1" apt-get install -y --no-install-recommends \
-   >         libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev libyaml-cpp-dev \
-   >         nlohmann-json3-dev libusb-1.0-0-dev'
-   > ```
-   >
-   > 然后带 sysroot 配置编译：
-   > ```bash
-   > cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.cmake \
-   >       -DAARCH64_SYSROOT=/opt/arm64-sysroot
-   > cmake --build build -j$(nproc)
-   > ```
-   > 也可以不建 sysroot，用 `-DOpenCV_DIR=<arm64路径>` 等逐个显式指定。
-
-   ```bash
-   #不输出wearning，单线程编译。
-   cmake -S . -B build \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_FLAGS_DEBUG="-O0 -g -w -fdiagnostics-color=always -fmax-errors=10"
-    
-   cmake --build build -j1 2>&1 | tee build_error.log
-   ```
-
-### 数据源：real / fake / replay（无真实下位机与相机也能跑通）
->
-> 业务算法不直接依赖硬件，只依赖抽象数据源（`io::sim::QuaternionSource` / `io::sim::CameraSource`），
-> 通过配置在 `real` / `fake` / `replay` 之间切换，**业务代码一行不改**。
-> 实现位于 `io/sim/`，Python 虚拟下位机位于 `sim/virtual_mcu.py`。
-
-**1) 抽象接口与实现**
-
-| 方向 | 抽象 | real | fake | replay |
-| --- | --- | --- | --- | --- |
-| 串口四元数 | `io::sim::QuaternionSource` | `RealSerialSource` | `FakeSerialSource` | `ReplaySerialSource` |
-| 相机图像 | `io::sim::CameraSource` | `RealHikCameraSource` | `FakeCameraSource` | `ReplayCameraSource` |
-
-三种实现共用同一套「真实协议字节解析」与同一套 `io::CameraBase` 适配器，因此**帧率、时间戳语义、
-报文格式完全一致**：fake 由内置虚拟下位机按 0xA5 + CRC8/CRC16 打包 0x502/0x503/0x505/0x0001。
-
-**2) 配置切换（示例见 `configs/virtual_example.yaml` / `virtual_replay.yaml` / `virtual_fault.yaml`）**
-
-```yaml
-source_mode: "fake"          # real | fake | replay（可用 serial_mode / camera_mode 单独覆盖）
-serial_mode: "fake"          # 串口四元数源
-camera_name: "fake"          # 相机源：fake=伪相机，replay=回放相机
-fake_serial_external: false  # true 时改用外部 Python 虚拟下位机提供的 pty
-fake_camera_source: "synth"  # synth(合成图案) | sequence(图片序列) | video(视频文件)
-record: { enable: true, dir: "logs/virtual_session", save_images: true }
+```text
+RM_Vision_2027/
+├── assets/                 # 模型文件与运行资源
+├── assets-for-readme/      # README 图片
+├── benchmarks/             # EKF 离线评估代码（当前未加入默认构建）
+├── calibration/            # 相机内参、外参标定程序及说明
+├── cmake/                  # 平台选择与 aarch64 交叉编译工具链
+├── configs/                # 实车、虚拟运行及跟踪器 YAML 配置
+├── docs/                   # 通信协议、滤波器调参等文档
+├── io/
+│   ├── can/                # CAN 通信
+│   ├── hikrobot/           # 海康相机适配及 SDK
+│   ├── mindvision/         # 迈德威视相机适配及 SDK
+│   ├── ros2/               # ROS 2 接口（可选）
+│   ├── serial/             # 串口、云台协议与 CRC
+│   ├── sim/                # real/fake/replay 数据源和记录回放
+│   ├── tf/                 # 坐标变换树
+│   └── usbcamera/          # USB 相机适配
+├── sim/                    # Python 虚拟下位机
+├── src/                    # 程序入口
+├── tasks/
+│   ├── auto_aim/           # 装甲检测、PnP、跟踪、自瞄与射击
+│   ├── auto_buff/          # 打符代码（当前不加入默认构建）
+│   └── omniperception/     # 全向感知任务
+├── tests/                  # 测试与硬件/ROS 2 调试入口
+├── tools/                  # 通用算法与工具库
+├── 3rd_part/               # 第三方运行时（含 OpenVINO）
+├── CMakeLists.txt          # 顶层构建配置
+├── LICENSE                 # 项目许可证
+└── README.md
 ```
 
-**3) 无硬件运行**
+| 路径 | 用途 |
+| --- | --- |
+| `src/` | 程序入口：标准自瞄、步兵、哨兵和虚拟数据源运行器 |
+| `tasks/auto_aim/` | 装甲板检测、YOLO、PnP、跟踪、自瞄与射击逻辑 |
+| `tasks/omniperception/` | 哨兵全向感知及多相机相关任务 |
+| `tasks/auto_buff/` | 打符相关代码，当前不加入默认构建 |
+| `io/` | 相机、串口、CAN、坐标变换、ROS 2 和仿真数据源 |
+| `tools/` | 日志、数学、滤波、线程及其他通用工具 |
+| `configs/` | 实车、虚拟运行及跟踪器配置 |
+| `assets/` | 神经网络模型及其他运行资源 |
+| `calibration/` | 相机内参与外参标定程序；流程见 [calibration/README.md](calibration/README.md) |
+| `sim/` | Python 虚拟下位机工具 |
+| `docs/` | 通信协议、滤波器调参等技术文档 |
+
+## 构建环境
+
+- Linux；CMake 3.16.3 或更高版本
+- 支持 **x86_64** 和 **aarch64**
+- 支持 C++20 的 C++ 编译器（如 GCC）
+- OpenCV、fmt、Eigen3、spdlog、yaml-cpp、nlohmann-json、libusb-1.0 开发包
+- OpenVINO：默认优先使用仓库提供的 2024.6.0 运行库；也可以通过 `OpenVINO_DIR` 指定本机安装版本
+- ROS 2 为可选依赖：未找到 ROS 2 时，标准自瞄、步兵及虚拟运行目标仍可构建；哨兵 ROS 2 目标会跳过
+
+在 Ubuntu/Debian 系统上，常用系统依赖可通过以下命令安装：
 
 ```bash
-# 纯内置伪数据（推荐）：四元数 500Hz + 合成图像 30fps，同时记录
-./build/virtual_run configs/virtual_example.yaml --duration=8 --show
+sudo apt update
+sudo apt install -y \
+  build-essential cmake \
+  libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev \
+  libyaml-cpp-dev nlohmann-json3-dev libusb-1.0-0-dev
+```
 
-# 业务入口直接跑（只改配置：camera_name fake + source_mode fake）
+仓库包含海康与迈德威视相机 SDK 的 x86_64、aarch64 运行库。使用真实 USB 相机时，还需按设备安装 udev 规则并确认相机 SDK 与设备权限正常；海康规则示例位于 `io/hikrobot/udev/51-mvs.rules`。
+
+## 编译
+
+在仓库根目录执行：
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+```
+
+CMake 会依据目标架构选择相机 SDK 与 OpenVINO 路径。aarch64 设备可直接本机编译；在 x86_64 主机交叉编译时，使用仓库提供的工具链文件，并准备匹配的 aarch64 sysroot：
+
+```bash
+cmake -S . -B build \
+  -DCMAKE_TOOLCHAIN_FILE=cmake/aarch64-linux-gnu.cmake \
+  -DAARCH64_SYSROOT=/path/to/aarch64-sysroot
+cmake --build build --parallel
+```
+
+若希望使用系统安装的 OpenVINO，可在配置时指定其 CMake 配置目录：
+
+```bash
+cmake -S . -B build -DOpenVINO_DIR=/path/to/openvino/runtime/cmake
+```
+
+### 默认构建目标
+
+| 可执行文件 | 说明 | 配置示例 |
+| --- | --- | --- |
+| `mt_standard` | 标准自瞄主程序，检测、跟踪、瞄准并通过串口发送指令 | `configs/mtstandard.yaml` |
+| `soldier` | 步兵目标检测和 PnP 解算入口 | `configs/soldier.yaml` |
+| `virtual_run` | 独立验证串口与相机 real/fake/replay 数据源 | `configs/virtual_example.yaml` |
+| `calibrate_intrinsics` | 相机内参标定工具 | 运行 `--help` 查看参数 |
+| `calibrate_extrinsic` | 相机外参标定工具 | 运行 `--help` 查看参数 |
+| `sentry_multithread` | 哨兵多线程及全向感知入口；仅在配置时找到 ROS 2 依赖后生成 | `configs/sentry_example.yaml` |
+
+`auto_buff`、无人机入口和 MPC planner 代码目前不属于默认构建目标。它们仍在仓库中的状态不代表已完成集成或可直接用于比赛。
+
+## 运行
+
+### 无硬件运行虚拟数据源
+
+构建后可用内置 fake 串口和合成相机图像验证数据源链路：
+
+```bash
+./build/virtual_run configs/virtual_example.yaml --duration=8
+```
+
+如当前环境支持图形显示，可添加 `--show` 查看图像窗口；无显示器或远程无桌面环境不要添加该参数。虚拟运行配置还支持图片序列、视频、会话回放及串口/相机异常注入，详情见 `configs/virtual_example.yaml`、`configs/virtual_fault.yaml` 和 `configs/virtual_replay.yaml`。
+
+也可以用虚拟数据源启动标准自瞄入口：
+
+```bash
 ./build/mt_standard configs/mtstandard_virtual.yaml
 ```
 
-**4) Python 虚拟下位机（pty 伪串口）**
+### 连接真实设备
+
+启动前请先核对对应 YAML 文件中的相机型号、相机参数、串口设备路径、波特率、敌方颜色和本车标定数据。仓库配置中的示例参数不一定适用于你的车辆。
 
 ```bash
-python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts          # 打印 /dev/pts/N
-python3 sim/virtual_mcu.py --drop-rate 0.05 --spike-every 200 --corrupt-crc-rate 0.02
-python3 sim/virtual_mcu.py --replay logs/virtual_session/serial.bin   # 回放录制字节
-# 然后设置 com_port: "<上面打印的 /dev/pts/N>"，serial_mode: real（主程序按普通串口打开）
+# 标准自瞄：需要匹配的相机、下位机和实车配置
+./build/mt_standard configs/mtstandard.yaml
+
+# 步兵入口
+./build/soldier configs/soldier.yaml
+
+# 哨兵入口：仅在构建时检测到 ROS 2 依赖后可用
+./build/sentry_multithread configs/sentry_example.yaml
 ```
-> 注意：Python 侧 CRC16 表与 `io/serial/gimbal/protocol_crc.cpp` 的固件表**严格对齐**（索引 47 为 `0xD974`），
-> 修改任一侧都必须同步。
 
-**5) 异常注入与记录回放**
+步兵入口负责检测和位姿解算并发送云台指令，不接管发射。哨兵入口还依赖对应 ROS 2 环境与相机/通信配置。请在连接实车前检查所有输出指令和急停措施，并在安全场地完成验证。
 
-- 可注入：串口丢包/延迟/跳变/校验错误/角度噪声；相机丢帧/重复帧/黑屏/过曝/冻结/噪声/延迟。
-  固定 `fault_seed` 保证异常序列可复现。
-- 日志用 `[REAL]` / `[FAKE]` / `[REPLAY]` 标识数据来源，`[FAULT:drop]`、`[FAULT:crc]`、`[FAULT:black]`
-  等标识注入的异常，`[FAULT] frame ... injected anomaly` 标识下游收到的异常帧。
-- 记录内容：`serial.bin`（串口原始字节 + 方向 + 时间戳）、`camera.tsv` + `camera/*.png`（帧 + 时间戳 + 帧信息），
-  时间戳统一基于会话单调时钟；改 `source_mode: replay` 即按原时间轴复现。
+### 录制与回放
 
-**6) 局限**：不覆盖海康 SDK 初始化、设备枚举、驱动异常等底层问题，仍需真实硬件验证。
+`virtual_run` 支持将串口数据和相机帧记录到配置指定的目录。将数据源配置切换为 `replay` 并指向该目录，可复现录制会话。推荐先用虚拟数据源和录制数据验证改动，再连接真实设备。
 
-### 支持兵种并维护
+Python 虚拟下位机（可选）：
 
-哨兵，步兵，英雄
+```bash
+python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts
+```
 
-### 项目信息
+脚本会报告伪串口路径；如需让程序通过普通串口接口读取该数据源，请在配置中使用这个路径，并按虚拟配置文档开启外部虚拟串口模式。
 
-#### calibration
+## 配置与标定
 
-标定相机使用，里面有很多脚本可以用来标定包括相机参数，手眼参数等
+- **标准自瞄**：从 `configs/mtstandard.yaml` 开始，按车辆修改模型路径、相机、串口、相机内参和相机到云台的外参。
+- **步兵**：使用 `configs/soldier.yaml`。它包含 YOLO、PnP、串口、CAN 和 ROS 2 调试等配置项。
+- **哨兵**：使用 `configs/sentry_example.yaml`；全向相机数量、各相机参数和外参均需匹配实车。
+- **虚拟运行**：使用 `configs/virtual_example.yaml`、`configs/virtual_fault.yaml` 或 `configs/virtual_replay.yaml`。
+- **跟踪器**：IMM/EKF 参数位于 `configs/IMM.yaml`；调参建议见 [docs/ekf_imm_tuning.md](docs/ekf_imm_tuning.md) 和 [docs/kalman_tuning.md](docs/kalman_tuning.md)。
 
-#### configs
+标定程序和标定步骤见 [calibration/README.md](calibration/README.md)。不要直接把仓库内的示例矩阵作为实车标定值；拆装相机或改变支架后应重新测量相应外参。
 
-存放配置文件，你能看见似乎有很多的配置文件，但是其中大部分的内容已经被优化在一个文件中，所以大部分文件已经不在使用，主要使用参数文件：configs/sentry_example.yaml
+## 通信与算法文档
 
-##### 参数细节
+- [哨兵视觉节点通信协议](docs/sentry_serial_protocol.md)
+- [IMM/EKF 调参手册](docs/ekf_imm_tuning.md)
+- [Kalman 调参文档](docs/kalman_tuning.md)
+- [相机标定流程](calibration/README.md)
 
-包含了敌人颜色，串口通信约定，相机参数配置，决策器等参数配置。
+## 测试与验证
 
-#### IO
+默认构建中包含虚拟数据源运行器，可先运行：
 
-里面包含了相机的通信代码，串口读取代码和串口的发送代码（现在还包含一些其他的，后面会删除的）
+```bash
+./build/virtual_run configs/virtual_example.yaml --duration=8
+```
 
-#### src
+根目录 CMake 当前未启用 `benchmarks/ekf` 离线基准子目录。`tests/` 中的部分程序是硬件或 ROS 2 调试入口，不等同于可在所有环境中直接运行的自动化单元测试。涉及相机、串口、CAN 或 ROS 2 的改动，应在对应硬件与软件环境中补充验证。
 
-这是程序的主入口，有着哨兵，步兵，无人机等RM机器人的启动文件。当然，我们要注意的是哨兵和步兵，为什么不删除——谁知道以后会不会被使用吗？
+## 参与开发
 
-#### tasks
+1. 从对应入口及配置文件阅读当前实现，优先使用虚拟数据源复现问题。
+2. 修改后本地构建并运行相关目标；涉及通信或坐标系时同步核对相应协议和标定文档。
+3. 提交代码时说明目标程序、配置变化、测试方式和未覆盖的硬件条件。
+4. 不要提交运行日志、录制数据、个人设备路径、密钥或未经授权分发的模型/SDK 文件。
 
-我们真正的业务代码，里面包含了自瞄相关的决策代码，全向感知的相关代码，至于auto buff好像是为了做符用的，我们也用不上
+## 致谢与许可
 
-#### test
+感谢同济大学战队 TongjiSuperPower 开源自瞄框架及其他上游依赖的贡献。本项目是在其基础上的大幅重写与持续改进；对于仍受上游许可证约束的代码和文件，继续遵循其原有许可要求。
 
-里面提供了一些链路的test工具，可以仔细看看作用，只不过我在专注更改代码的时候忽略了这个东西，现在如果想要使用test的话，也许需要一些功夫适配现在的代码了
-
-#### tool
-
-提供了一些代码会使用到的通用工具。
-
-### 约定
-
-1. yaw的方向：根据实验结果认定，在云台顺时针旋转的时候yaw值减小。也就是在镜头的左边是yaw增大，在镜头中央的右边的时候yaw是减小的。
-2. 此代码作用于3V3，所以我们将yolo识别的数量只限【哨兵--图标哨兵号】【步兵--3】【英雄--1】
-3. yolo输出约定和后续处理约定：
-    - 英雄：1 - “One”
-    - 步兵：3 - “Three” 在7V7中我们的步兵有3个，分别是3 4 5
-    - 哨兵：0 - “semtry“
-    因为我们只在乎3V3，所以我们在yolo之后的处理只是这样的。只在乎这三个yolo输出。
-4. 我们的相机时间和IMU时间约定：老实说，我们没有任何的硬件方式同步我们相机和IMU的时间，我们采用的策略是不使用任何硬件设备的时间标签，而是使用我们的自己的，具体来说。我们在相机初始化和串口连接上的时候就会来事开启一个线程来接收两者的数据，并且自动的打上我们自己的时间标签，这个时间标签在代码运行之初就已经确定。在我们读取的时候，也只是使用这个时间标签来读取我们自己的数据。
-5. 我们对于大装甲板和普通装甲板的约定在代码中--slover代码中，宏定义部分
-6. yaw的约定-2:我们yaw的范围是[-pi, pi]，并且电机初始化的逻辑是，在上电的那一瞬间的yaw值是0。所以在后续的代码中，我们需要注意结果的yaw的具体描述，是增加量，还是直接的相较于零的目标数值
-
-### 协作约定
-
-在该项目的工作者可以直接将代办事项写在TODO文件中，如果你接取了代办事项需要在代办事项后进行标记，比如写上你的名字。然后请记住立马push！！如果你完成了事项，可以删除该事项。
+本仓库许可证见 [LICENSE](LICENSE)。第三方库、模型、相机 SDK 和运行时可能具有各自独立的许可证与分发条款；使用或再分发前请分别查阅其许可文件及上游说明。

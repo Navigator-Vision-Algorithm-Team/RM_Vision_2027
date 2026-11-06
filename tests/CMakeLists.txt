@@ -10,6 +10,13 @@ add_executable(serial_communication_test
     ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
 target_link_libraries(serial_communication_test serial)
 
+# 交互式云台响应测试：输入绝对 yaw/pitch（度），每行发送一条 0x0402 指令。
+add_executable(testgimbalspeed testgimbalspeed.cpp)
+target_link_libraries(
+    testgimbalspeed
+    ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io io_can)
+install(TARGETS testgimbalspeed RUNTIME DESTINATION bin)
+
 # ============================================================================
 #  调试版入口（仅供局域网内 Foxglove 实时观瞄，正式比赛请用 src/ 下的目标）
 #
@@ -41,4 +48,8 @@ target_link_libraries(
     sentry_multithread_debug
     ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can)
 
-install(TARGETS soldier_debug sentry_multithread_debug RUNTIME DESTINATION bin)
+# 仅测试主相机 YOLO：不启动串口、PnP 或多相机处理链路。
+add_executable(yolodebug yolodebug.cpp)
+target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
+
+install(TARGETS soldier_debug sentry_multithread_debug yolodebug RUNTIME DESTINATION bin)

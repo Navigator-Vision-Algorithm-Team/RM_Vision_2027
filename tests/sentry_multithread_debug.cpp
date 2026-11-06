@@ -5,7 +5,7 @@
 //  auto_aim::DebugStream（ROS2 -> Foxglove）的若干调用，用于开发板上没有
 //  桌面端时，在局域网内实时观测：
 //      相机原图 / YOLO 预处理后的输入图 / 检测框 + 敌人数字编号 /
-//      YOLO 处理帧率(FPS) / 当前云台位姿 / 下发给云台的目标位姿
+//      YOLO 处理帧率(FPS) / PnP 与提前瞄准点 / EKF 收敛指标 / 云台位姿
 //  调试数据只在 DebugStream 内部流转，不参与任何控制指令的生成。
 //  删除 yaml 里的 debug_ros2 段或置 enable: false 即可整体关闭。
 // ============================================================================
@@ -250,7 +250,8 @@ int main(int argc, char * argv[])
     const auto timestamp = frame.timestamp;
     auto armors = std::move(frame.armors);
 
-    debug.frame(img);  // 【新增】抓取本帧原图（内部按 image_hz 节流）
+    const bool debug_frame_requested =
+      debug.frame(img);  // 【新增】按 image_hz 节流抓取原图
     debug.yolo_sample(frame.inference_ms);  // 【新增】推理耗时由推理线程直接给出
 
     // 双yaw 姿态：大yaw 只有 yaw，pitch/roll 属于小yaw（主相机所在板）
@@ -313,6 +314,7 @@ int main(int argc, char * argv[])
     }
 
     io::Command command{false, false, 0, 0};
+    aimer.debug_aim_point.valid = false;
 
     // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
     // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
@@ -347,8 +349,8 @@ int main(int argc, char * argv[])
       // 过滤敌人
       decider.armor_filter(armors);
 
-      // 设置优先级
-      decider.set_priority(armors);
+      // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级（与 sentry_multithread 保持一致）
+      // decider.set_priority(armors);
 
       //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
       auto detection_queue = omniperception::take_detection_results(pipeline);
@@ -399,54 +401,61 @@ int main(int argc, char * argv[])
       command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
 
       // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
-      auto_aim::DebugStatus dbg_status{
+      auto_aim::DebugStatus status{
         gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
         command.shoot, tracker.state(), ""};
 
-      // EKF 遥测：只在 tracker 真正产出 Target 时才有意义
+      if (debug_frame_requested) {
+        for (auto & armor : armors) {
+          if (solver.solve(armor)) {
+            status.pnp_results.push_back({armor.box, armor.xyz_in_gimbal});
+          }
+        }
+      }
+
+      if (debug_frame_requested && aimer.debug_aim_point.valid) {
+        status.has_aim_prediction = true;
+        status.aim_prediction_world = aimer.debug_aim_point.xyza.head<3>();
+        const auto pixels = solver.world2pixel({cv::Point3f(
+          static_cast<float>(status.aim_prediction_world.x()),
+          static_cast<float>(status.aim_prediction_world.y()),
+          static_cast<float>(status.aim_prediction_world.z()))});
+        if (!pixels.empty()) {
+          status.has_aim_prediction_pixel = true;
+          status.aim_prediction_pixel = pixels.front();
+        }
+      }
+
+      // IMM/EKF 预测信息：目标中心、速度、角速度、半径、模型概率、NIS 一致性
       if (!targets.empty()) {
-        const auto & ekf = targets.front().ekf();
-        auto & e = dbg_status.ekf;
-        e.valid = true;
-        e.residual_yaw = ekf.data.at("residual_yaw");
-        e.residual_pitch = ekf.data.at("residual_pitch");
-        e.residual_distance = ekf.data.at("residual_distance");
-        e.residual_angle = ekf.data.at("residual_angle");
-        e.nis = ekf.data.at("nis");
-        e.nis_failure_rate = ekf.data.at("recent_nis_failures");
-        e.w = ekf.x[7];
-        e.r = ekf.x[8];
-        e.l = ekf.x[9];
-        e.h = ekf.x[10];
-
-        // 4 块装甲板在当前时刻的预测位置 -> 像素。
-        // 逐点投影：world2pixel 会过滤相机后方的点，批量投影会让索引错位。
-        for (const auto & xyza : targets.front().armor_xyza_list()) {
-          const std::vector<cv::Point3f> pts{
-            {static_cast<float>(xyza[0]), static_cast<float>(xyza[1]),
-             static_cast<float>(xyza[2])}};
-          const auto px = solver.world2pixel(pts);
-          // 无效点用 (-1,-1) 占位，保证 vector 下标始终等于装甲板 id（P0..P3 不错位）
-          dbg_status.predicted_armor_pixels.push_back(px.empty() ? cv::Point2f(-1, -1) : px.front());
+        const auto & target = targets.front();
+        const Eigen::VectorXd x = target.ekf_x();
+        if (x.size() >= 11) {
+          status.has_ekf = true;
+          status.target_center = Eigen::Vector3d(x[0], x[2], x[4]);
+          status.target_vel = Eigen::Vector2d(x[1], x[3]);
+          status.target_w = x[7];
+          status.target_r = x[8];
+          status.model_prob = target.model_probabilities();
+          status.nis_ratio = target.nis_ratio();
+          const auto convergence = target.debug_convergence_metrics();
+          status.has_ekf_convergence = true;
+          status.ekf_converged = convergence.converged;
+          status.ekf_convergence_score = convergence.score;
+          status.ekf_covariance_score = convergence.covariance_score;
+          status.ekf_consistency_score = convergence.consistency_score;
+          status.ekf_position_std = convergence.position_std;
+          status.ekf_velocity_std = convergence.velocity_std;
+          status.ekf_yaw_std = convergence.yaw_std;
+          status.ekf_angular_velocity_std = convergence.angular_velocity_std;
+          status.ekf_geometry_std = convergence.geometry_std;
+          status.ekf_nis_failure_rate = convergence.nis_failure_rate;
+          status.ekf_samples = convergence.samples;
+          status.ekf_min_samples = convergence.min_samples;
         }
       }
 
-      // 预测命中点（Aimer 已按发弹延迟 + 弹道飞行时间预测到未来时刻）。
-      // 只在 aimer 真正参与本帧解算时取，避免 switching/lost 时画上一帧的残留点。
-      if (
-        aimer.debug_aim_point.valid && tracker.state() != "switching" &&
-        tracker.state() != "lost") {
-        const auto & p = aimer.debug_aim_point.xyza;
-        const std::vector<cv::Point3f> pts{
-          {static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])}};
-        const auto px = solver.world2pixel(pts);
-        if (!px.empty()) {
-          dbg_status.has_aim = true;
-          dbg_status.aim_pixel = px.front();
-        }
-      }
-
-      debug.publish(armors, dbg_status);
+      debug.publish(armors, status);
 
       // 绘制检测框和跟踪信息（用于赛后录像复盘）
       for (const auto & armor : armors) {
