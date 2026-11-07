@@ -4,6 +4,9 @@
 # 链接此库的可执行文件见根 CMakeLists.txt。
 add_library(io_can STATIC
     cboard.cpp
+    minipc_codec.cpp
+    soldier_cboard.cpp
+    soldier_cboard_socketcan.cpp
 )
 
 target_include_directories(io_can
