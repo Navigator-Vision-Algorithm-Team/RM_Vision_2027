@@ -275,8 +275,8 @@ tuning:
   nees_threshold: 0.711
 
 # ----- 瞄准器 (Aimer) -----
-yaw_offset: -0.8                    # yaw 整体偏移 (度)，单枪管只调这一个
-pitch_offset: -1.0                  # pitch 整体偏移 (度)
+yaw_offset: 0.0                    # yaw 整体偏移 (度)，单枪管只调这一个
+pitch_offset: 0.0                  # pitch 整体偏移 (度)
 comming_angle: 60                   # 陀螺旋转 coming angle 阈值 (度)
 leaving_angle: 20                   # 陀螺旋转 leaving angle 阈值 (度)
 decision_speed: 10                  # 高速/低速判定阈值 (rad/s)
