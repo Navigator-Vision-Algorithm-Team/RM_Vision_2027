@@ -36,6 +36,9 @@ private:
 
   ov::Core core_;
   ov::CompiledModel compiled_model_;
+  // 复用推理请求与输入缓冲，避免每帧重新分配（见 yolo11.hpp 的说明）
+  ov::InferRequest infer_request_;
+  cv::Mat input_;
 
   cv::Rect roi_;
   cv::Point2f offset_;

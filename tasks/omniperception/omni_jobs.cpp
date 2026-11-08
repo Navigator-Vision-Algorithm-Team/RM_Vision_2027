@@ -35,7 +35,10 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
                         const cv::Mat & img, std::chrono::steady_clock::time_point ts,
                         std::list<auto_aim::Armor> & armors,
                         auto_aim::multithread::CameraResult & result) {
-      // 录像：只有配置了 recorder 时才复制图像并画框（与原 Perceptron 的行为一致）
+      // 录像：必须 clone 后再画框。虽然 hikrobot/mindvision 每帧返回的都是独立缓冲，
+      // 但伪相机走零拷贝缓冲池、只重画左上角 overlay，直接在原图画框会污染池缓冲
+      // 并在后续帧留下残影。这路相机 keep_image=false，原图无人使用，克隆出来的
+      // 副本正好可以直接画。
       if (cfg.recorder && !img.empty()) {
         cv::Mat display_img = img.clone();
         for (const auto & armor : armors) {
@@ -71,8 +74,10 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
       result.delta_yaw = da[0] / 57.3;
       result.delta_pitch = da[1] / 57.3;
 
+      // 每检测到目标就打印一次；4 路相机各 30~60fps 时 info 会刷满日志并拖慢推理线程，
+      // 需要时用 debug 级别查看。
       const auto & armor = armors.front();
-      tools::logger()->info(
+      tools::logger()->debug(
         "[{}] detect {}: centre_norm=({:.3f},{:.3f}) px=({:.0f},{:.0f}) "
         "da_yaw={:.2f}° da_pitch={:.2f}°",
         cfg.camera ? cfg.camera->device_name() : "omni", auto_aim::ARMOR_NAMES[armor.name],

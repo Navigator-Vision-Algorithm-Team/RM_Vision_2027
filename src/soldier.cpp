@@ -93,7 +93,8 @@ int main(int argc, char * argv[])
     auto target = armors.end();
     auto min_offset = std::numeric_limits<double>::max();
     for (auto it = armors.begin(); it != armors.end(); ++it) {
-      solver.solve(*it);
+      // 解算失败时位姿字段仍是零向量，不能当候选目标
+      if (!solver.solve(*it)) continue;
       auto offset = cv::norm(it->center - img_center);
       if (offset < min_offset) {
         min_offset = offset;

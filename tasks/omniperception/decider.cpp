@@ -68,15 +68,12 @@ io::Command Decider::decide(const std::vector<DetectionResult> & detection_queue
 
   for (const auto & dr : detection_queue) {
     if (dr.armors.empty()) continue;
-    double yaw_deg = tools::limit_rad(dr.delta_yaw * 57.3);
-    // if (std::abs(yaw_deg) > 360.0) {
-    //   tools::logger()->warn("omni angle rejected: {:.1f}° out of range", yaw_deg);
-    //   continue;
-    // }
-    tools::logger()->info(
+    // 目标丢失时 decide() 每帧都会走到这里，用 debug 级别避免刷屏。
+    // 注意这里只做单位换算，不要再套 limit_rad：它按 ±π 回绕，作用在角度制上
+    // 会把超过 3.14° 的偏差改成一个毫无意义的小角度（之前日志就是这么错的）。
+    tools::logger()->debug(
       "omniperceptron find {}, delta yaw {:.2f}°",
-      auto_aim::ARMOR_NAMES[dr.armors.front().name],
-      tools::limit_rad(dr.delta_yaw * 57.3));
+      auto_aim::ARMOR_NAMES[dr.armors.front().name], dr.delta_yaw * 57.3);
     return io::Command{true, false, dr.delta_yaw, dr.delta_pitch};
   }
 

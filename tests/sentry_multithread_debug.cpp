@@ -362,7 +362,7 @@ int main(int argc, char * argv[])
       // 传入的是全向相机中的装甲板候选，和主相机中的装甲板候选，为什么两个不放在同一个queue中传入给tracker呢？
       // 因为我们认为在主相机发现的相机的优先级会天然的大于全向相机中发现的
       // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
-      auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp, true, img.size());
+      auto [switch_target, target] = tracker.track(detection_queue, armors, timestamp, true, img.size());
       
       // 全向相机的 delta_yaw 是「大yaw 系」角（零点 = 大yaw 正前方、向左为正，
       // 由 Decider::delta_angle 用 tf 给的「相机 -> 大yaw」位姿算出），
@@ -396,11 +396,11 @@ int main(int argc, char * argv[])
       else {
         // aimer 输出的 yaw 已是 IMU 世界系绝对角（Aimer 内部对世界系 armor_xyza_list 取 atan2），
         // 与下位机的要求一致，直接下发，绝不能再叠加 gimbal_pos[0]。
-        command = aimer.aim(targets, timestamp, serial_board.bullet_speed);
+        command = aimer.aim(target, timestamp, serial_board.bullet_speed);
         has_omni_cache = false;
       }
 
-      command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
+      command.shoot = shooter.shoot(command, aimer, target, gimbal_pos);
 
       // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
       auto_aim::DebugStatus status{
@@ -429,18 +429,17 @@ int main(int argc, char * argv[])
       }
 
       // IMM/EKF 预测信息：目标中心、速度、角速度、半径、模型概率、NIS 一致性
-      if (!targets.empty()) {
-        const auto & target = targets.front();
-        const Eigen::VectorXd x = target.ekf_x();
+      if (target != nullptr) {
+        const Eigen::VectorXd x = target->ekf_x();
         if (x.size() >= 11) {
           status.has_ekf = true;
           status.target_center = Eigen::Vector3d(x[0], x[2], x[4]);
           status.target_vel = Eigen::Vector2d(x[1], x[3]);
           status.target_w = x[7];
           status.target_r = x[8];
-          status.model_prob = target.model_probabilities();
-          status.nis_ratio = target.nis_ratio();
-          const auto convergence = target.debug_convergence_metrics();
+          status.model_prob = target->model_probabilities();
+          status.nis_ratio = target->nis_ratio();
+          const auto convergence = target->debug_convergence_metrics();
           status.has_ekf_convergence = true;
           status.ekf_converged = convergence.converged;
           status.ekf_convergence_score = convergence.score;
@@ -471,7 +470,7 @@ int main(int argc, char * argv[])
         }
       }
       cv::putText(img,
-        fmt::format("State: {} | Targets: {}", tracker.state(), targets.size()),
+        fmt::format("State: {} | Targets: {}", tracker.state(), target == nullptr ? 0 : 1),
         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
 
       main_recorder.record(img, q_main, timestamp);

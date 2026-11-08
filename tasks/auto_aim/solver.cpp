@@ -211,17 +211,51 @@ double Solver::oupost_reprojection_error(Armor armor, const double & pitch)
 
 void Solver::optimize_yaw(Armor & armor) const
 {
-  Eigen::Vector3d gimbal_ypr = tools::eulers(R_gimbal2world_, 2, 1, 0);
+  constexpr int SEARCH_RANGE = 140;  // degree，在 ±70° 内按 1° 步长搜索
+  constexpr double DEG = CV_PI / 180.0;
 
-  constexpr double SEARCH_RANGE = 140;  // degree
-  auto yaw0 = tools::limit_rad(gimbal_ypr[0] - SEARCH_RANGE / 2 * CV_PI / 180.0);
+  const Eigen::Vector3d gimbal_ypr = tools::eulers(R_gimbal2world_, 2, 1, 0);
+  const double yaw0 = tools::limit_rad(gimbal_ypr[0] - SEARCH_RANGE / 2 * DEG);
+
+  // 世界 -> 相机 的常量部分只算一次。原实现把这两步放在每轮投影里，40° 搜索窗
+  // 意味着每帧每块装甲板重复做 140 次相同的矩阵乘。
+  const Eigen::Matrix3d R_world2camera =
+    R_camera2gimbal_.transpose() * R_gimbal2world_.transpose();
+  const Eigen::Vector3d t_world2camera = -R_camera2gimbal_.transpose() * t_camera2gimbal_;
+  const Eigen::Vector3d t_armor2camera = R_world2camera * armor.xyz_in_world + t_world2camera;
+
+  // 装甲板安装倾角（前哨站的 -15° 分支已停用，统一 +15°，与 reproject_armor 一致）
+  const double sin_pitch = std::sin(15.0 * DEG);
+  const double cos_pitch = std::cos(15.0 * DEG);
+
+  const auto & object_points = armor_object_points(armor.type);
+  cv::Mat R_cv, rvec_cv;
+  cv::Vec3d tvec;
+  std::vector<cv::Point2f> image_points(4);
 
   auto min_error = 1e10;
-  auto best_yaw = armor.ypr_in_world[0];
+  double best_yaw = armor.ypr_in_world[0];
 
   for (int i = 0; i < SEARCH_RANGE; i++) {
-    double yaw = tools::limit_rad(yaw0 + i * CV_PI / 180.0);
-    auto error = armor_reprojection_error(armor, yaw, (i - SEARCH_RANGE / 2) * CV_PI / 180.0);
+    const double yaw = tools::limit_rad(yaw0 + i * DEG);
+    const double sin_yaw = std::sin(yaw);
+    const double cos_yaw = std::cos(yaw);
+
+    // clang-format off
+    Eigen::Matrix3d R_armor2world {
+      {cos_yaw * cos_pitch, -sin_yaw, cos_yaw * sin_pitch},
+      {sin_yaw * cos_pitch,  cos_yaw, sin_yaw * sin_pitch},
+      {         -sin_pitch,        0,           cos_pitch}
+    };
+    // clang-format on
+
+    cv::eigen2cv(Eigen::Matrix3d(R_world2camera * R_armor2world), R_cv);
+    cv::Rodrigues(R_cv, rvec_cv);
+    tvec = cv::Vec3d(t_armor2camera[0], t_armor2camera[1], t_armor2camera[2]);
+    cv::projectPoints(object_points, rvec_cv, tvec, camera_matrix_, distort_coeffs_, image_points);
+
+    double error = 0.0;
+    for (int k = 0; k < 4; k++) error += cv::norm(armor.points[k] - image_points[k]);
 
     if (error < min_error) {
       min_error = error;

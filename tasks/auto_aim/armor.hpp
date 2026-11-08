@@ -66,38 +66,40 @@ const std::vector<std::tuple<Color, ArmorName, ArmorType>> armor_properties = {
 
 struct Lightbar
 {
-  std::size_t id;
-  Color color;
-  cv::Point2f center, top, bottom, top2bottom;
+  // 全部给默认值：Armor 里有两个 Lightbar 成员，走神经网络构造函数时它们是默认构造的，
+  // 残留的未初始化值一旦被读到就是未定义行为。
+  std::size_t id = 0;
+  Color color = Color::blue;
+  cv::Point2f center{0, 0}, top{0, 0}, bottom{0, 0}, top2bottom{0, 0};
   std::vector<cv::Point2f> points;
-  double angle, angle_error, length, width, ratio;
+  double angle = 0.0, angle_error = 0.0, length = 0.0, width = 0.0, ratio = 0.0;
   cv::RotatedRect rotated_rect;
 
   Lightbar(const cv::RotatedRect & rotated_rect, std::size_t id);
-  Lightbar() {};
+  Lightbar() = default;
 };
 
 struct Armor
 {
-  Color color;
+  Color color = Color::blue;
   Lightbar left, right;     //used to be const
-  cv::Point2f center;       // 不是对角线交点，不能作为实际中心！
-  cv::Point2f center_norm;  // 归一化坐标
+  cv::Point2f center{0, 0};       // 不是对角线交点，不能作为实际中心！
+  cv::Point2f center_norm{0, 0};  // 归一化坐标
   std::vector<cv::Point2f> points;
 
-  double ratio;              // 两灯条的中点连线与长灯条的长度之比
-  double side_ratio;         // 长灯条与短灯条的长度之比
-  double rectangular_error;  // 灯条和中点连线所成夹角与π/2的差值
+  double ratio = 0.0;              // 两灯条的中点连线与长灯条的长度之比
+  double side_ratio = 0.0;         // 长灯条与短灯条的长度之比
+  double rectangular_error = 0.0;  // 灯条和中点连线所成夹角与π/2的差值
 
-  ArmorType type;
-  ArmorName name;
+  ArmorType type = ArmorType::small;
+  ArmorName name = ArmorName::not_armor;
   
   ArmorPriority priority = ArmorPriority::fifth;
-  int class_id;
+  int class_id = 0;
   cv::Rect box;
   cv::Mat pattern;
-  double confidence;
-  bool duplicated;
+  double confidence = 0.0;
+  bool duplicated = false;
 
   // 【改动】给出确定的初值：Solver::solve / 全向 PnP 在解算失败时会提前返回，
   // 若这些成员未初始化，下游 tracker 会读到不确定的值。默认置 0 更安全。

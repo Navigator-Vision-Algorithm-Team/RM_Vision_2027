@@ -51,20 +51,20 @@ struct OmniCameraConfig
 struct DetectionResult
 {
   std::list<auto_aim::Armor> armors;
-  std::chrono::steady_clock::time_point timestamp;
-  double delta_yaw;    //rad
-  double delta_pitch;  //rad
+  std::chrono::steady_clock::time_point timestamp{};
+  double delta_yaw = 0.0;    //rad
+  double delta_pitch = 0.0;  //rad
 
-  // Assignment operator
-  DetectionResult & operator=(const DetectionResult & other)
+  // 不要手写拷贝赋值：只要显式声明了拷贝赋值，编译器就不会再隐式生成移动构造/移动赋值，
+  // 于是 std::vector<DetectionResult>::push_back(std::move(x)) 会退化成深拷贝 list<Armor>。
+  // 成员全部可拷贝可移动，用默认生成版本即可。
+  DetectionResult() = default;
+  DetectionResult(
+    std::list<auto_aim::Armor> armors_, std::chrono::steady_clock::time_point timestamp_,
+    double delta_yaw_, double delta_pitch_)
+  : armors(std::move(armors_)), timestamp(timestamp_), delta_yaw(delta_yaw_),
+    delta_pitch(delta_pitch_)
   {
-    if (this != &other) {
-      armors = other.armors;
-      timestamp = other.timestamp;
-      delta_yaw = other.delta_yaw;
-      delta_pitch = other.delta_pitch;
-    }
-    return *this;
   }
 };
 }  // namespace omniperception

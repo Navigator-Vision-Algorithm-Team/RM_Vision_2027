@@ -29,11 +29,20 @@ public:
   std::string state() const;
   void reset();
 
-  std::list<Target> track(
+  // 返回内部跟踪目标的只读指针，nullptr 表示当前没有可用目标。
+  // 用指针而不是 std::list<Target> 返回值：Target 内含 3 个 EKF（矩阵 + NIS 历史窗口），
+  // 按值返回会让主循环每帧深拷贝一次。
+  //
+  // 【生命周期】返回值指向 Tracker 内部的 target_，只在下一次 track()/reset() 之前有效，
+  // 且内容会随下一次 track() 被原地修改。因此：
+  //   · 只在"取到指针 -> 同帧紧邻消费"的模式下使用（aimer/shooter 都满足）；
+  //   · 不要存成成员、不要跨帧持有、不要交给异步任务；
+  //   · 需要一份稳定快照时自行拷贝（Aimer 内部就是这么做的，它要 predict）。
+  const Target * track(
     std::list<Armor> & armors, std::chrono::steady_clock::time_point t,
     bool use_enemy_color = true, cv::Size image_size = cv::Size());
 
-  std::tuple<omniperception::DetectionResult, std::list<Target>> track(
+  std::tuple<omniperception::DetectionResult, const Target *> track(
     const std::vector<omniperception::DetectionResult> & detection_queue, std::list<Armor> & armors,
     std::chrono::steady_clock::time_point t, bool use_enemy_color = true,
     cv::Size image_size = cv::Size());

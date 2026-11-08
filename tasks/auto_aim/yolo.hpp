@@ -33,9 +33,14 @@ public:
 private:
   std::unique_ptr<YOLOBase> yolo_;
   // 多相机推理池（multithread::YoloPipeline）里每个实例只被自己的线程调用，
-  // 不存在并发；但保留这把锁是为了兼容“多路共用一个实例”的旧用法，
-  // 因为底层 OpenVINO 的 InferRequest 不允许并发调用。
-  // 单相机场景可用配置 yolo_lock: false 关掉锁，省掉一次加解锁。
+  // 不存在并发；但保留这把锁是为了兼容“多路共用一个实例”的旧用法。
+  //
+  // 【并发契约】底层各 YOLO 实现会复用一个成员 ov::InferRequest（以及一块输入
+  // 缓冲）来避免每帧重建，这要求同一实例同一时刻只有一个线程在 detect()。
+  //   · yolo_lock: true（默认）-> 本锁保证这一点；
+  //   · yolo_lock: false       -> 调用方承诺「一个实例只在一个线程里用」。
+  //     YoloPipeline 每路相机各建一个实例，满足该承诺；请勿在多路共享实例的
+  //     同时关锁。关锁前请确认配置里没有其它代码复用同一个 YOLO 对象。
   //
   // 注意：这里必须用 unique_ptr 而不是直接放 std::mutex ——
   // std::mutex 不可拷贝也不可移动，直接作为成员会让 YOLO 变成不可移动类型。

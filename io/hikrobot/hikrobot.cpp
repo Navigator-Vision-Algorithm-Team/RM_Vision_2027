@@ -156,7 +156,7 @@ void HikRobot::on_frame(unsigned char * pData, MV_FRAME_OUT_INFO_EX * pFrameInfo
 
   // 队列满时丢弃旧帧、保留最新帧，绝不阻塞 SDK 回调线程
   if (!data.img.empty()) {
-    queue_.push(data);
+    queue_.push(std::move(data));
   }
 }
 

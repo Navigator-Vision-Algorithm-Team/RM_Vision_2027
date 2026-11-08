@@ -357,7 +357,7 @@ int main(int argc, char * argv[])
       // 传入的是全向相机中的装甲板候选，和主相机中的装甲板候选，为什么两个不放在同一个queue中传入给tracker呢？
       // 因为我们认为在主相机发现的相机的优先级会天然的大于全向相机中发现的
       // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
-      auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp, true, img.size());
+      auto [switch_target, target] = tracker.track(detection_queue, armors, timestamp, true, img.size());
       
       // 全向相机的 delta_yaw 是「大yaw 系」角（零点 = 大yaw 正前方、向左为正，
       // 由 Decider::delta_angle 用 tf 给的「相机 -> 大yaw」位姿算出），
@@ -391,11 +391,11 @@ int main(int argc, char * argv[])
       else {
         // aimer 输出的 yaw 已是 IMU 世界系绝对角（Aimer 内部对世界系 armor_xyza_list 取 atan2），
         // 与下位机的要求一致，直接下发，绝不能再叠加 gimbal_pos[0]。
-        command = aimer.aim(targets, timestamp, serial_board.bullet_speed);
+        command = aimer.aim(target, timestamp, serial_board.bullet_speed);
         has_omni_cache = false;
       }
 
-      command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
+      command.shoot = shooter.shoot(command, aimer, target, gimbal_pos);
 
       // 绘制检测框和跟踪信息（用于赛后录像复盘）
       for (const auto & armor : armors) {
@@ -409,15 +409,15 @@ int main(int argc, char * argv[])
         }
       }
       // HUD：状态 + IMM 的预测信息（距离 / 角速度 / 模型概率 / NIS 一致性）
-      std::string hud = fmt::format("State: {} | Targets: {}", tracker.state(), targets.size());
-      if (!targets.empty()) {
-        const auto & target = targets.front();
-        const Eigen::VectorXd x = target.ekf_x();
+      std::string hud =
+        fmt::format("State: {} | Targets: {}", tracker.state(), target == nullptr ? 0 : 1);
+      if (target != nullptr) {
+        const Eigen::VectorXd x = target->ekf_x();
         if (x.size() >= 11) {
-          const Eigen::Vector3d mu = target.model_probabilities();
+          const Eigen::Vector3d mu = target->model_probabilities();
           hud += fmt::format(
             " | d {:.2f}m w {:+.1f} mu {:.2f}/{:.2f}/{:.2f} nis {:.2f}", std::hypot(x[0], x[2]),
-            x[7], mu[0], mu[1], mu[2], target.nis_ratio());
+            x[7], mu[0], mu[1], mu[2], target->nis_ratio());
         }
       }
       cv::putText(

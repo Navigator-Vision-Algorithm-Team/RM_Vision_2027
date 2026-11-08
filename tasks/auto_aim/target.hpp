@@ -125,8 +125,11 @@ public:
 
   // 单块装甲板更新（内部转为批量更新）
   void update(const Armor & armor, double dt = -1.0);
+  void update(const Armor * armor, double dt = -1.0);
   // 同一帧内的多块装甲板合并为一次批量更新，避免重复使用同一帧信息
   void update(const std::vector<Armor> & armors, double dt = -1.0);
+  // 零拷贝版本：只持有指针，调用方需保证 Armor 在本次调用期间有效
+  void update(const std::vector<const Armor *> & armors, double dt = -1.0);
 
   Eigen::VectorXd ekf_x() const;
   const tools::ExtendedKalmanFilter & ekf() const;
