@@ -84,7 +84,7 @@ int main(int argc, char * argv[])
 
     auto armors = detector.detect(img);
 
-    auto targets = tracker.track(armors, t);
+    auto targets = tracker.track(armors, t, true, img.size());
 
     // aimer 输出的 yaw 已是 IMU 世界系绝对角（Aimer 内部对世界系 armor_xyza_list 取 atan2），
     // 与下位机的要求一致，直接下发，绝不能再叠加 gimbal_pos[0]。

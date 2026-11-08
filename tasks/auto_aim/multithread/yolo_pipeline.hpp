@@ -54,6 +54,12 @@ struct CameraJob
   io::Camera * camera = nullptr;
   int camera_id = -1;        // -1 = 主相机
   bool keep_image = false;   // 结果里是否带上原图（只有主相机需要）
+  // 是否把当前线程绑定到独占 CPU 核。全向相机默认 true；主相机可关闭，
+  // 让 OpenVINO 按自身策略使用更多核。
+  bool pin_cpu = true;
+  // CPU 推理是否限制为单线程。全向相机默认 true（每路独占一核），
+  // 主相机可关闭，允许 OpenVINO 自主并行。
+  bool single_thread_cpu = true;
   // 推理之后、入队之前的相机相关处理（全向相机：过滤 / 优先级 / 角度解算 / 录像）。
   // 没有该相机特有的处理时留空。
   std::function<
@@ -72,14 +78,15 @@ struct CameraJob
 //   * 每个 CameraJob 一个独立 YOLO 实例 + 一个独立线程，相机数据只喂给自己的实例，
 //     彻底消除“多生产者抢一个消费者（OpenVINO InferRequest）”的串行瓶颈；
 //   * 自动分配时按物理核心分配、性能核优先，每个物理核心只选一个逻辑 CPU；
-//     线程启动时先绑定、再构造 YOLO，使 OpenVINO 在线程初始化时继承该亲和性；
+//     仅对 pin_cpu=true 的任务绑核，且线程启动时先绑定、再构造 YOLO，使 OpenVINO
+//     在线程初始化时继承该亲和性；
 //   * 结果进入同一个带优先级的队列：主相机结果永远最先被消费（且只保留最新一帧，
 //     主循环来不及处理时不追旧帧），全向结果按到达顺序排队。
 class YoloPipeline
 {
 public:
-  // 按 jobs 数量自动分配 CPU：主相机与每路全向相机各占一个物理核心，
-  // 优先性能核；不需要单独配置 CPU 数量或逻辑 CPU ID。
+  // 按 jobs 自动分配 CPU：仅 pin_cpu=true 的任务占用物理核心，优先性能核。
+  // 不需要单独配置 CPU 数量或逻辑 CPU ID。
   YoloPipeline(const std::string & config_path, std::vector<CameraJob> jobs, bool debug = false);
   ~YoloPipeline();
 

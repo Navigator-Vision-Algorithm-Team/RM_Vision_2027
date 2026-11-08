@@ -4,6 +4,7 @@
 #include <Eigen/Dense>
 #include <chrono>
 #include <list>
+#include <opencv2/core/types.hpp>
 #include <string>
 
 #include "armor.hpp"
@@ -30,11 +31,12 @@ public:
 
   std::list<Target> track(
     std::list<Armor> & armors, std::chrono::steady_clock::time_point t,
-    bool use_enemy_color = true);
+    bool use_enemy_color = true, cv::Size image_size = cv::Size());
 
   std::tuple<omniperception::DetectionResult, std::list<Target>> track(
     const std::vector<omniperception::DetectionResult> & detection_queue, std::list<Armor> & armors,
-    std::chrono::steady_clock::time_point t, bool use_enemy_color = true);
+    std::chrono::steady_clock::time_point t, bool use_enemy_color = true,
+    cv::Size image_size = cv::Size());
 
 private:
   Solver & solver_;

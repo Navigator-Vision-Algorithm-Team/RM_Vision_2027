@@ -195,6 +195,8 @@ int main(int argc, char * argv[])
     main_job.camera = &camera;
     main_job.camera_id = -1;  // -1 = 主相机
     main_job.keep_image = true;
+    main_job.pin_cpu = false;
+    main_job.single_thread_cpu = false;
     camera_jobs.push_back(std::move(main_job));
 
     auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
@@ -355,7 +357,7 @@ int main(int argc, char * argv[])
       // 传入的是全向相机中的装甲板候选，和主相机中的装甲板候选，为什么两个不放在同一个queue中传入给tracker呢？
       // 因为我们认为在主相机发现的相机的优先级会天然的大于全向相机中发现的
       // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
-      auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp);
+      auto [switch_target, targets] = tracker.track(detection_queue, armors, timestamp, true, img.size());
       
       // 全向相机的 delta_yaw 是「大yaw 系」角（零点 = 大yaw 正前方、向左为正，
       // 由 Decider::delta_angle 用 tf 给的「相机 -> 大yaw」位姿算出），
