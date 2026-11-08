@@ -60,7 +60,8 @@ void Tracker::reset()
 }
 
 std::list<Target> Tracker::track(
-  std::list<Armor> & armors, std::chrono::steady_clock::time_point t, bool use_enemy_color)
+  std::list<Armor> & armors, std::chrono::steady_clock::time_point t, bool use_enemy_color,
+  cv::Size image_size)
 {
   auto dt = tools::delta_time(t, last_timestamp_);
   last_timestamp_ = t;
@@ -81,8 +82,12 @@ std::list<Target> Tracker::track(
   // });
 
   // 优先选择靠近图像中心的装甲板
-  armors.sort([](const Armor & a, const Armor & b) {
-    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO
+  const cv::Point2f img_center =
+    (image_size.width > 0 && image_size.height > 0)
+      ? cv::Point2f(image_size.width * 0.5F, image_size.height * 0.5F)
+      : cv::Point2f(720.0F, 540.0F);
+
+  armors.sort([&](const Armor & a, const Armor & b) {
     auto distance_1 = cv::norm(a.center - img_center);
     auto distance_2 = cv::norm(b.center - img_center);
     return distance_1 < distance_2;
@@ -139,7 +144,7 @@ std::list<Target> Tracker::track(
 */
 std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   const std::vector<omniperception::DetectionResult> & detection_queue, std::list<Armor> & armors,
-  std::chrono::steady_clock::time_point t, bool use_enemy_color)
+  std::chrono::steady_clock::time_point t, bool use_enemy_color, cv::Size image_size)
 {
   omniperception::DetectionResult switch_target{std::list<Armor>(), t, 0, 0};
   omniperception::DetectionResult temp_target{std::list<Armor>(), t, 0, 0};
@@ -158,11 +163,11 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
     state_ = "lost";
   }
 
-  // 施工脚手架：： 
-  // 并且有一个致命的问题，这个的地方写死了图像的大小就是（1440, 1080），这显然是有一些不合理的。
-
   // 优先选择靠近图像中心的装甲板
-  const cv::Point2f img_center(1440.f, 1080.f);  // 后期有精力可以吧这个东西写在config文件中，因为后期我希望大改动一下现在的config文件的读取统一的问题，所以这个先不该动 TODO:
+  const cv::Point2f img_center =
+    (image_size.width > 0 && image_size.height > 0)
+      ? cv::Point2f(image_size.width * 0.5F, image_size.height * 0.5F)
+      : cv::Point2f(720.0F, 540.0F);
 
   armors.sort([&](const Armor & a, const Armor & b) {
     if (a.priority != b.priority) return a.priority < b.priority;
