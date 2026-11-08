@@ -681,25 +681,31 @@ EkfConvergenceMetrics Target::debug_convergence_metrics() const
   const auto uncertainty_score = [](double sigma, double tolerance) {
     return std::clamp(1.0 - sigma / tolerance, 0.0, 1.0);
   };
-  constexpr double kPositionToleranceM = 0.10;
-  constexpr double kVelocityToleranceMps = 0.50;
-  constexpr double kYawToleranceRad = 0.08726646259971647;  // 5 degrees
-  constexpr double kAngularVelocityToleranceRadps = 0.50;
-  constexpr double kRadiusToleranceM = 0.03;
+  // 容差按「实际可用精度」给，而不是按理想值：2.25m 处 yaw 10° 对应 39cm 横向误差，
+  // 对 15cm 装甲板仍可打中；r/l/h 的 P0 是 0.01（σ=0.1m），容差必须 ≥ 0.1 否则该项恒为 0
+  constexpr double kPositionToleranceM = 0.15;
+  constexpr double kVelocityToleranceMps = 0.80;
+  constexpr double kYawToleranceRad = 0.17453292519943295;  // 10 degrees
+  constexpr double kAngularVelocityToleranceRadps = 0.80;
+  constexpr double kRadiusToleranceM = 0.15;
 
+  // r/l/h 是机械常数，不参与瞄准（armor_xyza_list 用点估计），
+  // 权重从 0.20 降到 0.05，腾出的权重分给真正决定命中精度的 pos / yaw
   metrics.covariance_score =
     100.0 *
-    (0.30 * uncertainty_score(metrics.position_std, kPositionToleranceM) +
+    (0.40 * uncertainty_score(metrics.position_std, kPositionToleranceM) +
      0.15 * uncertainty_score(metrics.velocity_std, kVelocityToleranceMps) +
-     0.20 * uncertainty_score(metrics.yaw_std, kYawToleranceRad) +
+     0.25 * uncertainty_score(metrics.yaw_std, kYawToleranceRad) +
      0.15 * uncertainty_score(
               metrics.angular_velocity_std, kAngularVelocityToleranceRadps) +
-     0.20 * uncertainty_score(metrics.geometry_std, kRadiusToleranceM));
+     0.05 * uncertainty_score(metrics.geometry_std, kRadiusToleranceM));
 
   // For a correctly modelled filter, mean NIS / dof is near 1. Penalize
   // deviations outside [0.25, 4] and separately account for 95%-gate failures.
-  double nis_ratio_score = 0.0;
-  if (std::isfinite(metrics.nis_ratio) && metrics.nis_ratio > 0.0) {
+  // nis_ratio 接近 0 时 log(0) = -inf 会让该项恒为 0，进而 consistency 上限只有 40，
+  // 永远达不到 60 的门槛。统计不可用时给中性分，不奖不罚
+  double nis_ratio_score = 0.5;
+  if (std::isfinite(metrics.nis_ratio) && metrics.nis_ratio > 1e-6) {
     nis_ratio_score = std::clamp(
       1.0 - std::abs(std::log(metrics.nis_ratio)) / std::log(4.0), 0.0, 1.0);
   }
@@ -709,8 +715,8 @@ EkfConvergenceMetrics Target::debug_convergence_metrics() const
   metrics.consistency_score = 100.0 * (0.6 * nis_ratio_score + 0.4 * nis_failure_score);
   metrics.score = 0.65 * metrics.covariance_score + 0.35 * metrics.consistency_score;
   metrics.converged =
-    metrics.samples >= metrics.min_samples && !diverged() && metrics.score >= 70.0 &&
-    metrics.covariance_score >= 60.0 && metrics.consistency_score >= 60.0 &&
+    metrics.samples >= metrics.min_samples && !diverged() && metrics.score >= 60.0 &&
+    metrics.covariance_score >= 45.0 && metrics.consistency_score >= 45.0 &&
     metrics.nis_failure_rate < max_failure_rate;
 
   return metrics;
