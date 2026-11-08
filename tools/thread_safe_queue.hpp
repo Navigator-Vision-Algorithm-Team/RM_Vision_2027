@@ -37,6 +37,25 @@ public:
     not_empty_condition_.notify_all();
   }
 
+  // 右值重载：生产者线程里的大对象（相机帧、检测结果）直接搬进队列，
+  // 避免一次额外的拷贝构造
+  void push(T && value)
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+
+    if (queue_.size() >= max_size_) {
+      if (PopWhenFull) {
+        queue_.pop();
+      } else {
+        full_handler_();
+        return;
+      }
+    }
+
+    queue_.push(std::move(value));
+    not_empty_condition_.notify_all();
+  }
+
   void pop(T & value)
   {
     std::unique_lock<std::mutex> lock(mutex_);

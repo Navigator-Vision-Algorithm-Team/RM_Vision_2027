@@ -13,11 +13,15 @@ class Shooter
 public:
   Shooter(const std::string & config_path);
 
+  // 单目标版本：target 为 nullptr 视为无目标（不更新内部历史指令）
   bool shoot(
-    const io::Command & command,
-    const auto_aim::Aimer & aimer,
-    const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos
-    );
+    const io::Command & command, const auto_aim::Aimer & aimer, const auto_aim::Target * target,
+    const Eigen::Vector3d & gimbal_pos);
+
+  // 兼容接口
+  bool shoot(
+    const io::Command & command, const auto_aim::Aimer & aimer,
+    const std::list<auto_aim::Target> & targets, const Eigen::Vector3d & gimbal_pos);
 
 private:
   io::Command last_command_;

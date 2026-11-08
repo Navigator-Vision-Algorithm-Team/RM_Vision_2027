@@ -82,11 +82,11 @@ int main(int argc, char * argv[])
 
       auto armors = detector.detect(img);
 
-      auto targets = tracker.track(armors, t, true, img.size());
+      const auto * target = tracker.track(armors, t, true, img.size());
 
-      auto command = aimer.aim(targets, t, cboard.bullet_speed);
+      auto command = aimer.aim(target, t, cboard.bullet_speed);
 
-      command.shoot = shooter.shoot(command, aimer, targets, ypr);
+      command.shoot = shooter.shoot(command, aimer, target, ypr);
 
       cboard.send(command);
     }

@@ -61,6 +61,11 @@ struct CameraJob
   // 主相机可关闭，允许 OpenVINO 自主并行。
   bool single_thread_cpu = true;
   // 推理之后、入队之前的相机相关处理（全向相机：过滤 / 优先级 / 角度解算 / 录像）。
+  // img 是 const：处理函数只能读取，需要画框请自行 clone。
+  // 原因：伪相机（camera_name=fake）走的是零拷贝缓冲池，且 render_overlay() 每帧
+  // 只重画左上角一小块做"复原"，直接在 img 上画框会把框永久留在池缓冲里，
+  // 后续帧复用同一块缓冲时出现残影叠加。生产路径（hikrobot/mindvision 每帧
+  // 独立缓冲）虽然可以直接画，但契约必须对所有数据源一致。
   // 没有该相机特有的处理时留空。
   std::function<
     void(

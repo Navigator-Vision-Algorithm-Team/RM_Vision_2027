@@ -30,17 +30,41 @@ Aimer::Aimer(const std::string & config_path)
 }
 
 io::Command Aimer::aim(
-  std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
-  bool to_now)
+  const std::list<Target> & targets, std::chrono::steady_clock::time_point timestamp,
+  double bullet_speed, bool to_now)
 {
   if (targets.empty()) return {false, false, 0, 0};
-  auto target = targets.front();
+  return aim(targets.front(), timestamp, bullet_speed, to_now);
+}
 
-  if (target.ekf_x().size() < 9) return {false, false, 0, 0};
+io::Command Aimer::aim(
+  const Target * target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+  bool to_now)
+{
+  if (target == nullptr) return {false, false, 0, 0};
+  return aim(*target, timestamp, bullet_speed, to_now);
+}
 
-  auto ekf = target.ekf();
+io::Command Aimer::aim(
+  const Target * target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+  io::ShootMode shoot_mode, bool to_now)
+{
+  if (target == nullptr) return {false, false, 0, 0};
+  return aim(*target, timestamp, bullet_speed, shoot_mode, to_now);
+}
+
+io::Command Aimer::aim(
+  const Target & target_in, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+  bool to_now)
+{
+  const Eigen::VectorXd ekf_x_in = target_in.ekf_x();
+  if (ekf_x_in.size() < 9) return {false, false, 0, 0};
+
+  // 本地副本：下面要对它连续做 predict，EKF 状态必须可写
+  Target target = target_in;
+
   double delay_time =
-    std::abs(target.ekf_x()[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
+    std::abs(ekf_x_in[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
 
   if (bullet_speed < 14) bullet_speed = 23;
 
@@ -78,18 +102,20 @@ io::Command Aimer::aim(
   }
 
   // 迭代求解飞行时间 (最多10次，收敛条件：相邻两次fly_time差 <0.001)
-  bool converged = false;
   double prev_fly_time = trajectory0.fly_time;
   tools::Trajectory current_traj = trajectory0;
-  std::vector<Target> iteration_target(10, target);  // 创建10个目标副本用于迭代预测
+  // 只保留一份副本：每轮从 target 重置再预测到本次的飞行时刻。
+  // 原实现一次构造 10 个 Target 副本（每个含 3 个 EKF），是每帧最大的一次堆分配。
+  Target iteration_target = target;
 
   for (int iter = 0; iter < 10; ++iter) {
     // 预测目标在 future + prev_fly_time 时刻的位置
     auto predict_time = future + std::chrono::microseconds(static_cast<int>(prev_fly_time * 1e6));
-    iteration_target[iter].predict(predict_time);
+    iteration_target = target;
+    iteration_target.predict(predict_time);
 
     // 计算瞄准点
-    auto aim_point = choose_aim_point(iteration_target[iter]);
+    auto aim_point = choose_aim_point(iteration_target);
     debug_aim_point = aim_point;
     if (!aim_point.valid) {
       return {false, false, 0, 0};
@@ -110,10 +136,7 @@ io::Command Aimer::aim(
     }
 
     // 检查收敛条件
-    if (std::abs(current_traj.fly_time - prev_fly_time) < 0.001) {
-      converged = true;
-      break;
-    }
+    if (std::abs(current_traj.fly_time - prev_fly_time) < 0.001) break;
     prev_fly_time = current_traj.fly_time;
   }
 
@@ -122,8 +145,9 @@ io::Command Aimer::aim(
   double yaw = std::atan2(final_xyz.y(), final_xyz.x()) + yaw_offset_;
   double pitch = -(current_traj.pitch + pitch_offset_);  //世界坐标系下pitch向上为负
 
-  // PnP 诊断：xyz_in_gimbal 的符号决定目标在云台哪个方向
-  tools::logger()->info(
+  // PnP 诊断：xyz_in_gimbal 的符号决定目标在云台哪个方向。
+  // 这是每帧都会走到的路径，用 debug 级别，否则 100+fps 的 info 日志本身就会拖慢主循环。
+  tools::logger()->debug(
     "[Aimer] xyz_gimbal=({:.2f},{:.2f},{:.2f}) d={:.2f}m raw_yaw={:.1f}° final_yaw={:.1f}°",
     final_xyz.x(), final_xyz.y(), final_xyz.z(),
     std::sqrt(final_xyz.x() * final_xyz.x() + final_xyz.y() * final_xyz.y()),
@@ -133,7 +157,15 @@ io::Command Aimer::aim(
 }
 
 io::Command Aimer::aim(
-  std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+  const std::list<Target> & targets, std::chrono::steady_clock::time_point timestamp,
+  double bullet_speed, io::ShootMode shoot_mode, bool to_now)
+{
+  if (targets.empty()) return {false, false, 0, 0};
+  return aim(targets.front(), timestamp, bullet_speed, shoot_mode, to_now);
+}
+
+io::Command Aimer::aim(
+  const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   io::ShootMode shoot_mode, bool to_now)
 {
   double yaw_offset;
@@ -145,7 +177,7 @@ io::Command Aimer::aim(
     yaw_offset = yaw_offset_;
   }
 
-  auto command = aim(targets, timestamp, bullet_speed, to_now);
+  auto command = aim(target, timestamp, bullet_speed, to_now);
   command.yaw = command.yaw - yaw_offset_ + yaw_offset;
 
   return command;
@@ -172,7 +204,7 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   }
 
   // 不考虑小陀螺（3V3 无前哨站，不再单独排除前哨站）
-  if (std::abs(target.ekf_x()[8]) <= 2) {
+  if (std::abs(ekf_x[8]) <= 2) {
     // 选择在可射击范围内的装甲板
     std::vector<int> id_list;
     for (int i = 0; i < armor_num; i++) {

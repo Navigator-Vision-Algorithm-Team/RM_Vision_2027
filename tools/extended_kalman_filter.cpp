@@ -138,6 +138,7 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
   Eigen::MatrixXd R_eff = R;
   double weight_sum = 1.0;
   int weight_n = 1;
+  bool r_effective_changed = false;  // 本帧是否有块被降权
   if (enable_huber && huber_block_size > 0 && s_ok) {
     const int dof = static_cast<int>(z.size());
     const int block = static_cast<int>(huber_block_size);
@@ -157,20 +158,27 @@ Eigen::VectorXd ExtendedKalmanFilter::update(
 
       const double w = nis_k > k * k ? k / std::sqrt(nis_k) : 1.0;
       R_eff.block(offset, offset, block, block) = R.block(offset, offset, block, block) / w;
+      if (w < 1.0) r_effective_changed = true;
       weight_sum += w;
       weight_n++;
     }
   }
   const double huber_weight = weight_n > 0 ? weight_sum / weight_n : 1.0;
 
-  // 用加权后的 R 重新求 S 与增益；Huber 关闭时 R_eff == R，退化为标准 EKF
-  const Eigen::MatrixXd S = H * P_prior * H.transpose() + R_eff;
-  Eigen::LDLT<Eigen::MatrixXd> ldlt(S);
+  // 用加权后的 R 求 S 与增益。当没有任何块被降权、且调用方没有单独提供 R_monitor
+  // （即 R_mon == R）时，S 与上面的 S_monitor 完全相同，可以直接复用已有的分解，
+  // 省掉一次 LDLT 分解和一次 m×m 求逆 —— 这是每帧每个模型都会走的路径。
   Eigen::MatrixXd S_inv;
-  if (ldlt.info() == Eigen::Success && ldlt.vectorD().minCoeff() > 0.0) {
-    S_inv = ldlt.solve(Eigen::MatrixXd::Identity(S.rows(), S.cols()));
-  } else {
+  if (!r_effective_changed && R_monitor.size() == 0 && s_ok) {
     S_inv = S_monitor_inv;
+  } else {
+    const Eigen::MatrixXd S = H * P_prior * H.transpose() + R_eff;
+    Eigen::LDLT<Eigen::MatrixXd> ldlt(S);
+    if (ldlt.info() == Eigen::Success && ldlt.vectorD().minCoeff() > 0.0) {
+      S_inv = ldlt.solve(Eigen::MatrixXd::Identity(S.rows(), S.cols()));
+    } else {
+      S_inv = S_monitor_inv;
+    }
   }
 
   const Eigen::MatrixXd K = P_prior * H.transpose() * S_inv;

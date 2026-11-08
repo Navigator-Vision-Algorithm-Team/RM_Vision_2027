@@ -386,12 +386,23 @@ void Target::predict(double dt)
   ekf_.predict(F, Q, f);
 }
 
-void Target::update(const Armor & armor, double dt)
+void Target::update(const Armor & armor, double dt) { update(&armor, dt); }
+
+void Target::update(const Armor * armor, double dt)
 {
-  update(std::vector<Armor>{armor}, dt);
+  if (armor == nullptr) return;
+  update(std::vector<const Armor *>{armor}, dt);
 }
 
 void Target::update(const std::vector<Armor> & armors, double dt)
+{
+  std::vector<const Armor *> ptrs;
+  ptrs.reserve(armors.size());
+  for (const auto & armor : armors) ptrs.push_back(&armor);
+  update(ptrs, dt);
+}
+
+void Target::update(const std::vector<const Armor *> & armors, double dt)
 {
   if (armors.empty()) return;
 
@@ -407,22 +418,24 @@ void Target::update(const std::vector<Armor> & armors, double dt)
 
   // 装甲板匹配：位置方位角 + 装甲板朝向角联合误差最小
   std::vector<MatchedArmor> candidates;
-  for (const auto & armor : armors) {
+  candidates.reserve(armors.size());
+  for (const Armor * armor : armors) {
+    if (armor == nullptr) continue;
     int best_id = -1;
     double min_angle_error = 1e10;
     for (int k = 0; k < search_num; k++) {
       const int i = id_by_distance[k];
       const Eigen::Vector4d & xyza = xyza_list[i];
       Eigen::Vector3d ypd = tools::xyz2ypd(xyza.head(3));
-      auto angle_error = std::abs(tools::limit_rad(armor.ypr_in_world[0] - xyza[3])) +
-                         std::abs(tools::limit_rad(armor.ypd_in_world[0] - ypd[0]));
+      auto angle_error = std::abs(tools::limit_rad(armor->ypr_in_world[0] - xyza[3])) +
+                         std::abs(tools::limit_rad(armor->ypd_in_world[0] - ypd[0]));
 
       if (angle_error < min_angle_error) {
         min_angle_error = angle_error;
         best_id = i;
       }
     }
-    if (best_id >= 0) candidates.push_back({&armor, best_id, min_angle_error});
+    if (best_id >= 0) candidates.push_back({armor, best_id, min_angle_error});
   }
   if (candidates.empty()) return;
 

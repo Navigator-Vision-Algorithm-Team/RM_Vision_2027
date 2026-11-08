@@ -57,6 +57,7 @@ YOLOV8::YOLOV8(const std::string & config_path, bool debug, bool single_thread_c
   model = ppp.build();
   compiled_model_ = compile_ov_model(
     core_, model, device_, ov::hint::PerformanceMode::LATENCY, single_thread_cpu_ ? 1 : 0);
+  infer_request_ = compiled_model_.create_infer_request();
 }
 
 std::list<Armor> YOLOV8::detect(const cv::Mat & raw_img, int frame_count)
@@ -85,19 +86,21 @@ std::list<Armor> YOLOV8::detect(const cv::Mat & raw_img, int frame_count)
   auto h = static_cast<int>(bgr_img.rows * scale);
   auto w = static_cast<int>(bgr_img.cols * scale);
 
-  // preproces
-  auto input = cv::Mat(416, 416, CV_8UC3, cv::Scalar(0, 0, 0));
+  // preproces：复用输入缓冲，只覆盖 ROI，其余保持黑色（letterbox 填充）
+  if (input_.rows != 416 || input_.cols != 416 || input_.type() != CV_8UC3) {
+    input_ = cv::Mat(416, 416, CV_8UC3);
+  }
+  input_.setTo(cv::Scalar(0, 0, 0));
   auto roi = cv::Rect(0, 0, w, h);
-  cv::resize(bgr_img, input(roi), {w, h});
-  ov::Tensor input_tensor(ov::element::u8, {1, 416, 416, 3}, input.data);
+  cv::resize(bgr_img, input_(roi), {w, h});
+  ov::Tensor input_tensor(ov::element::u8, {1, 416, 416, 3}, input_.data);
 
   /// infer
-  auto infer_request = compiled_model_.create_infer_request();
-  infer_request.set_input_tensor(input_tensor);
-  infer_request.infer();
+  infer_request_.set_input_tensor(input_tensor);
+  infer_request_.infer();
 
   // postprocess
-  auto output_tensor = infer_request.get_output_tensor();
+  auto output_tensor = infer_request_.get_output_tensor();
   auto output_shape = output_tensor.get_shape();
   cv::Mat output(output_shape[1], output_shape[2], CV_32F, output_tensor.data());
 

@@ -171,8 +171,19 @@ void YoloPipeline::push(CameraResult && result)
       main_result_ = std::move(result);
       has_main_ = true;
     } else {
-      omni_results_.push_back(std::move(result));
-      while (omni_results_.size() > max_omni_results_) omni_results_.pop_front();
+      // 同一路相机只保留最新一帧：主循环慢于推理时，旧结果已经没有使用价值
+      // （下游只取队首的一条），继续堆积只会让 drain_omni 每帧多搬几份无用的
+      // list<Armor>。不同路之间仍保持"先到先排"的轮转顺序。
+      const int id = result.camera_id;
+      auto slot = std::find_if(
+        omni_results_.begin(), omni_results_.end(),
+        [id](const CameraResult & item) { return item.camera_id == id; });
+      if (slot != omni_results_.end()) {
+        *slot = std::move(result);
+      } else {
+        omni_results_.push_back(std::move(result));
+        while (omni_results_.size() > max_omni_results_) omni_results_.pop_front();
+      }
     }
   }
   result_cv_.notify_all();

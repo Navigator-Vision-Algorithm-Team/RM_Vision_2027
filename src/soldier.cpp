@@ -160,6 +160,17 @@ int main(int argc, char * argv[])
       if (!command.control) {
         command.yaw = gimbal_pos[0];
         command.pitch = gimbal_pos[1];
+    // PnP 解算：逐块求位姿，并选出离图像中心最近的一块作为当前目标
+    const cv::Point2f img_center(img.cols / 2.0f, img.rows / 2.0f);
+    auto target = armors.end();
+    auto min_offset = std::numeric_limits<double>::max();
+    for (auto it = armors.begin(); it != armors.end(); ++it) {
+      // 解算失败时位姿字段仍是零向量，不能当候选目标
+      if (!solver.solve(*it)) continue;
+      auto offset = cv::norm(it->center - img_center);
+      if (offset < min_offset) {
+        min_offset = offset;
+        target = it;
       }
       command.shoot = false;  // 步兵程序不接管发射
     }

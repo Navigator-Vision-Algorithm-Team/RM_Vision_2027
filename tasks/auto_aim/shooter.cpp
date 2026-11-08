@@ -22,24 +22,32 @@ bool Shooter::shoot(
   const std::list<auto_aim::Target> & targets,
   const Eigen::Vector3d & gimbal_pos
   ){
-  if (!command.control || targets.empty() || !auto_fire_) return false;
+  if (targets.empty()) return false;
+  return shoot(command, aimer, &targets.front(), gimbal_pos);
+}
 
-  auto target_x = targets.front().ekf_x()[0];
-  auto target_y = targets.front().ekf_x()[2];
-  auto tolerance = std::sqrt(tools::square(target_x) + tools::square(target_y)) > judge_distance_
-                     ? second_tolerance_
-                     : first_tolerance_;
-  // tools::logger()->debug("d(command.yaw) is {:.4f}", std::abs(last_command_.yaw - command.yaw));
-  if (
-    std::abs(last_command_.yaw - command.yaw) < tolerance * 2 &&  //此时认为command突变不应该射击
-    std::abs(gimbal_pos[0] - last_command_.yaw) < tolerance &&    //应该减去上一次command的yaw值
-    aimer.debug_aim_point.valid) {
-    last_command_ = command;
-    return true;
-  }
+bool Shooter::shoot(
+  const io::Command & command, const auto_aim::Aimer & aimer, const auto_aim::Target * target,
+  const Eigen::Vector3d & gimbal_pos)
+{
+  if (!command.control || target == nullptr || !auto_fire_) return false;
 
+  // 只取一次：ekf_x() 每次调用都会新建一个 VectorXd（堆分配）
+  const Eigen::VectorXd x = target->ekf_x();
+  if (x.size() < 3) return false;
+
+  const auto tolerance = std::sqrt(tools::square(x[0]) + tools::square(x[2])) > judge_distance_
+                           ? second_tolerance_
+                           : first_tolerance_;
+
+  const double command_jump = std::abs(last_command_.yaw - command.yaw);
+  const double gimbal_error = std::abs(gimbal_pos[0] - last_command_.yaw);
+
+  // 无论是否开火都要记录本次指令，作为下一帧的突变判据
   last_command_ = command;
-  return false;
+
+  return command_jump < tolerance * 2 && gimbal_error < tolerance &&
+         aimer.debug_aim_point.valid;
 }
 
 }  // namespace auto_aim
