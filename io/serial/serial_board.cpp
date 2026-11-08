@@ -198,6 +198,7 @@ void SerialBoard::send(NavCommand command) const
 
   packet.vx = static_cast<float>(command.vx);
   packet.vy = static_cast<float>(command.vy);
+  packet.vy = -packet.vy;
   packet.wz = static_cast<float>(command.wz);
 
   crc16::Append_CRC16_Check_Sum(
