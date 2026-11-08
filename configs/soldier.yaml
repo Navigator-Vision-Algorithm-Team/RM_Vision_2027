@@ -4,6 +4,8 @@
 # can用
 
 #####-----兵种与敌我-----#####
+# soldier 主循环按 0x513.robot_id 动态选敌方颜色；这里的键仅供 Tracker 构造兼容读取，
+# 实际调用 tracker.track(..., false) 会跳过它的静态颜色过滤。
 enemy_color: "red"
 # enemy_color: "blue"
 
@@ -52,13 +54,13 @@ baud_rate: 921600
 bullet_speed: 28.0
 use_referee_system: false
 
-#####-----CBoard（CAN id 当前采用 standard4 配置，后续自行修改）-----#####
-# TODO: 与主控固件核对。注意 mvs.yaml / mtstandard.yaml 用的是 0x01 / 0x110，
-#       send_canid 虽不发送指令，但 CBoard::read_yaml 仍强制读取
-quaternion_canid: 0x100
-bullet_speed_canid: 0x101
-send_canid: 0xff
+#####-----步兵 Mini-PC ↔ C 板 CAN 协议-----#####
 can_interface: "can0"
+# CAN ID、DLC、缩放和超时固定按 io/can/soldier_can_config.hpp 中的电控协议实现。
+# pitch_raw 与算法 pitch 之间必须通过实车标定零点和方向；未标定时程序不发送跟踪命令。
+pitch_encoder_zero_rad: 0.0
+pitch_encoder_direction: 1       # 只允许 +1 或 -1；需按编码器正方向标定
+pitch_encoder_calibrated: false # 标定后才设为 true
 
 #####-----标定参数（当前采用 standard4 配置，决定 PnP 精度，务必替换为实车标定值）-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]

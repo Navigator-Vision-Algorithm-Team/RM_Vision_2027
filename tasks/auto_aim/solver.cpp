@@ -41,6 +41,11 @@ void Solver::set_R_gimbal2world(const Eigen::Quaterniond & q)
   R_gimbal2world_ = R_gimbal2imubody_.transpose() * R_imubody2imuabs * R_gimbal2imubody_;
 }
 
+void Solver::set_R_gimbal2world(const Eigen::Matrix3d & R_gimbal2world)
+{
+  R_gimbal2world_ = R_gimbal2world;
+}
+
 void Solver::set_extrinsic(
   const Eigen::Matrix3d & R_camera2gimbal, const Eigen::Vector3d & t_camera2gimbal)
 {

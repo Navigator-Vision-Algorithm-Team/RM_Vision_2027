@@ -17,6 +17,8 @@ public:
   Eigen::Matrix3d R_gimbal2world() const;
 
   void set_R_gimbal2world(const Eigen::Quaterniond & q);
+  // CAN 云台协议直接提供云台在世界系中的 yaw/pitch，不应再套用 IMU 安装外参。
+  void set_R_gimbal2world(const Eigen::Matrix3d & R_gimbal2world);
 
   // 覆盖「相机 -> gimbal（主相机所在板）」外参，用于从 tf 树注入标定值
   void set_extrinsic(const Eigen::Matrix3d & R_camera2gimbal, const Eigen::Vector3d & t_camera2gimbal);
