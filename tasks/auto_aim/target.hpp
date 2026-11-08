@@ -40,7 +40,7 @@ struct AdaptiveRConfig
 struct TargetConfig
 {
   std::array<ModelConfig, 3> models{{
-    {3.0, 80.0, false, false},    // M1 匀速
+    {5.0, 120.0, false, false},    // M1 匀速
     {10.0, 400.0, true, false},   // M2 匀加速
     {0.1, 150.0, false, true},    // M3 静止
   }};
@@ -66,12 +66,12 @@ struct TargetConfig
   //   R_yaw = yaw_var, R_pitch = pitch_var
   //   R_dist = dist_gain * log(|Δangle| + 1) + dist_offset
   //   R_ayaw = ayaw_gain * log(distance + 1) + ayaw_offset
-  double yaw_var = 1e-3;
-  double pitch_var = 1e-3;
-  double dist_gain = 0.1;
-  double dist_offset = 0.01;
+  double yaw_var = 8e-3;
+  double pitch_var = 8e-3;
+  double dist_gain = 0.5;
+  double dist_offset = 0.05;
   double ayaw_gain = 0.005;
-  double ayaw_offset = 0.02;
+  double ayaw_offset = 0.05;
 
   AdaptiveRConfig adaptive_r;
 
