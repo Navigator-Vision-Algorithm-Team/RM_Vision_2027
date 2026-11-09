@@ -49,6 +49,15 @@ Tracker::Tracker(
 
 std::string Tracker::state() const { return state_; }
 
+void Tracker::set_enemy_color(Color color)
+{
+  if (color == enemy_color_) return;
+  enemy_color_ = color;
+  tools::logger()->info(
+    "[Tracker] 敌我颜色由裁判 robot_id 更新为敌人={}（配置 enemy_color 被覆盖）",
+    COLORS[static_cast<int>(color)]);
+}
+
 void Tracker::reset()
 {
   state_ = "lost";

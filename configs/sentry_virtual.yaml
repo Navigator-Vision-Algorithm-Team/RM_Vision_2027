@@ -229,6 +229,7 @@ fault_seed: 20261015
 serial_mode: "fake"           # 内置虚拟下位机，按真实协议发 0x0500~0x0504 + 裁判转发 0x0001/0x0201
 fake_serial_external: false
 fake_imu_hz: 500.0
+fake_robot_id: 7              # 0x0201 上报的 robot_id（红方 1~11，蓝方 101~111；用来验证敌我颜色自动判定）
 camera_mode: "fake"
 fake_camera_source: "synth"   # synth | sequence | video
 camera_width: 1440

@@ -23,6 +23,15 @@ Decider::Decider(const std::string & config_path) : count_(0)
   mode_ = yaml["mode"].as<double>();
 }
 
+void Decider::set_enemy_color(auto_aim::Color color)
+{
+  if (color == enemy_color_) return;
+  enemy_color_ = color;
+  tools::logger()->info(
+    "[Decider] 敌我颜色由裁判 robot_id 更新为敌人={}（配置 enemy_color 被覆盖）",
+    auto_aim::COLORS[static_cast<int>(color)]);
+}
+
 io::Command Decider::decide(
   auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos,
   const std::vector<OmniCameraConfig> & omni_configs)

@@ -44,7 +44,7 @@ int main(int argc, char * argv[])
     return 1;
   }
 
-  // YOLO 不做敌我过滤，颜色由配置决定
+  // YOLO 不做敌我过滤：默认用配置的 enemy_color，收到裁判 robot_id 后会被覆盖（见主循环）
   auto enemy_color =
     (yaml["enemy_color"].as<std::string>("red") == "red") ? auto_aim::red : auto_aim::blue;
 
@@ -80,6 +80,18 @@ int main(int argc, char * argv[])
       }
       std::this_thread::sleep_for(10ms);
       continue;
+    }
+
+    // 敌我颜色：拿到裁判 0x0201 的 robot_id 后（红方 1~11，蓝方 101~111）取反得到敌人颜色，
+    // 覆盖配置里的 enemy_color；拿不到就继续用配置值。
+    if (const auto own_red = serial_board.own_team_red()) {
+      const auto referee_enemy = *own_red ? auto_aim::blue : auto_aim::red;
+      if (referee_enemy != enemy_color) {
+        enemy_color = referee_enemy;
+        tools::logger()->info(
+          "[soldier] 敌我颜色由裁判 robot_id 更新为敌人={}",
+          auto_aim::COLORS[static_cast<int>(enemy_color)]);
+      }
     }
 
     // YOLO 检测

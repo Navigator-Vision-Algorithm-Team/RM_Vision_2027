@@ -54,10 +54,9 @@ def _make_crc16_table():
         for _ in range(8):
             crc = (crc >> 1) ^ 0x8408 if (crc & 1) else (crc >> 1)
         table.append(crc & 0xFFFF)
-    # 与 io/serial/gimbal/protocol_crc.cpp 的 W_CRC_TABLE 严格对齐：固件实际使用的表
-    # 在索引 47 处与标准生成表不同（0x0D974，非标准的 0x0D9F5）。
-    # 必须保留该差异，否则主程序会拒绝我们生成的每一帧。
-    table[47] = 0xD974
+    # 与 io/serial/gimbal/protocol_crc.cpp 的 W_CRC_TABLE 逐字节一致（即标准反射表）。
+    # 历史 bug：C++ 侧索引 47 曾误抄成 0xD974，这里曾为对齐而打补丁；C++ 已修正，
+    # 补丁删除后两边都等于固件（UICRM-Embedded referee/src/crc.cpp）的表。
     return table
 
 
@@ -150,6 +149,12 @@ def pack_game_status(game_type=1, game_progress=4, remain=300, seq=0):
         "<BHQ", game_info, remain, int(time.monotonic() * 1e9) & 0xFFFFFFFFFFFFFFFF
     )
     return build_packet(0x0001, payload, seq)
+
+
+def pack_power_heat(heat17=30, buffer_energy=60, seq=0):
+    # power_heat_data_t (14)：u16 r0, u16 r1, float r2, u16 buffer, u16 heat17, u16 heat42
+    payload = struct.pack("<HHfHHH", 0, 0, 0.0, buffer_energy, heat17, 0)
+    return build_packet(0x0202, payload, seq)
 
 
 def pack_robot_status(robot_id=7, seq=0):
@@ -333,7 +338,8 @@ class VirtualMcu:
 
             if rel >= next_status:
                 self.write(pack_game_status())
-                self.write(pack_robot_status())
+                self.write(pack_robot_status(a.robot_id))
+                self.write(pack_power_heat(a.heat))
                 next_status += status_period
                 if next_status < rel:
                     next_status = rel + status_period
@@ -435,6 +441,15 @@ def main():
     p.add_argument("--imu-hz", type=float, default=500.0, help="云台姿态(0x0503)频率")
     p.add_argument("--chassis-hz", type=float, default=50.0, help="底盘反馈(0x0502)频率")
     p.add_argument("--status-hz", type=float, default=1.0, help="裁判帧(0x0001/0x0201)频率")
+    p.add_argument(
+        "--robot-id",
+        type=int,
+        default=7,
+        help="0x0201 上报的 robot_id（红方 1~11，蓝方 101~111；0=不模拟身份）",
+    )
+    p.add_argument(
+        "--heat", type=int, default=30, help="0x0202 上报的 17mm 当前热量（上限取 0x0201 的 120）"
+    )
     p.add_argument(
         "--reset-period", type=float, default=0.0, help="每 N 秒注入一次 MCU 重启(0=关闭)"
     )

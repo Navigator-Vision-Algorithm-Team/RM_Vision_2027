@@ -60,6 +60,14 @@ int main(int argc, char * argv[])
   auto_aim::Aimer aimer(config_path);
   auto_aim::Shooter shooter(config_path);
 
+  // 敌我颜色：以裁判 0x0201 的 robot_id 为准（红方 1~11，蓝方 101~111），敌人取反；
+  // 没收到裁判帧时继续用配置里的 enemy_color。
+  auto refresh_enemy_color = [&]() {
+    const auto own_red = serial_board.own_team_red();
+    if (!own_red) return;
+    tracker.set_enemy_color(*own_red ? auto_aim::blue : auto_aim::red);
+  };
+
   // [CAN] 打符模块，串口协议暂不支持模式切换
   // auto_buff::Buff_Detector buff_detector(config_path);
   // auto_buff::Solver buff_solver(config_path);
@@ -84,13 +92,15 @@ int main(int argc, char * argv[])
 
     auto armors = detector.detect(img);
 
+    refresh_enemy_color();
     const auto * target = tracker.track(armors, t, true, img.size());
 
     // aimer 输出的 yaw 已是 IMU 世界系绝对角（Aimer 内部对世界系 armor_xyza_list 取 atan2），
     // 与下位机的要求一致，直接下发，绝不能再叠加 gimbal_pos[0]。
     auto command = aimer.aim(target, t, serial_board.bullet_speed);
 
-    command.shoot = shooter.shoot(command, aimer, target, gimbal_pos);
+    // 热量保护：接近上限时只跟瞄不开火
+    command.shoot = shooter.shoot(command, aimer, target, gimbal_pos) && serial_board.can_shoot();
 
     serial_board.send(command);
   }

@@ -66,6 +66,8 @@ fault_seed: 20261015
 serial_mode: "fake"        # 串口四元数源：内置虚拟下位机（真实协议字节）
 fake_serial_external: false
 fake_imu_hz: 500.0
+fake_robot_id: 3             # 0x0201 的 robot_id（3 红方步兵 / 103 蓝方步兵；0=不模拟裁判身份）
+fake_heat: 30                # 0x0202 的 17mm 当前热量（上限 120，接近时停火）
 serial_replay_file: "logs/mtstandard_virtual/serial.bin"
 
 camera_name: "fake"        # 相机源：伪相机（合成图案）；原值 "hikrobot"

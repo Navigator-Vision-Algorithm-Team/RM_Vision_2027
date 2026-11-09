@@ -39,6 +39,10 @@ public:
 
   bool armor_filter(std::list<auto_aim::Armor> & armors);
 
+  // 敌我颜色：默认取配置 enemy_color，运行期由裁判 0x0201 的 robot_id 覆盖（己方取反）。
+  // 值没变化时直接返回，不会刷日志。
+  void set_enemy_color(auto_aim::Color color);
+
   // 【已停用】后续无法可靠判断兵种(ArmorName)，暂停按兵种设置优先级
   // void set_priority(std::list<auto_aim::Armor> & armors);
   //对队列中的每一个DetectionResult进行过滤，同时将DetectionResult排序
