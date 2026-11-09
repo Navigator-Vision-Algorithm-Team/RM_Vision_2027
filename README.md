@@ -145,50 +145,6 @@ cmake -S . -B build -DOpenVINO_DIR=/path/to/openvino/runtime/cmake
 ```bash
 ./build/mt_standard configs/mtstandard_virtual.yaml
 ```
-   ```bash
-   #不输出wearning，单线程编译。
-   cmake -S . -B build \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DCMAKE_CXX_FLAGS_DEBUG="-O0 -g -w -fdiagnostics-color=always -fmax-errors=10"
-    
-   cmake --build build -j1 2>&1 | tee build_error.log
-   ```
-
-### 数据源：real / fake / replay（无真实下位机与相机也能跑通）
->
-> 业务算法不直接依赖硬件，只依赖抽象数据源（`io::sim::QuaternionSource` / `io::sim::CameraSource`），
-> 通过配置在 `real` / `fake` / `replay` 之间切换，**业务代码一行不改**。
-> 实现位于 `io/sim/`，Python 虚拟下位机位于 `sim/virtual_mcu.py`。
-
-**1) 抽象接口与实现**
-
-| 方向 | 抽象 | real | fake | replay |
-| --- | --- | --- | --- | --- |
-| 串口四元数 | `io::sim::QuaternionSource` | `RealSerialSource` | `FakeSerialSource` | `ReplaySerialSource` |
-| 相机图像 | `io::sim::CameraSource` | `RealHikCameraSource` | `FakeCameraSource` | `ReplayCameraSource` |
-
-三种实现共用同一套「真实协议字节解析」与同一套 `io::CameraBase` 适配器，因此**帧率、时间戳语义、
-报文格式完全一致**：fake 由内置虚拟下位机按 0xA5 + CRC8/CRC16 打包 0x502/0x503/0x505/0x0001。
-
-**2) 配置切换（示例见 `configs/virtual_example.yaml` / `virtual_replay.yaml` / `virtual_fault.yaml`）**
-
-```yaml
-source_mode: "fake"          # real | fake | replay（可用 serial_mode / camera_mode 单独覆盖）
-serial_mode: "fake"          # 串口四元数源
-camera_name: "fake"          # 相机源：fake=伪相机，replay=回放相机
-fake_serial_external: false  # true 时改用外部 Python 虚拟下位机提供的 pty
-fake_camera_source: "synth"  # synth(合成图案) | sequence(图片序列) | video(视频文件)
-record: { enable: true, dir: "logs/virtual_session", save_images: true }
-```
-
-**3) 无硬件运行（按兵种）**
-
-| 兵种 | 虚拟配置 | 启动命令 |
-| --- | --- | --- |
-| 哨兵 | `configs/sentry_virtual.yaml` | `./build/sentry_multithread configs/sentry_virtual.yaml` |
-| 步兵 | `configs/soldier_virtual.yaml` | `./build/soldier configs/soldier_virtual.yaml` |
-
-每份虚拟配置只替换数据源（`camera_name: fake` + `serial_mode: fake`），业务参数与实车配置一致。
 
 ### 连接真实设备
 

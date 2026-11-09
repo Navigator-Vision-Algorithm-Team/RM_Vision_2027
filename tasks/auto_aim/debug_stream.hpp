@@ -21,6 +21,12 @@ struct PnpDebugInfo
   Eigen::Vector3d xyz_in_gimbal = Eigen::Vector3d::Zero();
 };
 
+struct PnpDebugInfo
+{
+  cv::Rect box;
+  Eigen::Vector3d xyz_in_gimbal = Eigen::Vector3d::Zero();
+};
+
 // 一帧调试状态：只填「业务侧才知道」的量。
 // FPS / 推理耗时由 DebugStream 自己统计，图像由 DebugStream 自己持有，调用方不必准备。
 // 角度单位统一为弧度，且与下位机协议一致（世界系下 pitch 向上为负）。
@@ -60,27 +66,6 @@ struct DebugStatus
   Eigen::Vector3d aim_prediction_world = Eigen::Vector3d::Zero();  // Aimer 最终提前瞄准点
   bool has_aim_prediction_pixel = false;
   cv::Point2f aim_prediction_pixel;
-
-  // 【新增】EKF 遥测：只有带 tracker 的入口会填；valid=false 时不发布 ekf 话题
-  struct Ekf
-  {
-    bool valid = false;
-    double residual_yaw = 0.0;       // 观测残差（rad）
-    double residual_pitch = 0.0;     // 观测残差（rad）
-    double residual_distance = 0.0;  // 观测残差（m）
-    double residual_angle = 0.0;     // 观测残差（rad）
-    double nis = 0.0;                // 归一化新息平方
-    double nis_failure_rate = 0.0;   // 最近窗口内 NIS 超阈值比例 0~1
-    double w = 0.0;                  // 自转角速度估计（rad/s）
-    double r = 0.0;                  // 第一组装甲板半径估计（m）
-    double l = 0.0;                  // 半径差 r2-r1（m）
-    double h = 0.0;                  // 高度差 z2-z1（m）
-  } ekf;
-
-  // 【新增】EKF 预测的投影像素：由调用方用 Solver::world2pixel 算好，DebugStream 只负责画
-  bool has_aim = false;                             // aim_pixel 是否有效
-  cv::Point2f aim_pixel;                            // 预测命中点（含发弹延迟 + 飞行时间）
-  std::vector<cv::Point2f> predicted_armor_pixels;  // 当前时刻 4 块装甲板的预测位置
 };
 
 // ROS2 -> Foxglove 实时调试数据流。
@@ -94,16 +79,13 @@ struct DebugStatus
 // 话题（默认，<ns>/<tag> 前缀）：
 //   image         sensor_msgs/CompressedImage  原图 + YOLO 框 + 敌人编号 + FPS/位姿叠加
 //                                              + PnP 一级校验（重投影点 / 残差 / 板面三轴，见 debug_stream.cpp）
-//                                              + EKF 预测叠加（P0..P3 预测装甲板 / AIM 预测命中点）
+//                                              + 提前瞄准点（LEAD AIM）
 //   image_raw     sensor_msgs/CompressedImage  相机原图（可选）
 //   yolo_input    sensor_msgs/CompressedImage  YOLO 预处理后的输入图（可选）
 //   status        std_msgs/String              JSON：FPS / 推理耗时 / 云台位姿 / 目标位姿
 //   ekf_convergence std_msgs/String            JSON：EKF 收敛分数、分项与样本数
 //   gimbal_pose   geometry_msgs/PoseStamped    当前云台位姿（世界系）
 //   target_pose   geometry_msgs/PoseStamped    下发给云台的目标位姿（世界系）
-//   ekf           std_msgs/Float64MultiArray   EKF 遥测（仅跟踪成功时发布），data 顺序：
-//                 [0]residual_yaw [1]residual_pitch [2]residual_distance [3]residual_angle
-//                 [4]nis [5]nis_failure_rate [6]w [7]r [8]l [9]h
 class DebugStream
 {
 public:

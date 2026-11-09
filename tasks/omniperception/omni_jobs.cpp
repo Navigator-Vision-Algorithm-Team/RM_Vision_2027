@@ -31,6 +31,10 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
     job.camera = cfg.camera;    job.camera_id = static_cast<int>(i);
     job.keep_image = false;  // 全向结果不把整帧图像带出线程，省内存带宽
 
+    // 全向只负责搜索，绑到能效核；性能核全部留给不绑核的主相机（OpenVINO
+    // 线程池在空闲的大核上自主展开）。能效核不足时 YoloPipeline 会告警并回退。
+    job.core_preference = tools::CpuCoreType::Efficiency;
+
     job.postprocess = [cfg, decider](
                         const cv::Mat & img, std::chrono::steady_clock::time_point ts,
                         std::list<auto_aim::Armor> & armors,

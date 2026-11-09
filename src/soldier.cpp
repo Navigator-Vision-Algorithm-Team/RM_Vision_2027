@@ -153,9 +153,19 @@ int main(int argc, char * argv[])
       return armor.color != enemy_color;
     });
 
-    // Tracker 内部完成 PnP、目标关联、EKF 预测与观测更新。
-    // 使用相机帧时间戳 t，让滤波时间间隔对应真实帧间隔。
-    const auto * target = tracker.track(armors, t, false, img.size());
+    // PnP 解算：逐块求位姿，并选出离图像中心最近的一块作为当前目标
+    const cv::Point2f img_center(img.cols / 2.0f, img.rows / 2.0f);
+    auto target = armors.end();
+    auto min_offset = std::numeric_limits<double>::max();
+    for (auto it = armors.begin(); it != armors.end(); ++it) {
+      // 解算失败时位姿字段仍是零向量，不能当候选目标
+      if (!solver.solve(*it)) continue;
+      auto offset = cv::norm(it->center - img_center);
+      if (offset < min_offset) {
+        min_offset = offset;
+        target = it;
+      }
+    }
 
     // 有效跟踪时由 Aimer 做未来位置和弹道预测；无目标时 CAN 层发送 tracking=0。
     io::Command command{false, false, gimbal_pos[0], gimbal_pos[1]};

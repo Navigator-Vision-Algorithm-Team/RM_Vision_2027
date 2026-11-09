@@ -34,9 +34,15 @@ class CpuCoreManager
 public:
   explicit CpuCoreManager(const std::string & sysfs_cpu_root = "/sys/devices/system/cpu");
 
-  std::optional<int> allocate_cpu();
+  // preferred 指定时优先在该类型的物理核里分配；该类型已耗尽（例如 x86 全为
+  // 性能核、却要求 Efficiency）才回退到默认顺序，因此调用方需要判返回值的
+  // 实际类型（见 core_type_of）决定是否告警。
+  std::optional<int> allocate_cpu(CpuCoreType preferred = CpuCoreType::Unknown);
   bool is_cpu_allowed(int cpu) const;
   bool bind_current_thread_to_cpu(int cpu) const;
+
+  // 逻辑 CPU 所属物理核的类型，找不到返回 Unknown。
+  CpuCoreType core_type_of(int cpu) const;
 
   const std::vector<CpuCoreInfo> & cores() const { return cores_; }
   const std::string & classification_source() const { return classification_source_; }

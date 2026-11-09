@@ -25,7 +25,6 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
-#include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/string.hpp>
 #endif
 
@@ -398,39 +397,6 @@ void annotate(
   PnpStats pnp_stats;
   if (pnp_check) pnp_stats = draw_pnp_check(img, armors, pnp_cfg, s);
 
-  // EKF 预测叠加：
-  //   黄色圈 P0..P3 = 当前时刻由 EKF 状态重建的四块装甲板位置
-  //   品红十字 + 箭头 = Aimer 的预测命中点（已补偿发弹延迟与弹道飞行时间）
-  // 像素由调用方用 Solver::world2pixel 算好，这里不重复相机模型。
-  for (std::size_t i = 0; i < status.predicted_armor_pixels.size(); ++i) {
-    const auto & p = status.predicted_armor_pixels[i];
-    if (p.x < 0 || p.y < 0 || p.x >= img.cols || p.y >= img.rows) continue;
-    const int rad = std::max(4, thick + 3);
-    cv::circle(img, p, rad, cv::Scalar(0, 255, 255), thick, cv::LINE_AA);
-    cv::putText(
-      img, fmt::format("P{}", i), p + cv::Point2f(rad + 2, -rad), cv::FONT_HERSHEY_SIMPLEX, 0.5 * s,
-      cv::Scalar(0, 255, 255), thick, cv::LINE_AA);
-  }
-
-  if (status.has_aim) {
-    const cv::Point2f aim(
-      std::clamp(status.aim_pixel.x, 1.0f, static_cast<float>(img.cols - 2)),
-      std::clamp(status.aim_pixel.y, 1.0f, static_cast<float>(img.rows - 2)));
-    // 执行轴准星和目标预测点使用同一套外参；无有效准星时不画误差箭头。
-    if (reticle && in_image(*reticle))
-      cv::arrowedLine(img, *reticle, aim, cv::Scalar(255, 0, 255), thick + 1, cv::LINE_AA, 0, 0.15);
-    else if (reticle_depth <= 0.0)
-      cv::arrowedLine(
-        img, cv::Point2f(img.cols / 2.0f, img.rows / 2.0f), aim,
-        cv::Scalar(255, 0, 255), thick + 1, cv::LINE_AA, 0, 0.15);
-    cv::drawMarker(
-      img, aim, cv::Scalar(255, 0, 255), cv::MARKER_CROSS, std::max(12, static_cast<int>(24 * s)),
-      thick + 1);
-    cv::putText(
-      img, "AIM(KF)", aim + cv::Point2f(10, -10), cv::FONT_HERSHEY_SIMPLEX, 0.55 * s,
-      cv::Scalar(255, 0, 255), thick, cv::LINE_AA);
-  }
-
   std::vector<std::string> lines;
   lines.push_back(fmt::format(
     "[{}] YOLO {:.1f} FPS ({:.1f} ms)  loop {:.1f} Hz  boxes {}", tag, yolo_fps, yolo_ms, loop_fps,
@@ -495,13 +461,6 @@ void annotate(
         "pnp    reproj mean {:.2f} px  max {:.2f} px  ({}/{})", pnp_stats.mean_px, pnp_stats.max_px,
         pnp_stats.solved, armors.size()));
     }
-  }
-
-  // EKF 状态：自转角速度 / 半径估计 / 当前残差与 NIS（详细曲线看 ekf 话题）
-  if (status.ekf.valid) {
-    lines.push_back(fmt::format(
-      "ekf    w {:+.2f} rad/s  r {:.3f}  l {:.3f}  h {:.3f}  nis {:.2f}", status.ekf.w,
-      status.ekf.r, status.ekf.l, status.ekf.h, status.ekf.nis));
   }
 
   if (!status.note.empty()) lines.push_back(status.note);
@@ -609,7 +568,6 @@ struct DebugStream::Impl
   rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr pub_input;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_status;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_ekf_convergence;
-  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_ekf;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_gimbal;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_target;
   bool own_context = false;
@@ -671,8 +629,6 @@ DebugStream::Impl::Impl(
     pub_status = node->create_publisher<std_msgs::msg::String>(prefix + "/status", rclcpp::QoS(10));
     pub_ekf_convergence =
       node->create_publisher<std_msgs::msg::String>(prefix + "/ekf_convergence", rclcpp::QoS(10));
-    pub_ekf =
-      node->create_publisher<std_msgs::msg::Float64MultiArray>(prefix + "/ekf", rclcpp::QoS(10));
     pub_gimbal =
       node->create_publisher<geometry_msgs::msg::PoseStamped>(prefix + "/gimbal_pose", rclcpp::QoS(10));
     pub_target =
@@ -683,8 +639,7 @@ DebugStream::Impl::Impl(
 
     RCLCPP_INFO(
       node->get_logger(),
-      "调试数据流已启动：%s/{image,image_raw,yolo_input,status,gimbal_pose,target_pose,ekf}",
-      node->get_logger(),
+
       "调试数据流已启动：%s/{image,image_raw,yolo_input,status,ekf_convergence,gimbal_pose,target_pose}",
       prefix.c_str());
 
@@ -723,7 +678,6 @@ DebugStream::Impl::~Impl()
   pub_input.reset();
   pub_status.reset();
   pub_ekf_convergence.reset();
-  pub_ekf.reset();
   pub_gimbal.reset();
   pub_target.reset();
   node.reset();
@@ -842,21 +796,6 @@ void DebugStream::Impl::emit(Job & job)
   if (pub_gimbal) pub_gimbal->publish(make_pose(stamp, frame_id, job.status.gimbal_ypr));
   if (pub_target) pub_target->publish(make_pose(stamp, frame_id, job.status.target_ypr));
 
-  // 6) EKF 遥测：仅在跟踪成功时发布（无 tracker 的入口不会发）。
-  //    顺序与 debug_stream.hpp 的注释一致，Foxglove Plot 里画 data[0..9]。
-  if (pub_ekf && job.status.ekf.valid) {
-    const auto & e = job.status.ekf;
-    std_msgs::msg::Float64MultiArray msg;
-    msg.layout.dim.resize(1);
-    msg.layout.dim[0].label = "ekf";
-    msg.layout.dim[0].size = 10;
-    msg.layout.dim[0].stride = 10;
-    msg.data = {
-      e.residual_yaw,       e.residual_pitch, e.residual_distance, e.residual_angle,
-      e.nis,                e.nis_failure_rate, e.w,                 e.r,
-      e.l,                  e.h};
-    pub_ekf->publish(msg);
-  }
 #else
   (void)job;
 #endif

@@ -29,10 +29,24 @@ std::vector<int> allocate_cores(
   std::vector<int> cores(jobs.size(), -1);
   for (std::size_t i = 0; i < jobs.size(); i++) {
     if (!jobs[i].pin_cpu) continue;
-    const auto cpu = manager.allocate_cpu();
+    // 按任务的核类型偏好分配：全向相机申请能效核，性能核留给不绑核的主相机。
+    const auto cpu = manager.allocate_cpu(jobs[i].core_preference);
     if (cpu) cores[i] = *cpu;
   }
   return cores;
+}
+
+const char * core_type_name(tools::CpuCoreType type)
+{
+  switch (type) {
+    case tools::CpuCoreType::Performance:
+      return "性能核";
+    case tools::CpuCoreType::Efficiency:
+      return "能效核";
+    case tools::CpuCoreType::Unknown:
+      return "未分类";
+  }
+  return "未分类";
 }
 
 }  // namespace
@@ -81,6 +95,33 @@ YoloPipeline::YoloPipeline(
   }
   if (physical_cores.empty()) {
     tools::logger()->warn("[YoloPipeline] 无法读取可用 CPU 拓扑，推理线程将不绑定 CPU");
+  }
+
+  // 逐路确认绑核结果：偏好类型申请不到时必须显式告警，否则会静默把全向
+  // 塞回性能核、继续和主相机抢大核。
+  for (std::size_t i = 0; i < jobs_.size(); i++) {
+    const std::string name = jobs_[i].camera->device_name();
+    if (!jobs_[i].pin_cpu) {
+      tools::logger()->info(
+        "[YoloPipeline] '{}' 不绑核（OpenVINO 自主调度）", name);
+      continue;
+    }
+    if (cores_[i] < 0) {
+      tools::logger()->warn("[YoloPipeline] '{}' 没有可用核，将不绑核", name);
+      continue;
+    }
+    const auto actual = cpu_manager_.core_type_of(cores_[i]);
+    if (
+      jobs_[i].core_preference != tools::CpuCoreType::Unknown &&
+      actual != jobs_[i].core_preference)
+    {
+      tools::logger()->warn(
+        "[YoloPipeline] '{}' 申请的{}不足，回退到 cpu={}（{}）", name,
+        core_type_name(jobs_[i].core_preference), cores_[i], core_type_name(actual));
+    } else {
+      tools::logger()->info(
+        "[YoloPipeline] '{}' 绑核 cpu={}（{}）", name, cores_[i], core_type_name(actual));
+    }
   }
   max_omni_results_ = std::max<std::size_t>(8, jobs_.size() * 4);
 

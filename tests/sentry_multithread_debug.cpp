@@ -351,8 +351,8 @@ int main(int argc, char * argv[])
       // 过滤敌人
       decider.armor_filter(armors);
 
-      // 设置优先级
-      //decider.set_priority(armors);
+      // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级（与 sentry_multithread 保持一致）
+      // decider.set_priority(armors);
 
       //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
       auto detection_queue = omniperception::take_detection_results(pipeline);
@@ -456,7 +456,7 @@ int main(int argc, char * argv[])
         }
       }
 
-      debug.publish(armors, status, &solver);
+      debug.publish(armors, status);
 
       // 绘制检测框和跟踪信息（用于赛后录像复盘）
       for (const auto & armor : armors) {

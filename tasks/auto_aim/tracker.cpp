@@ -8,7 +8,6 @@
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
-#include "tools/tuning.hpp"
 
 namespace auto_aim
 {
@@ -46,9 +45,6 @@ Tracker::Tracker(
   // 3V3 无前哨站，前哨站专用丢失容忍计数已停用
   // outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
-
-  // 卡尔曼/跟踪器的可调参数（tuning: 段），必须在任何 Target 创建之前加载
-  tools::load_tuning(config_path);
 }
 
 std::string Tracker::state() const { return state_; }
@@ -71,7 +67,7 @@ const Target * Tracker::track(
   last_timestamp_ = t;
 
   // 时间间隔过长，说明可能发生了相机离线
-  if (state_ != "lost" && dt > tools::tuning().max_dt) {
+  if (state_ != "lost" && dt > 0.1) {
     tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
     state_ = "lost";
   }
@@ -160,7 +156,7 @@ std::tuple<omniperception::DetectionResult, const Target *> Tracker::track(
   last_timestamp_ = t;
 
   // 时间间隔过长，说明可能发生了相机离线
-  if (state_ != "lost" && dt > tools::tuning().max_dt) {
+  if (state_ != "lost" && dt > 0.1) {
     tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
     state_ = "lost";
   }
@@ -223,11 +219,6 @@ std::tuple<omniperception::DetectionResult, const Target *> Tracker::track(
   pre_state_ = state_;
   // 更新状态机
   state_machine(found);
-
-  // 【调试】状态切换打日志：原来代码里没有任何状态切换记录，掉锁原因无法从日志判断
-  if (state_ != pre_state_) {
-    tools::logger()->info("[Tracker] state: {} -> {} (found={})", pre_state_, state_, found);
-  }
 
   // 发散检测
   if (state_ != "lost" && target_.diverged()) {

@@ -5,14 +5,12 @@
 #include <cstdlib>
 #include <initializer_list>
 #include <limits>
-#include <algorithm>
 #include <numeric>
 
 #include <yaml-cpp/yaml.h>
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
-#include "tools/tuning.hpp"
 
 namespace auto_aim
 {
@@ -380,13 +378,6 @@ void Target::predict(double dt)
   for (int j = 0; j < MODEL_NUM; j++) mu_[j] = c[j];
 
   fuse();
-  // 前哨站转速特判
-  if (
-    this->convergened() && this->name == ArmorName::outpost &&
-    std::abs(this->ekf_.x[7]) > tune.outpost_w_trigger)
-    this->ekf_.x[7] = this->ekf_.x[7] > 0 ? tune.outpost_w_limit : -tune.outpost_w_limit;
-
-  ekf_.predict(F, Q, f);
 }
 
 void Target::update(const Armor & armor, double dt) { update(&armor, dt); }
@@ -478,7 +469,6 @@ Eigen::VectorXd Target::measurement_noise(const Armor & armor) const
   // 观测噪声：目标越偏离视野中心，PnP 的距离越不可信；距离越远，装甲板 yaw 越不可信
   auto center_yaw = std::atan2(armor.xyz_in_world[1], armor.xyz_in_world[0]);
   auto delta_angle = tools::limit_rad(armor.ypr_in_world[0] - center_yaw);
-  const auto & tune_r = tools::tuning();
   return Eigen::VectorXd{
     {config_.yaw_var, config_.pitch_var,
      config_.dist_gain * std::log(std::abs(delta_angle) + 1) + config_.dist_offset,
@@ -760,8 +750,8 @@ bool Target::diverged() const
 {
   if (x_fused_.size() < 14) return true;
 
-  auto r_ok = x_fused_[8] > tune.r_min && x_fused_[8] < tune.r_max;
-  auto l_ok = x_fused_[8] + x_fused_[9] > tune.r_min && x_fused_[8] + x_fused_[9] < tune.r_max;
+  auto r_ok = x_fused_[8] > 0.05 && x_fused_[8] < 0.5;
+  auto l_ok = x_fused_[8] + x_fused_[9] > 0.05 && x_fused_[8] + x_fused_[9] < 0.5;
 
   if (r_ok && l_ok) return false;
 
@@ -772,17 +762,12 @@ bool Target::diverged() const
 bool Target::convergened()
 {
   // 3V3 无前哨站：所有目标统一为更新 3 次后即认为收敛
-  const auto & tune = tools::tuning();
-  if (
-    update_count_ > tune.converged_update_count &&
-    !this->diverged()) {
+  if (update_count_ > 3 && !this->diverged()) {
     is_converged_ = true;
   }
 
   // 前哨站特殊判断（3V3 无前哨站，已停用）
-  // if (
-    this->name == ArmorName::outpost && update_count_ > tune.outpost_converged_update_count &&
-    !this->diverged()) {
+  // if (this->name == ArmorName::outpost && update_count_ > 10 && !this->diverged()) {
   //   is_converged_ = true;
   // }
 

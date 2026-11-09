@@ -94,11 +94,8 @@ high_speed_delay_time: 0.026        # 高速状态下额外延迟 (s)，沿用�
 low_speed_delay_time: 0.010         # 低速状态下额外延迟 (s)，沿用哨兵示例值
 
 #####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
-# 【当前为关闭状态】没有 debug_ros2 段就不会启动调试数据流（DebugStream::Options::enable 默认 false）。
-# 需要调试时把下面的注释解开即可；正式比赛保持注释状态。
-# src/soldier.cpp（CAN 主链路）和 tests/soldier_debug.cpp（串口调试入口）均读取本段。
-# 比对实际 CAN 瞄准时使用 soldier，准星由主链路同帧 Solver 计算。
-# 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,ekf_convergence,ekf,gimbal_pose,target_pose}
+# 整个 debug_ros2 段可以整段删除：没有这一段就不启动调试数据流。
+# 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,ekf_convergence,gimbal_pose,target_pose}
 # 用法：板子上起桥接 `ros2 launch foxglove_bridge foxglove_bridge_launch.xml`，
 #      桌面 Foxglove Studio -> Open connection -> Foxglove WebSocket -> ws://<板子IP>:8765
 #debug_ros2:
