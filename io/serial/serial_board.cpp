@@ -165,8 +165,6 @@ void SerialBoard::send(Command command) const
   packet.pitch = static_cast<float>(command.pitch);
   packet.yaw = static_cast<float>(command.yaw);
   packet.shoot = (command.control && command.shoot) ? 1 : 0;
-  packet.robo_id = 0;
-  packet.timeseries = 0;  // 占位（接收方不使用）
 
   crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&packet), sizeof(SendPacket));
 
@@ -210,6 +208,9 @@ void SerialBoard::send(NavCommand command) const
   packet.vy = static_cast<float>(command.vy);
   packet.vy = -packet.vy;
   packet.wz = static_cast<float>(command.wz);
+  // 目标航向角：已确认暂时固定发 0（导航侧目前只发 geometry_msgs::Twist，没有航向字段）；
+  // 将来导航话题提供航向后，由 io::NavCommand::target_angle 透传上来即可。
+  packet.target_angle = static_cast<float>(command.target_angle);
 
   crc16::Append_CRC16_Check_Sum(
     reinterpret_cast<uint8_t *>(&packet), sizeof(NavigationPacket));

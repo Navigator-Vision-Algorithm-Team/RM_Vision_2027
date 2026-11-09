@@ -220,16 +220,39 @@ class VirtualMcu:
             return False
 
     def drain_input(self):
-        """读取主程序下发的数据（0x0402 等），用于日志/校验"""
+        """读取主程序下发的数据（0x0402 / 0x0405），用于日志/校验。
+
+        下行定义（data 段）：
+          0x0402 9 字节  = pitch(f32) yaw(f32) shoot(u8)
+          0x0405 16 字节 = vx(f32) vy(f32) wz(f32) target_angle(f32)
+        """
         try:
             data = os.read(self.master_fd, 4096)
         except (BlockingIOError, OSError):
             return b""
-        if data and self.args.verbose and len(data) >= 7 and data[0] == HEADER_MAGIC:
-            cmd_id = struct.unpack_from("<H", data, 5)[0]
-            if cmd_id == 0x0402 and len(data) >= 22:
-                pitch, yaw = struct.unpack_from("<ff", data, 9)
-                print(f"[VirtualMCU] 收到 0x0402: yaw={yaw:.3f} pitch={pitch:.3f}")
+        if data and self.args.verbose:
+            # 一次 read 可能拿到多帧（0x0402 与 0x0405 背靠背发送），按长度逐帧切
+            i = 0
+            while i + 7 <= len(data):
+                if data[i] != HEADER_MAGIC:
+                    i += 1
+                    continue
+                data_len = struct.unpack_from("<H", data, i + 1)[0]
+                frame_len = 7 + data_len + 2
+                if i + frame_len > len(data):
+                    break  # 半包，剩下的等下次
+                cmd_id = struct.unpack_from("<H", data, i + 5)[0]
+                payload = data[i + 7 : i + 7 + data_len]
+                if cmd_id == 0x0402 and data_len == 9:
+                    pitch, yaw, shoot = struct.unpack_from("<ffB", payload, 0)
+                    print(f"[VirtualMCU] 收到 0x0402: yaw={yaw:.3f} pitch={pitch:.3f} shoot={shoot}")
+                elif cmd_id == 0x0405 and data_len == 16:
+                    vx, vy, wz, target_angle = struct.unpack_from("<ffff", payload, 0)
+                    print(
+                        f"[VirtualMCU] 收到 0x0405: vx={vx:.3f} vy={vy:.3f} wz={wz:.3f} "
+                        f"target_angle={target_angle:.3f}"
+                    )
+                i += frame_len
         return data
 
     # ---------------------------------------------------------------- 生成

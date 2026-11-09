@@ -36,7 +36,17 @@
 >   `SerialBoard::can_shoot()`：热量到 `limit - heat_stop_margin` 停止开火，
 >   回落到 `limit - 2*heat_stop_margin` 自动恢复（只掐 `shoot` 位，跟瞄照常）。
 >
-> §2 的帧头 / CRC 规则与 §4 之后的下行（0x0402 / 0x0405）**保持不变**。
+> §2 的帧头 / CRC 规则保持不变。
+>
+> **下行同样精简了（以 `io/serial/gimbal/packet.hpp` 为准，§4 的字段表已作废）**
+>
+> | cmd_id | data 段 | 字段 |
+> | --- | --- | --- |
+> | 0x0402 | 9 字节 | `pitch`(f32, 世界系绝对角) / `yaw`(f32, 世界系绝对角) / `shoot`(u8, `control && shoot`) |
+> | 0x0405 | 16 字节 | `vx`(f32) / `vy`(f32, 下发前取反，符号约定已确认) / `wz`(f32) / `target_angle`(f32, 已确认暂时固定发 0) |
+>
+> 固件按 `sizeof` 严格校验长度，多一字节少一字节都整帧丢弃；`packet.hpp` 里有对应的
+> `static_assert` 兜底。
 
 ---
 
@@ -246,23 +256,19 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 
 ### 4.1 `0x0402` 自瞄控制指令（SendPacket）
 
-由 `SerialBoard::send(Command)` 下发，入口每帧调用。
+由 `SerialBoard::send(Command)` 下发，入口每帧调用。**（2026-11 精简版，旧字段已删除）**
 
 | 偏移 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 13` |
-| 7 | `id` | uint8 | 恒为 0 |
-| 8 | `robo_id` | uint8 | 恒为 0 |
-| 9 | `pitch` | float | 目标俯仰**世界系绝对角**（rad） |
-| 13 | `yaw` | float | 目标偏航**世界系绝对角**（rad） |
-| 17 | `accuracy` | uint8 | 恒为 50 |
-| 18 | `shoot` | uint8 | `(control && shoot) ? 1 : 0` |
-| 19 | `timeseries` | uint8 | 时间戳低 8 位（接收方不使用，占位 0） |
-| 20 | `crc16` | uint16 | CRC16 |
+| 0 | `header` | Header | `data_length = 9` |
+| 7 | `pitch` | float | 目标俯仰**世界系绝对角**（rad） |
+| 11 | `yaw` | float | 目标偏航**世界系绝对角**（rad） |
+| 15 | `shoot` | uint8 | `(control && shoot) ? 1 : 0`，再与热量保护 `can_shoot()` 相与 |
+| 16 | `crc16` | uint16 | CRC16 |
 
-总长 **22 字节**。
+总长 **18 字节**。
 
-> 关键约定：`yaw` / `pitch` 为 **IMU 世界系绝对角**，与 `0x502` 的 yaw 同一定义。入口中 `aimer.aim()` 输出已满足该定义直接下发；`decider.decide()` 与全向切换的 `delta_yaw/delta_pitch` 为云台系角，需叠加 `gimbal_pos[0]` 后下发。`control` 为假时 `shoot` 强制为 0。
+> 关键约定：`yaw` / `pitch` 为 **IMU 世界系绝对角**，与 `0x0503` 的姿态同一定义。入口中 `aimer.aim()` 输出已满足该定义直接下发；`decider.decide()` 与全向切换的 `delta_yaw/delta_pitch` 为云台系角，需叠加 `gimbal_pos[0]` 后下发。`control` 为假时 `shoot` 强制为 0。
 
 ### 4.2 `0x0405` 导航控制指令（NavigationPacket）
 
@@ -270,13 +276,14 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 
 | 偏移 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 12` |
-| 7 | `vx` | float | 前向速度 |
-| 11 | `vy` | float | 横向速度 |
-| 15 | `wz` | float | 角速度 |
-| 19 | `crc16` | uint16 | CRC16 |
+| 0 | `header` | Header | `data_length = 16` |
+| 7 | `vx` | float | 前向速度，m/s |
+| 11 | `vy` | float | 横向速度，m/s（★下发前取反，符号约定已确认保留） |
+| 15 | `wz` | float | 转向角速度，rad/s |
+| 19 | `target_angle` | float | 目标航向角，rad（已确认暂时固定发 0，导航侧提供航向后透传） |
+| 23 | `crc16` | uint16 | CRC16 |
 
-总长 **21 字节**（结构体 `packed, aligned(1)`）。
+总长 **25 字节**（结构体 `packed, aligned(1)`）。
 
 ---
 
