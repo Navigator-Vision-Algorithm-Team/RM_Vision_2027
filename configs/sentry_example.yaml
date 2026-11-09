@@ -355,3 +355,79 @@ debug_ros2:
   publish_yolo_input: true
   # PnP 一级校验：在 image 话题的图上叠加「检测点 vs 重投影点 + 残差 + 板面三轴」
   pnp_check: true
+
+# =============================================================================
+#  视觉补盲（任务一 + 任务三的视觉侧，见 vision-slam-inter-plan.md §6 V8）
+#
+#  · 整段可删：没有 obstacle_cloud 段就不启动点云发布，行为与旧版本完全一致。
+#  · 「比赛」与「建图」是两次独立运行、互斥。建议复制本文件为 sentry_mapping.yaml，
+#    只改三个开关（§6 V8 的两套配置差异）：
+#        obstacle_cloud.publish_hz_map   0     -> 1
+#        visual_triangulation.enable     false -> true
+#        visual_ba.enable                false -> true
+#        外加 obstacle_cloud.pcd_path            -> "output/vision_map.pcd"
+#  · 比赛运行只保留 L0（PnP 点透传），三角化 / BA 全关，算力留给自瞄。
+# =============================================================================
+obstacle_cloud:
+  enable: true
+  topic_obstacle: "/red_standard_robot1/vision/obstacle_cloud"
+  topic_map: "/red_standard_robot1/vision/map_points"
+  topic_status: "/red_standard_robot1/vision/status"
+  frame_id_body: "gimbal_yaw"       # 出口 A/B：大yaw 系，与导航 TF 同名
+  frame_id_world: "camera_init"     # 出口 C：与导航 Point-LIO 的世界系一致
+  publish_hz_obstacle: 10
+  publish_hz_map: 0                 # 比赛 0 = 不发 C4；建图改 1
+  max_points_obstacle: 512
+  max_points_map: 20000
+  max_range_obstacle: 5.0           # 近点走实时（深度精度优先）
+  max_range_map: 12.0               # 远点走建图
+  intensity: 1.0                    # 必须 ∈ (0.1, 2.0)，否则被 costmap 的强度过滤挡掉
+  pcd_path: ""                      # 出口 C 落盘路径；建图填 "output/vision_map.pcd"
+
+# 双向通信 C1：导航 -> 视觉的位姿（nav_msgs/Odometry）
+# 整段缺失 => 不订阅，三角化通道 degraded，只发 PnP 点。
+nav_pose:
+  topic: "/red_standard_robot1/aft_mapped_to_init"
+  buffer_ms: 500
+  timeout_ms: 200
+  # 位姿链：T_camera_init<-yaw = T_ci<-body · T_body<-lidar · T_lidar<-yaw
+  # 语义与 tf.frames 一致：p_parent = R * p_child + t（rpy 为 Z-Y-X，单位度）。
+  # 恒定的外参误差在三角化的相对位姿里会互相抵消，所以默认全 0 也能跑 L1/L2；
+  # 只有做出口 C（离线 PCD，点的绝对位置要对齐激光地图）时才必须填准。
+  #   body_lidar ≈ 导航 nav2_params.yaml 中 point_lio 的 extrinsic_T / extrinsic_R
+  #   lidar_yaw  ≈ 雷达装在 gimbal_yaw 上的位姿（SDF: -0.03569, 0.09268, 0.3627，pitch -30°）
+  body_lidar_t: [0.0, 0.0, 0.0]
+  body_lidar_rpy_deg: [0.0, 0.0, 0.0]
+  lidar_yaw_t: [0.0, 0.0, 0.0]
+  lidar_yaw_rpy_deg: [0.0, 0.0, 0.0]
+
+visual_triangulation:
+  enable: false                     # 比赛 false；建图 true
+  camera_id: 3                      # 1 基编号，与 omni_cam_3 / tf.frames 一致（左后：小yaw 遮挡方向）
+  resolution: [640, 480]            # 必须与 omni_camera_matrix_3 的标定分辨率一致
+  max_corners: 300
+  roi_bottom_ratio: 0.5             # 只在图像下半部检测新特征（地平线以下）
+  min_baseline: 0.15                # m，低于它判为纯旋转 -> 切地面投影
+  min_parallax_deg: 0.5
+  max_reproj_px: 3.0
+  max_range: 12.0
+  min_triangulated_points: 20       # 本帧有效点低于此值整帧丢弃
+
+visual_ba:
+  enable: false                     # 比赛 false；建图 true
+  mode: "points_only"               # 唯一支持值（M-A：只优化点，不动导航位姿）
+  window_size: 8
+  max_iterations: 8
+  huber_threshold_px: 3.0
+  min_observations: 3
+
+visual_ground_projection:           # 纯旋转兜底：小陀螺时唯一能出深度的方式
+  enable: true
+  ground_z: -0.35                   # 地面在 camera_init 下的 z（≈ -IMU 离地高度），务必实车核对
+  max_range: 6.0
+
+dynamic_filter:
+  enable: true
+  consistency_window: 3
+  max_position_spread: 0.2          # m
+  reject_streak: 3

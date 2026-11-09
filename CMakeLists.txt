@@ -49,6 +49,8 @@ add_subdirectory(tasks/auto_aim)
 # 需要时把 `add_subdirectory(tasks/auto_buff)` 与 uav 的
 # add_executable / target_link_libraries 两行恢复即可。
 add_subdirectory(tasks/omniperception)
+# 视觉补盲（三角化 + M-A + 地面投影 + PCD），只在哨兵多相机链路里被使用
+add_subdirectory(tasks/visual_depth)
 
 ####################src###################
 # 多线程自瞄主程序（配置示例 configs/mtstandard.yaml）
@@ -84,7 +86,7 @@ if(ament_cmake_FOUND AND rclcpp_FOUND AND std_msgs_FOUND AND rosidl_typesupport_
     # 编译 sentry
     add_executable(sentry_multithread src/sentry_multithread.cpp)
 
-    target_link_libraries(sentry_multithread ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can)
+    target_link_libraries(sentry_multithread ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception visual_depth tools io io_can)
 else()
     message(STATUS "ROS2 environment not found, skipping ROS2-related code.")
 endif()

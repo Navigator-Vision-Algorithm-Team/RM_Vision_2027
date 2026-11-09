@@ -10,6 +10,7 @@
 #include "detection.hpp"
 #include "io/camera.hpp"
 #include "io/command.hpp"
+#include "omni_pnp.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/target.hpp"
 #include "tasks/auto_aim/yolo.hpp"
@@ -37,6 +38,13 @@ public:
     const std::list<auto_aim::Armor> & armors, const OmniCameraConfig & cfg,
     const cv::Size & image_size = cv::Size());
 
+  // 本次 delta_angle() 的 PnP 结果（大yaw 系 3D 点）。
+  // 只读访问器：不改现有调用点，供 omni_jobs 在 postprocess 里填
+  // CameraResult.obstacles 用（方案 V1 第 2 步）。
+  // 每次 delta_angle() 入口都会清零，所以 success==false 就代表「本次没解出」，
+  // 不会读到上一帧的陈旧值。注意同一个 Decider 只被一路相机使用，无跨线程共享。
+  const OmniPnPResult & last_pnp() const { return last_pnp_; }
+
   bool armor_filter(std::list<auto_aim::Armor> & armors);
 
   // 【已停用】后续无法可靠判断兵种(ArmorName)，暂停按兵种设置优先级
@@ -62,6 +70,9 @@ private:
 
   auto_aim::Color enemy_color_;
   std::vector<auto_aim::ArmorName> invincible_armor_;  //无敌状态机器人编号,英雄为1，哨兵为6
+
+  // 最近一次 PnP 结果（delta_angle 每次入口清零，成功才填）
+  OmniPnPResult last_pnp_;
 
   // 【已停用】兵种→优先级映射表：后续无法可靠判断兵种(ArmorName)，整段停用
   // 恢复时取消下面注释，并同时恢复 set_priority 的声明/定义与两处调用

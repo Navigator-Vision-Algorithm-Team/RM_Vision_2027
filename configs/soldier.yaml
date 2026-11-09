@@ -87,3 +87,13 @@ debug_ros2:
   # 只依赖上面的 camera_matrix / distort_coeffs，用来单独验证 PnP 本身对不对；
   # 内参缺失时自动不绘制（不影响其他叠加层）。
   pnp_check: true
+
+#####-----视觉补盲（任务一/任务三，仅哨兵多相机需要）-----#####
+# 步兵是单主相机，没有全向相机可做三角化，也没有导航侧位姿；
+# 下面两段只是把开关显式关掉，soldier 入口根本不会构造 visual_depth::VisualDepth。
+obstacle_cloud:
+  enable: false
+visual_triangulation:
+  enable: false
+visual_ba:
+  enable: false

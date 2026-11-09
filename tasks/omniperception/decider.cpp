@@ -115,6 +115,11 @@ Eigen::Vector2d Decider::delta_angle(
   const cv::Size & image_size)
 {
   Eigen::Vector2d da = Eigen::Vector2d::Zero();
+
+  // 本轮 PnP 结果先清零：下游（omni_jobs）用 last_pnp().success 判断本帧有没有
+  // 可用的 3D 点，绝不能让上一帧的旧值漏下去。
+  last_pnp_ = OmniPnPResult{};
+
   if (armors.empty()) return da;
 
   const auto & armor = armors.front();
@@ -148,6 +153,9 @@ Eigen::Vector2d Decider::delta_angle(
   // 4) 解算 + 几何合理性检查（检查在 solve_omni_armor 内部）
   if (!K.empty()) {
     const auto pnp = solve_omni_armor(armor, K, D, R_camera2gimbal, t_camera2gimbal);
+    // 无论后续是否回退到线性近似，都把 PnP 结果留下来：
+    // success 的那一支给 omni_jobs 填 CameraResult.obstacles（3D 点透传）。
+    last_pnp_ = pnp;
     if (pnp.success) {
       // yaw：向左为正，与 command.yaw / 主相机 Aimer 的约定一致，直接用。
       da[0] = pnp.yaw_pitch_deg[0];

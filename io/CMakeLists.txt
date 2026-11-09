@@ -50,16 +50,26 @@ find_package(rclcpp QUIET)
 find_package(std_msgs QUIET)
 find_package(geometry_msgs QUIET)
 find_package(sensor_msgs QUIET)
+# 导航 -> 视觉的位姿（nav_msgs/Odometry）所用，双向通信前置（方案 V2）
+find_package(nav_msgs QUIET)
 find_package(rosidl_typesupport_cpp QUIET)
 # find_package(sp_msgs QUIET)
 # 如果找不到 ROS 环境，则跳过 ROS 相关的部分
-if(NOT ament_cmake_FOUND OR NOT rclcpp_FOUND OR NOT std_msgs_FOUND OR NOT geometry_msgs_FOUND OR NOT sensor_msgs_FOUND OR NOT rosidl_typesupport_cpp_FOUND)
+if(NOT ament_cmake_FOUND OR NOT rclcpp_FOUND OR NOT std_msgs_FOUND OR NOT geometry_msgs_FOUND OR NOT sensor_msgs_FOUND OR NOT nav_msgs_FOUND OR NOT rosidl_typesupport_cpp_FOUND)
     message(WARNING "ROS2 not found, skipping ROS2 specific code.")
 else()
     message(STATUS "ROS2 environment found, compiling ROS2-related code.")
     
     # 添加 ROS2 相关的文件
-    target_sources(io PRIVATE ros2/publish2nav.cpp ros2/ros2.cpp ros2/subscribe2nav.cpp)
+    target_sources(io PRIVATE
+        ros2/publish2nav.cpp
+        ros2/ros2.cpp
+        ros2/subscribe2nav.cpp
+        # 导航 -> 视觉：位姿订阅 + 500ms 环形缓冲插值（方案 V3）
+        ros2/nav_pose_buffer.cpp
+        # 视觉 -> 导航：C3/C4/C5 三条出口的独立发布线程（方案 V4）
+        ros2/publish2nav_pointcloud.cpp
+    )
 
     # 设置 ROS2 依赖
     target_include_directories(io PUBLIC
@@ -67,6 +77,7 @@ else()
       ${std_msgs_INCLUDE_DIRS}
       ${geometry_msgs_INCLUDE_DIRS}
       ${sensor_msgs_INCLUDE_DIRS}
+      ${nav_msgs_INCLUDE_DIRS}
       # ${sp_msgs_INCLUDE_DIRS}
       ${rosidl_typesupport_cpp_INCLUDE_DIRS}
     )
@@ -75,6 +86,7 @@ else()
       ${std_msgs_LIBRARIES}
       ${geometry_msgs_LIBRARIES}
       ${sensor_msgs_LIBRARIES}
+      ${nav_msgs_LIBRARIES}
       # ${sp_msgs_LIBRARIES}
       ${rosidl_typesupport_cpp_LIBRARIES}
     )

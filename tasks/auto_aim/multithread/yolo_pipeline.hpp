@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include <Eigen/Dense>
 #include <opencv2/core.hpp>
 
 #include "io/camera.hpp"
@@ -25,6 +26,18 @@ namespace auto_aim
 namespace multithread
 {
 
+// PnP 解算出的障碍点（视觉 -> 导航出口 A/B 的原始数据，方案 V1）。
+// 坐标统一为「大yaw 系」：x 前、y 左、z 上，单位米。
+//   · 全向相机：Decider 的 solve_omni_armor 直接给出该系坐标；
+//   · 主相机：Armor::xyz_in_gimbal 在小yaw 系，入口会用 tf 树
+//     （small_yaw -> yaw_axis）转到本系后再填进来（方案 V7 第 2 步）。
+struct ObstaclePoint
+{
+  Eigen::Vector3d p_gimbal = Eigen::Vector3d::Zero();
+  int camera_id = -1;  // -1 = 主相机；0..N-1 = 全向相机序号（omni_cam_(id+1)）
+  float confidence = 0.f;
+};
+
 // 单路相机的一帧推理结果
 struct CameraResult
 {
@@ -35,6 +48,9 @@ struct CameraResult
   double delta_yaw = 0.0;    // 仅全向：目标相对大yaw 的 yaw（rad）
   double delta_pitch = 0.0;  // 仅全向：目标相对大yaw 的 pitch（rad）
   double inference_ms = 0.0;
+  // 本帧 PnP 解出的 3D 点（大yaw 系）。只在 postprocess 里填，
+  // 由主循环汇总后走 C3/C4 发给导航（red line 二：绝不在这里发布）。
+  std::vector<ObstaclePoint> obstacles;
 
   bool is_main() const { return camera_id < 0; }
 };
@@ -53,7 +69,10 @@ struct CameraJob
 {
   io::Camera * camera = nullptr;
   int camera_id = -1;        // -1 = 主相机
-  bool keep_image = false;   // 结果里是否带上原图（只有主相机需要）
+  bool keep_image = false;   // 结果里是否带上原图（主相机 / 三角化那一路全向相机需要）
+  // 即使没检测到装甲板也把结果入队。三角化需要「连续帧」，不能像自瞄那样
+  // 只在有目标时才产生结果（方案 V5/V7）。
+  bool always_push = false;
   // 是否把当前线程绑定到独占 CPU 核。全向相机默认 true；主相机可关闭，
   // 让 OpenVINO 按自身策略使用更多核。
   bool pin_cpu = true;

@@ -238,3 +238,19 @@ record:
   enable: false               # 需要录制再改 true（PNG 序列很占磁盘）
   dir: "logs/sentry_virtual"
   save_images: false
+
+# ----- 视觉补盲（虚拟运行默认全关）-----
+# fake 相机是合成的画面、也没有导航侧的 /aft_mapped_to_init，三角化没有意义；
+# 三条出口在这里全部关闭，行为与旧版本完全一致。需要在局域网里验证 C3/C5 时
+# 把 obstacle_cloud.enable 改成 true 即可（没有订阅者时 publish 是空操作）。
+obstacle_cloud:
+  enable: false
+
+visual_triangulation:
+  enable: false
+
+visual_ba:
+  enable: false
+
+visual_ground_projection:
+  enable: false

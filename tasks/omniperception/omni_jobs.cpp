@@ -3,6 +3,7 @@
 #include <fmt/core.h>
 
 #include <Eigen/Geometry>
+#include <iterator>
 #include <list>
 #include <memory>
 #include <utility>
@@ -15,7 +16,8 @@ namespace omniperception
 {
 
 std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
-  const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path)
+  const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path,
+  int keep_image_camera_id)
 {
   std::vector<auto_aim::multithread::CameraJob> jobs;
   jobs.reserve(omni_configs.size());
@@ -29,7 +31,10 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
 
     auto_aim::multithread::CameraJob job;
     job.camera = cfg.camera;    job.camera_id = static_cast<int>(i);
-    job.keep_image = false;  // 全向结果不把整帧图像带出线程，省内存带宽
+    // 全向结果默认不把整帧图像带出线程（省内存带宽）；只有视觉三角化那一路例外，
+    // 它需要每帧原图做特征跟踪。always_push 同理：没有装甲板也要产生结果。
+    job.keep_image = static_cast<int>(i) == keep_image_camera_id;
+    job.always_push = job.keep_image;
 
     job.postprocess = [cfg, decider](
                         const cv::Mat & img, std::chrono::steady_clock::time_point ts,
@@ -74,9 +79,18 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
       result.delta_yaw = da[0] / 57.3;
       result.delta_pitch = da[1] / 57.3;
 
-      // 每检测到目标就打印一次；4 路相机各 30~60fps 时 info 会刷满日志并拖慢推理线程，
-      // 需要时用 debug 级别查看。
       const auto & armor = armors.front();
+
+      // PnP 3D 点透传（方案 V1）：delta_angle 内部刚解出的「装甲板中心在大yaw 系」
+      // 坐标，原来只取了角度把 xyz 丢掉，现在一并交给主循环汇总成障碍点云。
+      // 注意用的是 front()（与 delta_yaw/delta_pitch 描述的是同一块装甲板）。
+      if (const auto & pnp = decider->last_pnp(); pnp.success) {
+        auto_aim::multithread::ObstaclePoint obstacle;
+        obstacle.p_gimbal = pnp.xyz_in_gimbal;
+        obstacle.camera_id = result.camera_id;
+        obstacle.confidence = static_cast<float>(armor.confidence);
+        result.obstacles.push_back(obstacle);
+      }
       tools::logger()->debug(
         "[{}] detect {}: centre_norm=({:.3f},{:.3f}) px=({:.0f},{:.0f}) "
         "da_yaw={:.2f}° da_pitch={:.2f}°",
@@ -91,7 +105,7 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
 }
 
 std::vector<DetectionResult> take_detection_results(
-  auto_aim::multithread::YoloPipeline & pipeline)
+  auto_aim::multithread::YoloPipeline & pipeline, const TakeOptions & options)
 {
   std::vector<auto_aim::multithread::CameraResult> raw;
   pipeline.drain_omni(raw);
@@ -99,6 +113,25 @@ std::vector<DetectionResult> take_detection_results(
   std::vector<DetectionResult> results;
   results.reserve(raw.size());
   for (auto & item : raw) {
+    // 三角化那一路：把原图与时间戳搬出去（只移动 cv::Mat 句柄，不拷贝像素）。
+    // 这一路即使没检测到装甲板也会有结果（always_push），照样要取。
+    if (options.keep_image && item.camera_id == options.keep_image_camera_id) {
+      options.keep_image->camera_id = item.camera_id;
+      options.keep_image->timestamp = item.timestamp;
+      options.keep_image->img = std::move(item.img);
+    }
+
+    // PnP 3D 点与「有没有装甲板」无关地汇总：本帧有障碍物就交给视觉补盲链路
+    if (options.obstacles && !item.obstacles.empty()) {
+      options.obstacles->insert(
+        options.obstacles->end(), std::make_move_iterator(item.obstacles.begin()),
+        std::make_move_iterator(item.obstacles.end()));
+    }
+
+    // 没有装甲板的结果不进 DetectionResult：下游（sort/track）只关心候选目标，
+    // 塞空条目只会让队列里多出无意义的元素。
+    if (item.armors.empty()) continue;
+
     DetectionResult detection;
     detection.armors = std::move(item.armors);
     detection.timestamp = item.timestamp;

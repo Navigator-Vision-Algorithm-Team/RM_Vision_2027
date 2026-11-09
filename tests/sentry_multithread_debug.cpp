@@ -18,8 +18,9 @@
 #include <thread>
 
 #include "io/camera.hpp"
-#include "io/serial/serial_board.hpp"
 #include "io/ros2/ros2.hpp"
+#include "io/ros2/ros_time.hpp"
+#include "io/serial/serial_board.hpp"
 #include "io/tf/tf_tree.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/debug_stream.hpp"
@@ -31,6 +32,7 @@
 // 【改动】load_omni_pnp_config（读取全向相机 PnP 标定参数）声明在这里
 #include "tasks/omniperception/omni_jobs.hpp"
 #include "tasks/omniperception/omni_pnp.hpp"
+#include "tasks/visual_depth/visual_depth.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -77,9 +79,9 @@ int main(int argc, char * argv[])
 
   // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
   // 与主循环（视觉处理）解耦，避免被主链路延迟。
-  io::ROS2 ros2([&serial_board](const io::NavCommand & nav_command) {
-    serial_board.send(nav_command);
-  });
+  io::ROS2 ros2(
+    [&serial_board](const io::NavCommand & nav_command) { serial_board.send(nav_command); }, true,
+    config_path);
 
   // 云台关节反馈：复用 SerialBoard 已有的串口接收线程（不额外占串口）
   serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
@@ -180,6 +182,16 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
+  // 视觉补盲总装（与 src/sentry_multithread.cpp 一致；配置没开时全部是空操作）
+  visual_depth::VisualDepth depth(config_path);
+
+  visual_depth::VisualDepth::PoseLookup pose_lookup =
+    [&ros2](std::chrono::steady_clock::time_point ts, Eigen::Isometry3d & T) {
+      auto * buffer = ros2.nav_pose();
+      if (buffer == nullptr) return false;
+      return buffer->lookup(io::rostime::to_ros(ts), T);
+    };
+
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程
   std::vector<auto_aim::multithread::CameraJob> camera_jobs;
   {
@@ -191,7 +203,8 @@ int main(int argc, char * argv[])
     main_job.single_thread_cpu = false;
     camera_jobs.push_back(std::move(main_job));
 
-    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
+    auto omni_jobs =
+      omniperception::make_omni_jobs(omni_configs, config_path, depth.keep_image_camera_id());
     for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
   }
   auto_aim::multithread::YoloPipeline pipeline(config_path, std::move(camera_jobs), false);
@@ -318,6 +331,10 @@ int main(int argc, char * argv[])
     io::Command command{false, false, 0, 0};
     aimer.debug_aim_point.valid = false;
 
+    // 视觉补盲的输入缓存（与 src/sentry_multithread.cpp 一致）
+    std::vector<auto_aim::multithread::ObstaclePoint> obstacles;
+    auto_aim::multithread::CameraResult tri_frame;
+
     // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
     // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
     // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
@@ -355,7 +372,12 @@ int main(int argc, char * argv[])
       // decider.set_priority(armors);
 
       //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
-      auto detection_queue = omniperception::take_detection_results(pipeline);
+      //同时取出 PnP 3D 点与三角化那一路的原图（视觉补盲用）
+      omniperception::TakeOptions take_options;
+      take_options.keep_image_camera_id = depth.keep_image_camera_id();
+      take_options.obstacles = &obstacles;
+      take_options.keep_image = &tri_frame;
+      auto detection_queue = omniperception::take_detection_results(pipeline, take_options);
 
       decider.sort(detection_queue);
 
@@ -363,7 +385,22 @@ int main(int argc, char * argv[])
       // 因为我们认为在主相机发现的相机的优先级会天然的大于全向相机中发现的
       // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
       auto [switch_target, target] = tracker.track(detection_queue, armors, timestamp, true, img.size());
-      
+
+      // 主相机的 PnP 点（小yaw 系）-> 大yaw 系，与全向相机的点合并（方案 V1 第 4 步）
+      {
+        io::tf::Transform T_yaw_plate;
+        if (tf_tree.lookup(io::tf::Tree::SMALL_YAW, io::tf::Tree::YAW_AXIS, T_yaw_plate)) {
+          for (const auto & armor : armors) {
+            if (armor.xyz_in_gimbal.isZero(1e-6)) continue;
+            auto_aim::multithread::ObstaclePoint point;
+            point.p_gimbal = T_yaw_plate.R * armor.xyz_in_gimbal + T_yaw_plate.t;
+            point.camera_id = -1;
+            point.confidence = static_cast<float>(armor.confidence);
+            obstacles.push_back(point);
+          }
+        }
+      }
+
       // 全向相机的 delta_yaw 是「大yaw 系」角（零点 = 大yaw 正前方、向左为正，
       // 由 Decider::delta_angle 用 tf 给的「相机 -> 大yaw」位姿算出），
       // 必须加大yaw 当前的世界系 yaw 才是下位机要求的世界系绝对角。
@@ -486,6 +523,19 @@ int main(int argc, char * argv[])
 
       // //test//
     }
+
+    // ---- 视觉补盲收尾（与 src/sentry_multithread.cpp 一致）----
+    depth.add_obstacle_points(obstacles, timestamp);
+    if (!tri_frame.img.empty()) {
+      const int cam = tri_frame.camera_id;
+      const bool valid_cam = cam >= 0 && static_cast<size_t>(cam) < omni_configs.size();
+      if (valid_cam) {
+        depth.add_frame(
+          cam, tri_frame.img, tri_frame.timestamp, omni_configs[cam].R_camera2gimbal,
+          omni_configs[cam].t_camera2gimbal);
+      }
+    }
+    depth.finish(timestamp, pose_lookup);
   }
 
   return 0;

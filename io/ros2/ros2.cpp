@@ -1,7 +1,9 @@
 #include "ros2.hpp"
 namespace io
 {
-ROS2::ROS2(std::function<void(const NavCommand &)> nav_sender, bool subscribe_nav)
+ROS2::ROS2(
+  std::function<void(const NavCommand &)> nav_sender, bool subscribe_nav,
+  const std::string & config_path)
 {
   rclcpp::init(0, nullptr);
 
@@ -14,6 +16,10 @@ ROS2::ROS2(std::function<void(const NavCommand &)> nav_sender, bool subscribe_na
 
     subscribe_spin_thread_ = std::make_unique<std::thread>([this]() { subscribe2nav_->start(); });
   }
+
+  // 双向通信 C1：导航 -> 视觉的位姿。配置里没有 nav_pose 段时不建订阅，
+  // 视觉侧退化为「只发 PnP 点」（三角化通道 degraded）。
+  if (!config_path.empty()) nav_pose_ = std::make_unique<NavPoseBuffer>(config_path);
 }
 
 ROS2::~ROS2()

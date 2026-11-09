@@ -256,8 +256,9 @@ void YoloPipeline::run(std::size_t index)
 
       if (job.postprocess) job.postprocess(img, timestamp, result.armors, result);
 
-      // 主相机每帧都入队（驱动主循环、录像）；全向只在检测到目标时入队
-      const bool should_push = result.is_main() || !result.armors.empty();
+      // 主相机每帧都入队（驱动主循环、录像）；全向只在检测到目标时入队，
+      // 例外是三角化那一路（always_push）：它需要连续帧才能跨帧跟踪特征点。
+      const bool should_push = result.is_main() || job.always_push || !result.armors.empty();
       if (should_push) {
         if (job.keep_image) result.img = img;
         push(std::move(result));

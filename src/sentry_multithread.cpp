@@ -6,8 +6,9 @@
 #include <thread>
 
 #include "io/camera.hpp"
-#include "io/serial/serial_board.hpp"
 #include "io/ros2/ros2.hpp"
+#include "io/ros2/ros_time.hpp"
+#include "io/serial/serial_board.hpp"
 #include "io/tf/tf_tree.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/multithread/yolo_pipeline.hpp"
@@ -18,6 +19,7 @@
 // 【改动】load_omni_pnp_config（读取全向相机 PnP 标定参数）声明在这里
 #include "tasks/omniperception/omni_jobs.hpp"
 #include "tasks/omniperception/omni_pnp.hpp"
+#include "tasks/visual_depth/visual_depth.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -64,9 +66,10 @@ int main(int argc, char * argv[])
 
   // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
   // 与主循环（视觉处理）解耦，避免被主链路延迟。
-  io::ROS2 ros2([&serial_board](const io::NavCommand & nav_command) {
-    serial_board.send(nav_command);
-  });
+  // 第三个参数让 ROS2 顺带建好导航位姿订阅（nav_pose 段，双向通信 C1）。
+  io::ROS2 ros2(
+    [&serial_board](const io::NavCommand & nav_command) { serial_board.send(nav_command); }, true,
+    config_path);
 
   // 云台关节反馈：复用 SerialBoard 已有的串口接收线程，收到一帧 0x502 就发布一次
   // JointState，不额外启动程序、不重复占用串口。
@@ -185,6 +188,20 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
+  // 视觉补盲总装（方案 §6 V7）：三条出口 C3/C4/C5 的发布线程 + 三角化链路都在这里。
+  // 配置里没开 obstacle_cloud / visual_triangulation 时 enabled() == false，
+  // 下面所有调用都是空操作 —— 行为与旧版本完全一致（验收 A9）。
+  visual_depth::VisualDepth depth(config_path);
+
+  // 图像 steady 时间戳 -> 导航位姿 T_camera_init<-body；导航没起 / 位姿超时都返回 false，
+  // 此时三角化通道进入 degraded，只发 PnP 点（§5.8）。
+  visual_depth::VisualDepth::PoseLookup pose_lookup =
+    [&ros2](std::chrono::steady_clock::time_point ts, Eigen::Isometry3d & T) {
+      auto * buffer = ros2.nav_pose();
+      if (buffer == nullptr) return false;
+      return buffer->lookup(io::rostime::to_ros(ts), T);
+    };
+
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程，
   // 相机数据只喂给自己的实例，不再出现多路相机争抢同一个 OpenVINO InferRequest。
   // 结果进入统一队列，主相机结果始终优先。
@@ -199,7 +216,9 @@ int main(int argc, char * argv[])
     main_job.single_thread_cpu = false;
     camera_jobs.push_back(std::move(main_job));
 
-    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
+    // 视觉三角化那一路需要每帧原图与连续帧，由 depth 告知是哪一路（-1 = 都不需要）
+    auto omni_jobs =
+      omniperception::make_omni_jobs(omni_configs, config_path, depth.keep_image_camera_id());
     for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
   }
   auto_aim::multithread::YoloPipeline pipeline(config_path, std::move(camera_jobs), false);
@@ -319,6 +338,12 @@ int main(int argc, char * argv[])
 
     io::Command command{false, false, 0, 0};
 
+    // 本帧要交给视觉补盲的原始数据：
+    //   obstacles —— 各相机 PnP 解出的 3D 点（统一换到「大yaw 系」）
+    //   tri_frame —— 三角化那一路相机的原图（只有开了三角化时才有）
+    std::vector<auto_aim::multithread::ObstaclePoint> obstacles;
+    auto_aim::multithread::CameraResult tri_frame;
+
     // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
     // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
     // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
@@ -350,7 +375,14 @@ int main(int argc, char * argv[])
       // decider.set_priority(armors);
 
       //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
-      auto detection_queue = omniperception::take_detection_results(pipeline);
+      //顺带取出两样东西给视觉补盲用（方案 V1/V7）：
+      //  · obstacles —— 每个目标的 PnP 3D 点（大yaw 系），原来只取角度、xyz 被丢掉
+      //  · tri_frame —— 三角化那一路相机的原图（keep_image_camera_id 匹配时才有）
+      omniperception::TakeOptions take_options;
+      take_options.keep_image_camera_id = depth.keep_image_camera_id();
+      take_options.obstacles = &obstacles;
+      take_options.keep_image = &tri_frame;
+      auto detection_queue = omniperception::take_detection_results(pipeline, take_options);
 
       decider.sort(detection_queue);
 
@@ -358,6 +390,24 @@ int main(int argc, char * argv[])
       // 因为我们认为在主相机发现的相机的优先级会天然的大于全向相机中发现的
       // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
       auto [switch_target, target] = tracker.track(detection_queue, armors, timestamp, true, img.size());
+
+      // 主相机的 PnP 点也在这一刻才有：Solver::solve 是在 tracker 内部完成的。
+      // Armor::xyz_in_gimbal 是「小yaw 系」（主相机挂在小yaw 板上），必须先转到
+      // 「大yaw 系」才能和全向相机的点混在同一个点云里（方案 V1 第 4 步）。
+      // 两个 yaw 轴是独立关节，所以这个变换必须每帧重查，不能缓存。
+      {
+        io::tf::Transform T_yaw_plate;
+        if (tf_tree.lookup(io::tf::Tree::SMALL_YAW, io::tf::Tree::YAW_AXIS, T_yaw_plate)) {
+          for (const auto & armor : armors) {
+            if (armor.xyz_in_gimbal.isZero(1e-6)) continue;  // 未解算成功
+            auto_aim::multithread::ObstaclePoint point;
+            point.p_gimbal = T_yaw_plate.R * armor.xyz_in_gimbal + T_yaw_plate.t;
+            point.camera_id = -1;
+            point.confidence = static_cast<float>(armor.confidence);
+            obstacles.push_back(point);
+          }
+        }
+      }
       
       // 全向相机的 delta_yaw 是「大yaw 系」角（零点 = 大yaw 正前方、向左为正，
       // 由 Decider::delta_angle 用 tf 给的「相机 -> 大yaw」位姿算出），
@@ -436,6 +486,24 @@ int main(int argc, char * argv[])
 
       // //test//
     }
+
+    // ---- 视觉补盲收尾（方案 §6 V7）----
+    // 三件事都必须是「主循环里、推理线程外」：
+    //   1) 投递本帧 PnP 点（空也要投，保证话题上持续有空点云）；
+    //   2) 投递三角化那一路的原图（只有开了三角化才非空）；
+    //   3) finish() 内部做特征跟踪 / 三角化 / M-A，并把 C3/C4/C5 交给发布线程。
+    // 发布本身在 io::Publish2NavPointCloud 的独立线程里完成（红线二）。
+    depth.add_obstacle_points(obstacles, timestamp);
+    if (!tri_frame.img.empty()) {
+      const int cam = tri_frame.camera_id;
+      const bool valid_cam = cam >= 0 && static_cast<size_t>(cam) < omni_configs.size();
+      if (valid_cam) {
+        depth.add_frame(
+          cam, tri_frame.img, tri_frame.timestamp, omni_configs[cam].R_camera2gimbal,
+          omni_configs[cam].t_camera2gimbal);
+      }
+    }
+    depth.finish(timestamp, pose_lookup);
   }
 
   return 0;
