@@ -42,7 +42,7 @@ public:
   virtual SourceMode mode() const = 0;
 };
 
-// 统一的字节流解析实现（0xA5 帧头 + CRC8 + CRC16 + 0x502 欧拉角 → 四元数）
+// 统一的字节流解析实现（0xA5 帧头 + CRC8 + CRC16 + 0x0503 云台姿态 → 四元数）
 class SerialQuaternionSource : public QuaternionSource
 {
 public:
@@ -61,7 +61,6 @@ protected:
 
 private:
   void parse_loop();
-  bool read_exact(uint8_t * buffer, size_t size, int timeout_ms);
   void push_sample(const Eigen::Quaterniond & q);
 
   IByteTransport::Ptr transport_;

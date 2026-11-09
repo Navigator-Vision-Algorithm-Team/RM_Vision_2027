@@ -3,8 +3,8 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "io/serial/gimbal/packet.hpp"
-#include "io/serial/gimbal/protocol_crc.hpp"
+#include "io/serial/protocol/host_protocol.hpp"
+#include "io/serial/protocol/referee.hpp"
 #include "tools/logger.hpp"
 
 namespace io::sim
@@ -46,27 +46,6 @@ bool SerialQuaternionSource::read(QuaternionSample & out, int timeout_ms)
   return queue_.try_pop_for(out, std::chrono::milliseconds(timeout_ms));
 }
 
-bool SerialQuaternionSource::read_exact(uint8_t * buffer, size_t size, int timeout_ms)
-{
-  size_t got = 0;
-  const auto deadline = SteadyClock::now() + std::chrono::milliseconds(timeout_ms);
-  while (got < size) {
-    if (quit_) return false;
-    const auto now = SteadyClock::now();
-    if (now >= deadline) return false;
-
-    int remain = static_cast<int>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
-    if (remain <= 0) remain = 1;
-
-    const size_t n = transport_->read(buffer + got, size - got, remain);
-    if (n == 0) return false;
-    if (recorder_) recorder_->record_rx(buffer + got, n);
-    got += n;
-  }
-  return true;
-}
-
 void SerialQuaternionSource::push_sample(const Eigen::Quaterniond & q)
 {
   QuaternionSample s;
@@ -81,60 +60,39 @@ void SerialQuaternionSource::push_sample(const Eigen::Quaterniond & q)
 void SerialQuaternionSource::parse_loop()
 {
   auto last_log = SteadyClock::now();
-  long long bad_crc8 = 0, bad_crc16 = 0;
 
-  std::vector<uint8_t> flag(1);
-  std::vector<uint8_t> headdata;
-  std::vector<uint8_t> payload;
-  std::vector<uint8_t> full;
+  // 复用与 SerialBoard 同一套解包：0xA5 分帧 + CRC 校验 + host 0x0503 解码
+  host_comm::Protocol host;
+  referee_comm::Receiver receiver(host);
+
+  std::vector<uint8_t> buffer(1024);
 
   while (!quit_) {
-    if (!read_exact(flag.data(), 1, 50)) continue;
-    if (flag[0] != 0xA5) continue;
+    const size_t n = transport_->read(buffer.data(), buffer.size(), 50);
+    if (n == 0) continue;
+    if (recorder_) recorder_->record_rx(buffer.data(), n);
 
-    headdata.resize(sizeof(Header) - 1);
-    if (!read_exact(headdata.data(), headdata.size(), 50)) continue;
-    headdata.insert(headdata.begin(), flag[0]);
+    const uint64_t before = host.gimbal_count();
+    const uint64_t frames_before = receiver.stats().frames;
+    receiver.Feed(buffer.data(), n);
+    packet_count_ += static_cast<long long>(receiver.stats().frames - frames_before);
 
-    Header header = fromVector<Header>(headdata);
-    if (!crc8::Verify_CRC8_Check_Sum(
-          reinterpret_cast<const uint8_t *>(&header), sizeof(header) - 2)) {
-      bad_crc8++;
-      continue;
-    }
-
-    const size_t payload_len = static_cast<size_t>(header.data_length);
-    if (payload_len == 0 || payload_len > 512) continue;  // 防御非法长度
-
-    payload.resize(payload_len + 2);  // 载荷 + CRC16
-    if (!read_exact(payload.data(), payload.size(), 50)) continue;
-
-    full.clear();
-    full.reserve(headdata.size() + payload.size());
-    full.insert(full.end(), headdata.begin(), headdata.end());
-    full.insert(full.end(), payload.begin(), payload.end());
-
-    if (!crc16::Verify_CRC16_Check_Sum(full.data(), static_cast<uint32_t>(full.size()))) {
-      bad_crc16++;
-      continue;
-    }
-    packet_count_++;
-
-    if (header.cmd_id == 0x502 && full.size() >= sizeof(IMUPacket)) {
-      IMUPacket pkt = fromVector<IMUPacket>(full);
+    if (host.gimbal_count() != before) {
       // 与 SerialBoard::imu_at 同一约定：用大yaw(lower_yaw) 构造 R_gimbal2world。
-      // 双yaw 平台的业务入口用 SerialBoard::imu_state_at()，回放器只需要大yaw 姿态。
+      // 双yaw 平台按 0x0503 的 yaw_angle(IMU/相机世界角) - upper_yaw_angle(小yaw 关节角)
+      // 还原大yaw；单yaw 构型 upper_yaw_angle 为 0，两者自动相等。
+      const double lower = host.gimbal.yaw_angle - host.gimbal.upper_yaw_angle;
       const Eigen::Quaterniond q =
-        Eigen::AngleAxisd(pkt.lower_yaw, Eigen::Vector3d::UnitZ()) *
-        Eigen::AngleAxisd(pkt.pitch, Eigen::Vector3d::UnitY()) *
-        Eigen::AngleAxisd(pkt.roll, Eigen::Vector3d::UnitX());
+        Eigen::AngleAxisd(lower, Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(host.gimbal.pitch_angle, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(host.gimbal.roll_angle, Eigen::Vector3d::UnitX());
       push_sample(q);
     }
 
     if (std::chrono::duration<double>(SteadyClock::now() - last_log).count() >= 2.0) {
       tools::logger()->info(
-        "[{}] '{}' stats: packets={} imu={} bad_crc8={} bad_crc16={}", log_tag(mode_), name_,
-        packet_count_, imu_count_, bad_crc8, bad_crc16);
+        "[{}] '{}' stats: packets={} gimbal={} bad_crc8={} bad_crc16={}", log_tag(mode_), name_,
+        packet_count_, imu_count_, receiver.stats().crc8_errors, receiver.stats().crc16_errors);
       last_log = SteadyClock::now();
     }
   }

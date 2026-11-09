@@ -7,9 +7,10 @@
 - 另一端（master）由本脚本写入/读取，负责按协议打包。
 
 支持：
-  * 实时生成：匀速/正弦旋转的四元数（0x502）、底盘速度（0x503）、复位（0x505）、比赛状态（0x0001）
+  * 实时生成：云台姿态（0x0503）、底盘反馈（0x0502）、协议版本（0x0500）、
+    机器人状态（0x0501）、以及下位机转发的裁判帧（0x0001 / 0x0201）
   * 文件回放：--replay 读取 C++ 侧记录的 serial.bin（只回放下位机→视觉方向）
-  * 异常注入：丢包、延迟、跳变、校验错误、角度噪声
+  * 异常注入：丢包、延迟、跳变、校验错误、角度噪声、MCU 重启（uptime_ms 回落）
 
 用法：
   python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts
@@ -81,13 +82,15 @@ def crc16_update(crc, data):
 
 
 # ============================================================================
-# 协议打包（与 io/serial/gimbal/packet.hpp 结构体逐字节对齐，小端序）
+# 协议打包（与下位机 host 协议 / 2027 赛季裁判协议逐字节对齐，小端序）
+#   线格式：A5 | len(u16) | seq | crc8 | cmd_id(u16) | data | crc16
+#   上行 host：0x0500~0x0504   裁判转发：0x0001 / 0x0201
 # ============================================================================
 HEADER_MAGIC = 0xA5
 
 
 def build_header(cmd_id, data_length, seq):
-    """7 字节帧头：magic, data_length(u16), seq, crc8, cmd_id(u16)"""
+    """5 字节帧头 + 2 字节 cmd_id：magic, data_length(u16), seq, crc8, cmd_id(u16)"""
     head = struct.pack("<BHB", HEADER_MAGIC, data_length, seq & 0xFF)
     crc = crc8_update(crc8_init(), head)
     return head + struct.pack("<BH", crc, cmd_id)
@@ -101,43 +104,61 @@ def build_packet(cmd_id, payload, seq=0):
     return body + struct.pack("<H", crc)
 
 
-def pack_imu(pitch, roll, upper_yaw, lower_yaw, roboid=0, seq=0):
-    # IMUPacket: float pitch, roll, upper_yaw, lower_yaw; uint8 roboid  (data_length=17)
-    # upper_yaw = 小yaw 的世界系绝对角，lower_yaw = 大yaw 的世界系绝对角（均为弧度 [0, 2π)）
-    payload = struct.pack("<ffffB", pitch, roll, upper_yaw, lower_yaw, roboid & 0xFF)
-    return build_packet(0x502, payload, seq)
+def wrap_pi(a):
+    """INS 实际给 (-π, π]，这里按同样区间发，顺带验证上位机的归一化"""
+    while a > math.pi:
+        a -= 2 * math.pi
+    while a <= -math.pi:
+        a += 2 * math.pi
+    return a
 
 
-def pack_chassis(vx, vy, vz, enable=1, seq=0):
-    # classisPacket: float vx, vy, vz; uint8 enable  (data_length=13)
-    payload = struct.pack("<fffB", vx, vy, vz, enable & 0xFF)
-    return build_packet(0x503, payload, seq)
+def pack_host_version(uptime_ms, seq=0):
+    # host_version_t: u8 host_version, u16 referee_season, u8 robot_type,
+    #                 u8 chassis_type, u8 gimbal_type, u32 uptime_ms  (10)
+    payload = struct.pack("<B H B B B I", 1, 2027, 7, 2, 2, uptime_ms & 0xFFFFFFFF)
+    return build_packet(0x0500, payload, seq)
 
 
-def pack_bass(reset=False, roboid=0, seq=0):
-    # bassPacket: roboid,u8 reset,position[2],HP,robomode,canshoot,shootmode,superpower,online,two (11)
+def pack_host_robot(seq=0):
+    # host_robot_status_t: enable, controller_online, robot_mode,
+    #                      fric_mode, shoot_mode, module_online  (6)
+    payload = struct.pack("<B B B B B B", 0x0F, 1, 3, 2, 0, 0x3F)
+    return build_packet(0x0501, payload, seq)
+
+
+def pack_chassis(vx, vy, wz, heading=0.0, enabled=1, seq=0):
+    # host_chassis_status_t: u8 enabled, float vx, vy, wz, feedback_angle  (17)
+    payload = struct.pack("<Bffff", enabled & 0xFF, vx, vy, wz, heading)
+    return build_packet(0x0502, payload, seq)
+
+
+def pack_gimbal(pitch, yaw, roll, upper_joint, enable=1, autoaim=1, seq=0):
+    # host_gimbal_status_t: u8 gimbal_enable, u8 autoaim_enabled,
+    #                       float pitch, yaw, roll, upper_yaw_angle, fold_yaw_angle  (22)
+    # yaw 是 IMU（相机/枪管）世界系角，upper_joint 是小yaw 相对大yaw 的关节角
     payload = struct.pack(
-        "<BBBBBBBBBBB",
-        roboid & 0xFF,
-        1 if reset else 0,
-        0,
-        0,
-        200,  # HP (uint8)
-        1,
-        1,
-        0,
-        0,
-        1,
-        0,
+        "<BBfffff", enable & 0xFF, autoaim & 0xFF, pitch, yaw, roll, upper_joint, 0.0
     )
-    return build_packet(0x505, payload, seq)
+    return build_packet(0x0503, payload, seq)
 
 
 def pack_game_status(game_type=1, game_progress=4, remain=300, seq=0):
-    # GameStatusPacket: uint8 game_info; uint16 stage_remain_time; uint64 sync_timestamp (11)
+    # game_status_t: u8 bitfield(game_type:4|game_progress:4), u16 remain, u64 sync  (11)
     game_info = ((game_progress & 0x0F) << 4) | (game_type & 0x0F)
-    payload = struct.pack("<BHQ", game_info, remain, int(time.monotonic() * 1e9) & 0xFFFFFFFFFFFFFFFF)
+    payload = struct.pack(
+        "<BHQ", game_info, remain, int(time.monotonic() * 1e9) & 0xFFFFFFFFFFFFFFFF
+    )
     return build_packet(0x0001, payload, seq)
+
+
+def pack_robot_status(robot_id=7, seq=0):
+    # robot_status_t (17)：u8 id, u8 level, u16 hp, u16 max_hp, u16 cooling, u16 heat_limit,
+    #                     u16 power_limit, float bullet_speed_limit, u8 power_management 位域
+    payload = struct.pack(
+        "<BBHHHHHfB", robot_id & 0xFF, 3, 400, 400, 40, 120, 40, 30.0, 0x07
+    )
+    return build_packet(0x0201, payload, seq)
 
 
 # ============================================================================
@@ -207,14 +228,14 @@ class VirtualMcu:
         return data
 
     # ---------------------------------------------------------------- 生成
-    def emit_imu(self, idx):
+    def emit_gimbal(self, idx):
         a = self.args
         t = time.monotonic() - self.t0
 
-        # 双yaw：大yaw 慢速摆动，小yaw 在大yaw 基础上有自己的小幅快摆
+        # 双yaw：大yaw 慢速摆动，小yaw 相对大yaw 有自己的小幅快摆（关节角）
         lower = math.pi * math.sin(2 * math.pi * 0.1 * t)
-        # 加相位偏移，让 psi 启动时就不为 0，避免"psi 恒 0"掩盖接线错误
-        psi_rel = 0.35 * math.sin(2 * math.pi * 0.45 * t + 0.6)
+        # 加相位偏移，让关节角启动时就不为 0，避免"joint 恒 0"掩盖接线错误
+        joint = 0.35 * math.sin(2 * math.pi * 0.45 * t + 0.6)
         pitch = 0.15 * math.sin(2 * math.pi * 0.5 * t)
         roll = 0.05 * math.sin(2 * math.pi * 0.3 * t)
 
@@ -227,10 +248,9 @@ class VirtualMcu:
             injected = True
             self.stats["spiked"] += 1
 
-        # 噪声/跳变只加在大yaw 上，小yaw 相对角保持干净：psi 应能被视觉侧精确还原
-        upper = lower + psi_rel
-        lower = lower % (2 * math.pi)
-        upper = upper % (2 * math.pi)
+        # 噪声/跳变只加在大yaw 上，关节角保持干净：上位机应能精确还原 lower/upper
+        # 0x0503 只发「IMU(相机) 世界角 + 小yaw 关节角」，两轴由上位机自己复合
+        yaw = wrap_pi(lower + joint)
 
         if a.drop_rate > 0 and self.rnd.random() < a.drop_rate:
             self.stats["dropped"] += 1
@@ -240,7 +260,7 @@ class VirtualMcu:
             time.sleep(a.delay_ms / 1000.0)
             self.stats["delayed"] += 1
 
-        pkt = bytearray(pack_imu(pitch, roll, upper, lower, seq=idx & 0xFF))
+        pkt = bytearray(pack_gimbal(pitch, yaw, roll, joint, seq=idx & 0xFF))
 
         if a.corrupt_crc_rate > 0 and self.rnd.random() < a.corrupt_crc_rate:
             pkt[-1] ^= 0xFF
@@ -264,26 +284,27 @@ class VirtualMcu:
         imu_period = 1.0 / a.imu_hz if a.imu_hz > 0 else 0.002
         chassis_period = 1.0 / a.chassis_hz if a.chassis_hz > 0 else 0.02
         status_period = 1.0 / a.status_hz if a.status_hz > 0 else 1.0
-        bass_period = 0.1
+        slow_period = 1.0
         reset_period = a.reset_period if a.reset_period > 0 else float("inf")
 
         t0 = time.monotonic()
-        next_imu = next_chassis = next_status = next_bass = 0.0
+        next_imu = next_chassis = next_status = next_slow = 0.0
         next_reset = reset_period
         idx = 0
         last_log = t0
 
         print(
-            f"[VirtualMCU] 开始供数: imu={a.imu_hz}Hz chassis={a.chassis_hz}Hz "
+            f"[VirtualMCU] 开始供数: gimbal={a.imu_hz}Hz chassis={a.chassis_hz}Hz "
             f"status={a.status_hz}Hz drop={a.drop_rate} delay={a.delay_ms}ms "
             f"spike_every={a.spike_every} corrupt_crc={a.corrupt_crc_rate}"
         )
 
         while not self._stop:
             rel = time.monotonic() - t0
+            uptime_ms = int(rel * 1000.0) & 0xFFFFFFFF
 
             if rel >= next_imu:
-                pkt = self.emit_imu(idx)
+                pkt = self.emit_gimbal(idx)
                 idx += 1
                 if pkt:
                     self.write(pkt)
@@ -296,27 +317,31 @@ class VirtualMcu:
                     1.0 * math.sin(2 * math.pi * 0.2 * rel),
                     0.3 * math.cos(2 * math.pi * 0.2 * rel),
                     0.5 * math.sin(2 * math.pi * 0.05 * rel),
+                    heading=math.pi * math.sin(2 * math.pi * 0.02 * rel),
                     seq=(int(rel * a.chassis_hz) & 0xFF),
                 ))
                 next_chassis += chassis_period
                 if next_chassis < rel:
                     next_chassis = rel + chassis_period
 
-            if rel >= next_bass:
-                self.write(pack_bass(False, seq=0))
-                next_bass += bass_period
-                if next_bass < rel:
-                    next_bass = rel + bass_period
+            if rel >= next_slow:
+                self.write(pack_host_version(uptime_ms))
+                self.write(pack_host_robot())
+                next_slow += slow_period
+                if next_slow < rel:
+                    next_slow = rel + slow_period
 
             if rel >= next_status:
                 self.write(pack_game_status())
+                self.write(pack_robot_status())
                 next_status += status_period
                 if next_status < rel:
                     next_status = rel + status_period
 
             if rel >= next_reset:
-                self.write(pack_bass(True, seq=0))
-                print("[VirtualMCU] 注入复位信号 0x505.reset=1")
+                # 新协议没有 reset 位：MCU 重启（uptime_ms 回落）就是视觉侧的复位信号
+                self.write(pack_host_version(0))
+                print("[VirtualMCU] 注入 MCU 重启信号 0x0500.uptime_ms=0")
                 next_reset += reset_period
 
             self.drain_input()
@@ -329,7 +354,7 @@ class VirtualMcu:
                 print("[VirtualMCU] 达到运行时长，退出")
                 break
 
-            nxt = min(next_imu, next_chassis, next_bass, next_status)
+            nxt = min(next_imu, next_chassis, next_slow, next_status)
             wait = nxt - (time.monotonic() - t0)
             if wait > 0:
                 time.sleep(min(wait, 0.002))
@@ -407,10 +432,12 @@ def main():
     p = argparse.ArgumentParser(description="RM 虚拟下位机（pty 伪串口）")
     p.add_argument("--port-file", help="把创建的 pts 路径写入该文件")
     p.add_argument("--link", help="为 pts 创建软链接（方便固定路径使用）")
-    p.add_argument("--imu-hz", type=float, default=500.0, help="四元数(0x502)频率")
-    p.add_argument("--chassis-hz", type=float, default=50.0, help="底盘速度(0x503)频率")
-    p.add_argument("--status-hz", type=float, default=1.0, help="比赛状态(0x0001)频率")
-    p.add_argument("--reset-period", type=float, default=0.0, help="每 N 秒注入一次复位(0=关闭)")
+    p.add_argument("--imu-hz", type=float, default=500.0, help="云台姿态(0x0503)频率")
+    p.add_argument("--chassis-hz", type=float, default=50.0, help="底盘反馈(0x0502)频率")
+    p.add_argument("--status-hz", type=float, default=1.0, help="裁判帧(0x0001/0x0201)频率")
+    p.add_argument(
+        "--reset-period", type=float, default=0.0, help="每 N 秒注入一次 MCU 重启(0=关闭)"
+    )
     p.add_argument("--drop-rate", type=float, default=0.0, help="丢包概率")
     p.add_argument("--delay-ms", type=float, default=0.0, help="每帧额外延迟(ms)")
     p.add_argument("--spike-every", type=int, default=0, help="每 N 帧注入一次跳变(0=关闭)")

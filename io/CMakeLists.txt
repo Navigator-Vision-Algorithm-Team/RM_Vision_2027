@@ -21,6 +21,11 @@ add_library(io STATIC
     serial/serial_board.cpp
     serial/gimbal/gimbal.cpp
     serial/gimbal/protocol_crc.cpp
+    # ---- 上位机侧协议解包（与下位机 boards/communication 逐字段对应）----
+    serial/protocol/referee.cpp
+    serial/protocol/host_protocol.cpp
+    serial/protocol/link.cpp
+    serial/protocol/seasons/2027/protocol.cpp
     # ---- 虚拟数据源 (real / fake / replay) ----
     sim/transport.cpp
     sim/virtual_mcu.cpp

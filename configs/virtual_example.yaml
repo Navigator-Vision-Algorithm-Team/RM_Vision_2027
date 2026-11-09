@@ -29,9 +29,9 @@ use_referee_system: false
 game_start_progress_threshold: 4
 
 fake_serial_external: false  # true: 由外部(Python)虚拟下位机经 pty 供数
-fake_imu_hz: 500.0           # 四元数(0x502)发送频率
-fake_chassis_hz: 50.0        # 底盘速度(0x503)频率
-fake_status_hz: 1.0          # 比赛状态(0x0001)频率
+fake_imu_hz: 500.0           # 云台姿态(0x0503)发送频率
+fake_chassis_hz: 50.0        # 底盘反馈(0x0502)频率
+fake_status_hz: 1.0          # 裁判转发帧(0x0001/0x0201)频率
 fake_reset_period_s: 0.0     # 每 N 秒注入一次复位(0x505.reset=1)，0=关闭
 serial_replay_file: "logs/virtual_session/serial.bin"
 

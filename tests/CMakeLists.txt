@@ -7,7 +7,10 @@ cmake_minimum_required(VERSION 3.16.3)
 # ============================================================================
 add_executable(serial_communication_test
     serial_communication_test.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
+    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp
+    ${PROJECT_SOURCE_DIR}/io/serial/protocol/referee.cpp
+    ${PROJECT_SOURCE_DIR}/io/serial/protocol/host_protocol.cpp
+    ${PROJECT_SOURCE_DIR}/io/serial/protocol/seasons/2027/protocol.cpp)
 target_link_libraries(serial_communication_test serial)
 
 # 交互式云台响应测试：输入绝对 yaw/pitch（度），每行发送一条 0x0402 指令。

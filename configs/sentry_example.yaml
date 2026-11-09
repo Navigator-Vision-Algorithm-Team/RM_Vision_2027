@@ -12,6 +12,10 @@ enemy_color: "red"
 com_port: '/dev/ttyACM0'            # 串口设备路径
 baud_rate: 921600                    # 波特率
 bullet_speed: 28.0                   # 默认弹速 (m/s), 会被下位机数据覆盖
+# 0x0503 的 yaw_angle 是 IMU 世界系 yaw：哨兵双yaw 平台的 IMU 装在小yaw（主相机）板上，
+# 因此默认按 upper 解释，大yaw = yaw_angle - upper_yaw_angle（小yaw 关节角）。
+# 若实车把 IMU 装在大yaw 轴上，改成 lower：小yaw = yaw_angle + upper_yaw_angle。
+# gimbal_imu_axis: upper
 
 # ----- 主相机 (sursign="main") -----
 # camera_name 决定相机类型: "hikrobot" | "mindvision" | "Usbcamera"
@@ -257,7 +261,7 @@ mode: 1                             # 决策模式 (影响全向感知的搜索�
 #      └── small_yaw     小yaw 板（yaw + pitch + roll）——主相机挂在这上面
 #          └── main_cam
 #
-#  · yaw_axis / small_yaw 是**动态关节**，每帧由 0x502 刷新，不要填数值：
+#  · yaw_axis / small_yaw 是**动态关节**，每帧由 0x0503 刷新，不要填数值：
 #        yaw_axis  = Rz(lower_yaw)
 #        small_yaw = Rz(upper_yaw)·Ry(pitch)·Rx(roll)
 #  · omni_cam_i / main_cam 是**静态边**，填标定结果：
@@ -303,7 +307,7 @@ tf:
       xyz: [-0.147449, -0.092459, 0.003]
       mount_deg: [-135.0, 0.0, 0.0]
 
-    # ---- 主相机：相机 -> 小yaw 板（板子的参考系即 0x502 的 pitch/roll/upper_yaw）----
+    # ---- 主相机：相机 -> 小yaw 板（板子的参考系即 0x0503 的 pitch/roll/yaw）----
     #  比枪管根部高 88.98 mm、靠前 30.84 mm；光轴与枪管完全平行（pitch 跟随云台）
     main_cam:
       parent: small_yaw
@@ -312,7 +316,7 @@ tf:
 
 # ----- 相机标定 -----
 # 云台旋转矩阵 → IMU 本体坐标系 (3x3 行优先)
-# 单位阵 = IMU 的三个轴与 small_yaw 板（板子的 0x502 参考系）重合；
+# 单位阵 = IMU 的三个轴与 small_yaw 板（0x0503 的 IMU 参考系）重合；
 # 若 IMU 是歪装（绕板子轴有固定旋转），要填实际的安装旋转。
 R_gimbal2imubody: [
                     1, 0, 0,

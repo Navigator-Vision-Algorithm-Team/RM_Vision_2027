@@ -226,7 +226,7 @@ use_referee_system: false
 game_state_progress_threshold: 4
 source_mode: "fake"           # real | fake | replay
 fault_seed: 20261015
-serial_mode: "fake"           # 内置虚拟下位机，按真实协议发 0x502/0x503/0x505/0x0001
+serial_mode: "fake"           # 内置虚拟下位机，按真实协议发 0x0500~0x0504 + 裁判转发 0x0001/0x0201
 fake_serial_external: false
 fake_imu_hz: 500.0
 camera_mode: "fake"
