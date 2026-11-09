@@ -46,7 +46,7 @@ int main(int argc, char * argv[])
   auto yaml = tools::load(config_path);
 
   // 坐标变换树：所有几何量（每个相机相对旋转轴的位置/姿态）都来自配置 tf.frames，
-  // 代码里不写死任何安装尺寸。大yaw 与小yaw 作为两个动态关节，每帧由 0x502 刷新。
+  // 代码里不写死任何安装尺寸。大yaw 与小yaw 作为两个动态关节，每帧由 0x0503 刷新。
   io::tf::Tree tf_tree = io::tf::load_tree(yaml);
   if (tf_tree.empty()) {
     tools::logger()->warn(
@@ -68,7 +68,7 @@ int main(int argc, char * argv[])
     serial_board.send(nav_command);
   });
 
-  // 云台关节反馈：复用 SerialBoard 已有的串口接收线程，收到一帧 0x502 就发布一次
+  // 云台关节反馈：复用 SerialBoard 已有的串口接收线程，收到一帧 0x0503 就发布一次
   // JointState，不额外启动程序、不重复占用串口。
   serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
 

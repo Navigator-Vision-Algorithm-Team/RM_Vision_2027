@@ -124,7 +124,8 @@ cv::Mat approximate_camera_matrix(
 //    · 于是 xyz_world = Rz(lower_yaw) * xyz_bigyaw 严格成立，全向链路与 pitch/roll
 //      无关（大yaw 不会因为小yaw 俯仰而俯仰）。
 //    · 必须遵守的耦合：本模块返回的角度是「大yaw 系」，入口叠加的必须是
-//      大yaw 的世界系 yaw（= 0x502 的 lower_yaw），**不能用** Solver 的
+//      大yaw 的世界系 yaw（= 0x0503 推算的 lower_yaw = yaw_angle - upper_yaw_angle），
+//      **不能用** Solver 的
 //      R_gimbal2world（那是小yaw 板的姿态）。
 //    · 主相机在小yaw 板上，直接用 Rz(upper)·Ry(pitch)·Rx(roll) 作为基座姿态，
 //      外参标成「相机 -> 小yaw」，不需要任何附加修正角。
