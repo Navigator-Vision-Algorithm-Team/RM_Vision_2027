@@ -456,7 +456,7 @@ int main(int argc, char * argv[])
         }
       }
 
-      debug.publish(armors, status);
+      debug.publish(armors, status, &solver);
 
       // 绘制检测框和跟踪信息（用于赛后录像复盘）
       for (const auto & armor : armors) {

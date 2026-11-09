@@ -4,6 +4,7 @@
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
 #include <Eigen/Geometry>
 #include <opencv2/core/eigen.hpp>
+#include <optional>
 
 #include "armor.hpp"
 
@@ -36,6 +37,10 @@ public:
   double oupost_reprojection_error(Armor armor, const double & picth);
 
   std::vector<cv::Point2f> world2pixel(const std::vector<cv::Point3f> & worldPoints);
+
+  // 当前执行轴上 [forward_distance_m, 0, 0] 的像素投影（含外参和畸变）。
+  // 距离是云台系前向深度，非斜距；非有限/非正距离、相机后方点返回空。
+  std::optional<cv::Point2f> gimbal_axis_pixel(double forward_distance_m) const;
 
 private:
   cv::Mat camera_matrix_;

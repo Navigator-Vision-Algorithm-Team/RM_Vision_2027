@@ -120,12 +120,12 @@ int main(int argc, char * argv[])
 
     // Tracker 内部完成 PnP、目标关联、EKF 预测与观测更新。
     // 使用相机帧时间戳 t，让滤波时间间隔对应真实帧间隔。
-    auto targets = tracker.track(armors, t);
+    const auto * target = tracker.track(armors, t, true, img.size());
 
     // 没有可用跟踪目标时保持当前云台角度；有效跟踪时由 Aimer 做未来位置和弹道预测。
     io::Command command{false, false, gimbal_pos[0], gimbal_pos[1]};
-    if (!targets.empty()) {
-      command = aimer.aim(targets, t, serial_board.bullet_speed);
+    if (target != nullptr) {
+      command = aimer.aim(target, t, serial_board.bullet_speed);
       // Aimer 在无效瞄准点或弹道不可解时返回 control=false、角度为 0；
       // 串口仍携带角度字段，因此退回当前云台角，避免无效指令造成跳转。
       if (!command.control) {
@@ -138,28 +138,14 @@ int main(int argc, char * argv[])
     // 0x0402 下发到下位机，由下位机驱动云台；shoot 恒为 0
     serial_board.send(command);
 
-    // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
-    // soldier 走的是「单板 PnP 直接瞄准」，没有 EKF/IMM，所以不填 has_ekf，
-    // 只用 note 显示当前 PnP 距离与世界坐标，保证面板上的数值信息不丢
-    std::string note;
-    if (target != armors.end()) {
-      note = fmt::format(
-        "pnp  {:.2f} m  world ({:+.2f}, {:+.2f}, {:+.2f})", target->xyz_in_gimbal.norm(),
-        target->xyz_in_world.x(), target->xyz_in_world.y(), target->xyz_in_world.z());
-    }
-
-    debug.publish(
-      armors, auto_aim::DebugStatus{
-                gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
-                command.shoot, target != armors.end() ? "aim" : "no_target", note});
     // 【新增】调试数据流：检测框 + YOLO FPS + 云台/目标位姿 + EKF 遥测 + 预测命中点
     auto_aim::DebugStatus dbg_status{
       gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control, command.shoot,
       tracker.state(), ""};
 
     // EKF 遥测：只在 tracker 真正产出 Target 时才有意义
-    if (!targets.empty()) {
-      const auto & ekf = targets.front().ekf();
+    if (target != nullptr) {
+      const auto & ekf = target->ekf();
       auto & e = dbg_status.ekf;
       e.valid = true;
       e.residual_yaw = ekf.data.at("residual_yaw");
@@ -175,7 +161,7 @@ int main(int argc, char * argv[])
 
       // 4 块装甲板在当前时刻的预测位置 -> 像素。
       // 逐点投影：world2pixel 会过滤相机后方的点，批量投影会让索引错位。
-      for (const auto & xyza : targets.front().armor_xyza_list()) {
+      for (const auto & xyza : target->armor_xyza_list()) {
         const std::vector<cv::Point3f> pts{
           {static_cast<float>(xyza[0]), static_cast<float>(xyza[1]),
            static_cast<float>(xyza[2])}};
@@ -186,7 +172,7 @@ int main(int argc, char * argv[])
     }
 
     // 预测命中点（Aimer 已按发弹延迟 + 弹道飞行时间预测到未来时刻）
-    if (!targets.empty() && aimer.debug_aim_point.valid) {
+    if (target != nullptr && command.control && aimer.debug_aim_point.valid) {
       const auto & p = aimer.debug_aim_point.xyza;
       const std::vector<cv::Point3f> pts{
         {static_cast<float>(p[0]), static_cast<float>(p[1]), static_cast<float>(p[2])}};
@@ -194,10 +180,12 @@ int main(int argc, char * argv[])
       if (!px.empty()) {
         dbg_status.has_aim = true;
         dbg_status.aim_pixel = px.front();
+        dbg_status.has_aim_prediction = true;
+        dbg_status.aim_prediction_world = p.head<3>();
       }
     }
 
-    debug.publish(armors, dbg_status);
+    debug.publish(armors, dbg_status, &solver);
 
     // 画框与四个关键点（不做 imshow/imwrite，无显示器环境下安全）
     for (const auto & armor : armors) {
@@ -211,13 +199,12 @@ int main(int argc, char * argv[])
     const auto now = std::chrono::steady_clock::now();
     if (now - last_log_time > 500ms) {
       last_log_time = now;
-      if (!targets.empty()) {
-        const auto & target = targets.front();
-        const Eigen::VectorXd x = target.ekf_x();
+      if (target != nullptr) {
+        const Eigen::VectorXd x = target->ekf_x();
         tools::logger()->info(
           "[soldier] state={} {} | EKF center({:.2f}, {:.2f}, {:.2f}) velocity({:.2f}, {:.2f}, "
           "{:.2f}) | cmd yaw={:.1f} pitch={:.1f}",
-          tracker.state(), auto_aim::ARMOR_NAMES[target.name], x[0], x[2], x[4], x[1], x[3], x[5],
+          tracker.state(), auto_aim::ARMOR_NAMES[target->name], x[0], x[2], x[4], x[1], x[3], x[5],
           command.yaw * 57.3, command.pitch * 57.3);
       } else {
         tools::logger()->info(

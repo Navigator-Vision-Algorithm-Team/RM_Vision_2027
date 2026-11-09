@@ -13,6 +13,7 @@
 
 namespace auto_aim
 {
+class Solver;
 
 struct PnpDebugInfo
 {
@@ -123,7 +124,10 @@ public:
   bool frame(const cv::Mat & raw_img);
 
   // 帧尾调用，必须与 frame() 成对：提交本帧检测结果与状态。
-  void publish(const std::list<Armor> & armors, const DebugStatus & status);
+  // 有瞄准链路时传入同帧 Solver，用其实际姿态/外参生成准星快照；不会异步持有该指针。
+  // 纯 YOLO 入口可不传，使用配置中的参考深度和外参。
+  void publish(
+    const std::list<Armor> & armors, const DebugStatus & status, const Solver * solver = nullptr);
 
   // YOLO 推理前后调用，用于统计单帧推理耗时与处理帧率（FPS）。
   void begin_yolo();

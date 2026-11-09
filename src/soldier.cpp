@@ -8,6 +8,7 @@
 #include "io/can/soldier_can_board.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/armor.hpp"
+#include "tasks/auto_aim/debug_stream.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/yolo.hpp"
@@ -52,8 +53,6 @@ int main(int argc, char * argv[])
       "[soldier] pitch encoder calibration is incomplete; tracking commands will stay idle");
   }
 
-  tools::Exiter exiter;
-
   io::Camera camera(config_path);  // 不带 sursign：读取 camera_name / exposure_ms / gain
   io::SoldierCanBoard can_board(config_path);
 
@@ -61,6 +60,10 @@ int main(int argc, char * argv[])
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
+  // 可选调试流直接读取 CAN 主链路的同帧结果，避免另起串口调试入口比对姿态。
+  auto_aim::DebugStream debug(config_path, "soldier");
+  // ROS2 初始化会注册信号处理器，Exiter 需在它之后构造。
+  tools::Exiter exiter;
 
   cv::Mat img;
   std::chrono::steady_clock::time_point t;
@@ -75,6 +78,7 @@ int main(int argc, char * argv[])
   while (!exiter.exit()) {
     camera.read(img, t);
     if (img.empty()) continue;
+    const bool debug_frame_requested = debug.frame(img);
 
     const auto current_session = can_board.session();
     if (current_session != last_session) {
@@ -142,35 +146,26 @@ int main(int argc, char * argv[])
     invalid_robot_logged = false;
 
     // YOLO 检测。敌方颜色来自 0x513.robot_id；Tracker 跳过 YAML 颜色过滤，只负责跟踪。
+    debug.begin_yolo();
     auto armors = detector.detect(img);
+    debug.end_yolo();
     armors.remove_if([&enemy_color](const auto_aim::Armor & armor) {
       return armor.color != enemy_color;
     });
 
     // Tracker 内部完成 PnP、目标关联、EKF 预测与观测更新。
     // 使用相机帧时间戳 t，让滤波时间间隔对应真实帧间隔。
-    auto targets = tracker.track(armors, t, false);
+    const auto * target = tracker.track(armors, t, false, img.size());
 
     // 有效跟踪时由 Aimer 做未来位置和弹道预测；无目标时 CAN 层发送 tracking=0。
     io::Command command{false, false, gimbal_pos[0], gimbal_pos[1]};
-    if (!targets.empty()) {
-      command = aimer.aim(targets, t, status->robot->bullet_speed_m_s);
+    if (target != nullptr) {
+      command = aimer.aim(target, t, status->robot->bullet_speed_m_s);
       // Aimer 在无效瞄准点或弹道不可解时返回 control=false、角度为 0；
       // 串口仍携带角度字段，因此退回当前云台角，避免无效指令造成跳转。
       if (!command.control) {
         command.yaw = gimbal_pos[0];
         command.pitch = gimbal_pos[1];
-    // PnP 解算：逐块求位姿，并选出离图像中心最近的一块作为当前目标
-    const cv::Point2f img_center(img.cols / 2.0f, img.rows / 2.0f);
-    auto target = armors.end();
-    auto min_offset = std::numeric_limits<double>::max();
-    for (auto it = armors.begin(); it != armors.end(); ++it) {
-      // 解算失败时位姿字段仍是零向量，不能当候选目标
-      if (!solver.solve(*it)) continue;
-      auto offset = cv::norm(it->center - img_center);
-      if (offset < min_offset) {
-        min_offset = offset;
-        target = it;
       }
       command.shoot = false;  // 步兵程序不接管发射
     }
@@ -195,6 +190,23 @@ int main(int argc, char * argv[])
       last_can_send_time = now;
     }
 
+    if (debug_frame_requested) {
+      auto_aim::DebugStatus debug_status{
+        gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0),
+        command.control && pitch_encoder_calibrated, false, tracker.state(), ""};
+      if (target != nullptr && command.control && aimer.debug_aim_point.valid) {
+        debug_status.has_aim_prediction = true;
+        debug_status.aim_prediction_world = aimer.debug_aim_point.xyza.head<3>();
+        const auto & p = debug_status.aim_prediction_world;
+        const auto pixels = solver.world2pixel({cv::Point3f(p.x(), p.y(), p.z())});
+        if (!pixels.empty()) {
+          debug_status.has_aim_prediction_pixel = true;
+          debug_status.aim_prediction_pixel = pixels.front();
+        }
+      }
+      debug.publish(armors, debug_status, &solver);
+    }
+
     // 画框与四个关键点（不做 imshow/imwrite，无显示器环境下安全）
     for (const auto & armor : armors) {
       cv::rectangle(img, armor.box, cv::Scalar(0, 255, 0), 2);
@@ -207,12 +219,11 @@ int main(int argc, char * argv[])
     const auto log_now = std::chrono::steady_clock::now();
     if (log_now - last_log_time > 500ms) {
       last_log_time = log_now;
-      if (!targets.empty()) {
-        const auto & target = targets.front();
-        const Eigen::VectorXd x = target.ekf_x();
+      if (target != nullptr) {
+        const Eigen::VectorXd x = target->ekf_x();
         tools::logger()->info(
           "[soldier] state={} {} | EKF center({:.2f}, {:.2f}, {:.2f}) velocity({:.2f}, {:.2f}, {:.2f}) | cmd yaw={:.1f} pitch={:.1f}",
-          tracker.state(), auto_aim::ARMOR_NAMES[target.name], x[0], x[2], x[4], x[1], x[3],
+          tracker.state(), auto_aim::ARMOR_NAMES[target->name], x[0], x[2], x[4], x[1], x[3],
           x[5], command.yaw * 57.3, command.pitch * 57.3);
       } else {
         tools::logger()->info(
