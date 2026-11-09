@@ -41,6 +41,9 @@ TargetConfig TargetConfig::load(const std::string & path)
       const auto & motion = yaml["motion"];
       if (motion["acc_damping"]) cfg.acc_damping = motion["acc_damping"].as<double>();
       if (motion["damping_tau"]) cfg.damping_tau = motion["damping_tau"].as<double>();
+      if (motion["r_clamp_min"]) cfg.r_clamp_min = motion["r_clamp_min"].as<double>();
+      if (motion["r_clamp_max"]) cfg.r_clamp_max = motion["r_clamp_max"].as<double>();
+      if (motion["l_clamp"]) cfg.l_clamp = motion["l_clamp"].as<double>();
     }
 
     if (yaml["transition"]) {
@@ -545,6 +548,13 @@ void Target::update_ypda(const std::vector<MatchedArmor> & matched, double dt)
 
     // 更新用 R_update（含自适应），监控用 R_base（固定），两者分开
     ekf_[j].update(z, H, R_update, h, z_subtract, dt, R_base);
+
+    // 半径 / 半径差物理限幅：单板、画面偏暗或远距离时 r 会被观测推飞，
+    // 一旦越出 diverged() 的 (0.05, 0.5) 就瞬间判丢。在 fuse 之前逐个模型夹住，
+    // 融合是权重和为 1 的凸组合，因此 x_fused_ 的 r / l / r+l 也必然落在区间内
+    // （r_clamp_min 0.10 − l_clamp 0.04 = 0.06 > 0.05，保证 r+l 的下限）。
+    ekf_[j].x[8] = std::clamp(ekf_[j].x[8], config_.r_clamp_min, config_.r_clamp_max);
+    ekf_[j].x[9] = std::clamp(ekf_[j].x[9], -config_.l_clamp, config_.l_clamp);
 
     const auto & data = ekf_[j].data;
     const double nis_j = data.count("nis") ? data.at("nis") : 0.0;
