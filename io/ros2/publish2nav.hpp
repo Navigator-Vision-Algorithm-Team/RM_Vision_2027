@@ -26,7 +26,7 @@ public:
 
   void send_data(const Eigen::Vector4d & data);
 
-  // 云台关节反馈：每收到一帧新的 0x502 调用一次，header.stamp 取调用时刻的 ROS 时间。
+  // 云台关节反馈：每收到一帧新的 0x0503 调用一次，header.stamp 取调用时刻的 ROS 时间。
   // yaw_rad / pitch_rad 均为弧度，pitch 无自由度时由调用方传 0。
   void publish_gimbal_joint_state(double yaw_rad, double pitch_rad);
 
@@ -37,7 +37,7 @@ private:
   // 云台关节状态（供导航侧构建 TF 用）
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_publisher_;
 
-  // 0x502 实际可能以 500Hz 上报，按导航侧建议限到 100Hz：
+  // 0x0503 以 500Hz 上报，按导航侧建议限到 100Hz：
   // 只抽帧发送最新采样，绝不重发旧角度。仅由 SerialBoard 接收线程调用。
   static constexpr double kMaxJointStateHz = 100.0;
   bool joint_state_published_ = false;

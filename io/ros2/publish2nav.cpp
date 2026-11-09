@@ -50,7 +50,7 @@ void Publish2Nav::send_data(const Eigen::Vector4d & target_pos)
 void Publish2Nav::publish_gimbal_joint_state(double yaw_rad, double pitch_rad)
 {
   // 节流到 100Hz 上限：间隔不足时直接丢弃这一帧新采样（不是重发旧值），
-  // 因此话题上出现的每个角度都对应一帧真实 0x502，且 stamp 是最新采样的 ROS 时间。
+  // 因此话题上出现的每个角度都对应一帧真实 0x0503，且 stamp 是最新采样的 ROS 时间。
   const auto now = std::chrono::steady_clock::now();
   if (joint_state_published_ &&
       std::chrono::duration<double>(now - last_joint_state_time_).count() <
