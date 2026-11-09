@@ -7,19 +7,12 @@
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <vector>
-#include <vector>
 
 #include "armor.hpp"
 
 namespace auto_aim
 {
 class Solver;
-
-struct PnpDebugInfo
-{
-  cv::Rect box;
-  Eigen::Vector3d xyz_in_gimbal = Eigen::Vector3d::Zero();
-};
 
 struct PnpDebugInfo
 {
