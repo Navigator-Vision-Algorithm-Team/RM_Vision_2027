@@ -8,9 +8,8 @@
 //                 0x0207 实时射击 / 0x0208 允许发弹量 / 0x020D 哨兵信息
 //     分帧、CRC8、CRC16 全部由 referee_comm::Receiver 负责，未知 cmd_id 打印原始 data。
 //  2) 下发：固定频率发 0x0402 自瞄指令，yaw 是世界系绝对角（弧度，wrap 到 (-pi, pi]），
-//     按恒定角速度缓慢增大，云台因此慢慢旋转；pitch=0、shoot=0、accuracy=50，
-//     id / robo_id / timeseries 均为 0。
-//     加 --nav 时同时发 0x0405 导航指令（vx=vy=wz=0，不产生移动）。
+//     按恒定角速度缓慢增大，云台因此慢慢旋转；pitch=0、shoot=0，data 段只发 pitch/yaw/shoot。
+//     加 --nav 时同时发 0x0405 导航指令（vx=vy=wz=0、target_angle=0，不产生移动）。
 //
 //  用法:
 //    ./serial_communication_test [串口] [波特率] [yaw角速度rad/s] [发送频率Hz] [--nav]
@@ -336,13 +335,9 @@ void send_aim(serial::Serial & port, double yaw, uint8_t seq)
   append_header(
     packet.header, 0x0402, sizeof(io::SendPacket) - sizeof(io::Header) - 2, seq);
 
-  packet.id = 0;
-  packet.robo_id = 0;
   packet.pitch = 0.0f;
   packet.yaw = static_cast<float>(yaw);
-  packet.accuracy = 50;
   packet.shoot = 0;
-  packet.timeseries = 0;
 
   crc16::Append_CRC16_Check_Sum(
     reinterpret_cast<uint8_t *>(&packet), sizeof(io::SendPacket));
@@ -359,6 +354,7 @@ void send_nav(serial::Serial & port, uint8_t seq)
   packet.vx = 0.0f;
   packet.vy = 0.0f;
   packet.wz = 0.0f;
+  packet.target_angle = 0.0f;
 
   crc16::Append_CRC16_Check_Sum(
     reinterpret_cast<uint8_t *>(&packet), sizeof(io::NavigationPacket));
@@ -453,7 +449,7 @@ int main(int argc, char * argv[])
     opt.port.c_str(), opt.baud, opt.hz, opt.yaw_rate, opt.yaw_rate * k_rad2deg,
     opt.send_nav ? ", 以及 0x0405 (全零速度)" : "");
   std::printf(
-    "[INFO] 0x0402 载荷: pitch=0 shoot=0 accuracy=50 id=0 robo_id=0 timeseries=0 ; "
+    "[INFO] 0x0402 载荷: pitch=0 shoot=0（data 段 9 字节）; "
     "Ctrl+C 退出\n");
   std::fflush(stdout);
 
@@ -492,7 +488,7 @@ int main(int argc, char * argv[])
       char buf[256];
       std::snprintf(
         buf, sizeof(buf),
-        "[TX] 0x0402 AIM      yaw=%+.4f rad (%+.1f°) pitch=%+.4f accuracy=50 shoot=0 seq=%u",
+        "[TX] 0x0402 AIM      yaw=%+.4f rad (%+.1f°) pitch=%+.4f shoot=0 seq=%u",
         yaw, yaw * k_rad2deg, 0.0, seq);
       emit(buf);
     }
