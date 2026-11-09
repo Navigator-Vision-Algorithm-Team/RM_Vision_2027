@@ -25,6 +25,11 @@ SerialBoard::SerialBoard(const std::string & config_path)
   use_referee_system_ = yaml["use_referee_system"].as<bool>(false);
   game_start_progress_threshold_ = yaml["game_start_progress_threshold"].as<int>(4);
 
+  // 0x0503 的 yaw_angle 是 IMU 世界系 yaw。哨兵的双yaw 平台把 IMU 装在小yaw（相机）板上，
+  // 因此默认 upper；若实车 IMU 在大yaw 轴上，配成 lower。
+  const std::string imu_axis = yaml["gimbal_imu_axis"].as<std::string>("upper");
+  imu_on_upper_axis_ = (imu_axis != "lower");
+
   // 数据源选择：real / fake / replay，由配置决定（业务代码无感知）
   auto sim_config = sim::SimConfig::load(yaml);
   source_mode_ = sim_config.serial.mode;
@@ -49,10 +54,13 @@ SerialBoard::SerialBoard(const std::string & config_path)
     game_started_.store(true);
   }
 
+  // 解包器每解出一帧就回调：接收线程内同步执行，因此业务状态无需额外加锁即可读写
+  link_.on_frame = [this](uint16_t cmd_id) { on_frame(cmd_id); };
+
   tools::logger()->info(
-    "[{}] [SerialBoard] source={} baud={} referee={} record={}",
+    "[{}] [SerialBoard] source={} baud={} referee={} imu_axis={} record={}",
     sim::log_tag(source_mode_), transport_->describe(), baud_rate_, use_referee_system_,
-    recorder_ ? recorder_->path() : std::string("off"));
+    imu_on_upper_axis_ ? "upper" : "lower", recorder_ ? recorder_->path() : std::string("off"));
 
   // 初始化 IMU 数据为全零姿态，收到真实数据后会被覆盖
   auto t0 = std::chrono::steady_clock::time_point(std::chrono::seconds(0));
@@ -60,7 +68,7 @@ SerialBoard::SerialBoard(const std::string & config_path)
   data_behind_ = IMUData{ImuState{}, t0 + std::chrono::milliseconds(1)};
 
   receive_thread_ = std::thread(&SerialBoard::receiveThread, this);
-  tools::logger()->info("[SerialBoard] Ready (IMU will update when MCU sends 0x502).");
+  tools::logger()->info("[SerialBoard] Ready (IMU will update when MCU sends 0x0503).");
 }
 
 SerialBoard::~SerialBoard()
@@ -157,8 +165,7 @@ void SerialBoard::send(Command command) const
   packet.robo_id = 0;
   packet.timeseries = 0;  // 占位（接收方不使用）
 
-  crc16::Append_CRC16_Check_Sum(
-    reinterpret_cast<uint8_t *>(&packet), sizeof(SendPacket));
+  crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&packet), sizeof(SendPacket));
 
   try {
     std::lock_guard<std::mutex> lock(send_mutex_);
@@ -243,13 +250,131 @@ bool SerialBoard::reset_pending()
   return reset_pending_.exchange(false);
 }
 
-void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
+void SerialBoard::on_frame(uint16_t cmd_id)
+{
+  using namespace referee_comm;
+  switch (cmd_id) {
+    case host_comm::HOST_VERSION: {
+      const uint32_t uptime = link_.host.version.uptime_ms;
+      // uptime 回落视为 MCU 重启：视觉侧状态一并复位（等价旧 0x505 的 reset 位）
+      if (last_uptime_ms_ != 0 && uptime < last_uptime_ms_) {
+        reset_pending_.store(true);
+        tools::logger()->info(
+          "[SerialBoard] MCU restart detected (uptime {} -> {} ms), reset vision state",
+          last_uptime_ms_, uptime);
+      }
+      last_uptime_ms_ = uptime;
+
+      if (!config_logged_) {
+        config_logged_ = true;
+        // packed 结构体的字段不能直接绑定到 fmt 的引用参数，先拷到局部变量
+        const uint8_t version = link_.host.version.host_version;
+        const uint16_t season = link_.host.version.referee_season;
+        const uint8_t robot_type = link_.host.version.robot_type;
+        const uint8_t chassis_type = link_.host.version.chassis_type;
+        const uint8_t gimbal_type = link_.host.version.gimbal_type;
+        tools::logger()->info(
+          "[SerialBoard] MCU handshake: host_protocol=v{} referee_season={} robot_type={} "
+          "chassis_type={} gimbal_type={}",
+          version, season, robot_type, chassis_type, gimbal_type);
+        if (version != host_comm::HOST_PROTOCOL_VERSION) {
+          tools::logger()->warn(
+            "[SerialBoard] host 协议版本不一致：固件 {} / 上位机 {}，字段可能错位", version,
+            host_comm::HOST_PROTOCOL_VERSION);
+        }
+        if (season != 2027) {
+          tools::logger()->warn(
+            "[SerialBoard] 裁判转发帧按 2027 赛季解析，固件上报 referee_season={}", season);
+        }
+      }
+      break;
+    }
+    case host_comm::GIMBAL_STATUS:
+      handle_gimbal(link_.host.gimbal);
+      break;
+    case v2027::GAME_STATUS:
+      handle_game_status(link_.referee.game_status);
+      break;
+    case v2027::ROBOT_STATUS:
+      handle_robot_status(link_.referee.robot_status);
+      break;
+    default:
+      // 其余上行/转发帧已经解到 link_ 里，业务侧需要时直接读，不在这里做副作用
+      break;
+  }
+}
+
+void SerialBoard::handle_gimbal(const host_comm::host_gimbal_status_t & pkt)
+{
+  /*
+    0x0503 只给「IMU 世界系姿态 + 小yaw 关节角」，双yaw 的两个轴要自己复合：
+      · yaw_angle 是 IMU（相机/枪管）世界系 yaw，即小yaw 板的世界朝向
+      · upper_yaw_angle 是小yaw 相对大yaw 的关节角
+    因此 小yaw 世界角 = yaw_angle，大yaw 世界角 = yaw_angle - upper_yaw_angle。
+    单yaw 构型的 upper_yaw_angle 恒为 0，两个角自动相等。
+  */
+  const double pitch = pkt.pitch_angle;
+  const double roll = pkt.roll_angle;
+  const double imu_yaw = pkt.yaw_angle;
+
+  double upper = imu_yaw;
+  double lower = imu_yaw;
+  if (link_.host.version.gimbal_type == 2) {  // gimbal_DoubleYaw
+    if (imu_on_upper_axis_) {
+      upper = imu_yaw;
+      lower = imu_yaw - pkt.upper_yaw_angle;
+    } else {
+      lower = imu_yaw;
+      upper = imu_yaw + pkt.upper_yaw_angle;
+    }
+  }
+
+  upper = wrap_2pi(upper);
+  lower = wrap_2pi(lower);
+
+  // —— 云台关节反馈（ROS2 JointState）——
+  // 每帧新采样回调一次，绝不在没收到新帧时重复包装旧角度。
+  // 大yaw 轴没有俯仰自由度，pitch 恒为 0。
+  // 注意：这里下发的是世界系绝对角；导航侧要的「相对底盘」可用 0x0502 的
+  // feedback_angle 修正为 tools::limit_rad(lower - chassis_yaw)，待导航接口定稿再接。
+  {
+    GimbalJointCallback callback;
+    {
+      std::lock_guard<std::mutex> lock(joint_callback_mutex_);
+      callback = joint_callback_;
+    }
+    if (callback) {
+      try {
+        callback(tools::limit_rad(lower), 0.0);
+      } catch (const std::exception & e) {
+        tools::logger()->warn("[SerialBoard] Gimbal joint callback failed: {}", e.what());
+      }
+    }
+  }
+
+  if (!first_imu_received_) {
+    first_imu_received_ = true;
+    const double joint = pkt.upper_yaw_angle;
+    const uint8_t gimbal_type = link_.host.version.gimbal_type;
+    tools::logger()->info(
+      "[SerialBoard] First gimbal frame received (gimbal_type={} pitch={:.3f} roll={:.3f} "
+      "yaw={:.3f} upper_yaw_angle={:.3f} -> upper={:.3f} lower={:.3f} rad) — unblocking",
+      gimbal_type, pitch, roll, imu_yaw, joint, upper, lower);
+  }
+
+  // 只存原始角度，各坐标系姿态由调用方 / tf 树复合：
+  //   大yaw  = Rz(lower)                          （纯 yaw，无 pitch/roll）
+  //   小yaw  = Rz(upper)·Ry(pitch)·Rx(roll)       （主相机所在板）
+  queue_.push({ImuState{pitch, roll, upper, lower}, std::chrono::steady_clock::now()});
+}
+
+void SerialBoard::handle_game_status(const referee_comm::v2027::game_status_t & pkt)
 {
   GameStatus gs;
-  gs.game_type = static_cast<uint8_t>(pkt.game_info & 0x0F);
-  gs.game_progress = static_cast<uint8_t>((pkt.game_info >> 4) & 0x0F);
+  gs.game_type = static_cast<uint8_t>(pkt.game_type);
+  gs.game_progress = static_cast<uint8_t>(pkt.game_progress);
   gs.stage_remain_time = pkt.stage_remain_time;
-  gs.sync_timestamp = pkt.sync_timestamp;
+  gs.sync_timestamp = pkt.SyncTimeStamp;
 
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
@@ -267,254 +392,77 @@ void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
       tools::logger()->info("[SerialBoard] Game ended / returned to pre-game");
     }
   }
-
-  // tools::logger()->debug(
-  //   "[SerialBoard] GameStatus: type={} progress={} remain={} sync={}",
-  //   gs.game_type, gs.game_progress, gs.stage_remain_time, gs.sync_timestamp);
 }
 
-void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
+void SerialBoard::handle_robot_status(const referee_comm::v2027::robot_status_t & pkt)
 {
   RobotStatus rs;
   rs.robot_id = pkt.robot_id;
   rs.robot_level = pkt.robot_level;
-  rs.remain_hp = pkt.remain_hp;
-  rs.max_hp = pkt.max_hp;
-  rs.shooter_cooling_rate = pkt.shooter_cooling_rate;
-  rs.shooter_heat_limit = pkt.shooter_heat_limit;
+  rs.remain_hp = pkt.current_HP;
+  rs.max_hp = pkt.maximum_HP;
+  rs.shooter_cooling_rate = pkt.shooter_barrel_cooling_value;
+  rs.shooter_heat_limit = pkt.shooter_barrel_heat_limit;
   rs.chassis_power_limit = pkt.chassis_power_limit;
-  rs.mains_power_gimbal = (pkt.mains_power_state & 0x01) != 0;
-  rs.mains_power_chassis = ((pkt.mains_power_state >> 1) & 0x01) != 0;
-  rs.mains_power_shooter = ((pkt.mains_power_state >> 2) & 0x01) != 0;
+  rs.bullet_speed_limit = pkt.bullet_speed_limit;
+  rs.mains_power_gimbal = pkt.power_management_gimbal_output != 0;
+  rs.mains_power_chassis = pkt.power_management_chassis_output != 0;
+  rs.mains_power_shooter = pkt.power_management_shooter_output != 0;
 
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
     robot_status_ = rs;
-  }
-
-  // tools::logger()->debug(
-  //   "[SerialBoard] RobotStatus: id={} lv={} hp={}/{} cool={} heat={} power={} mains=g{}c{}s{}",
-  //   rs.robot_id, rs.robot_level, rs.remain_hp, rs.max_hp,
-  //   rs.shooter_cooling_rate, rs.shooter_heat_limit, rs.chassis_power_limit,
-  //   rs.mains_power_gimbal, rs.mains_power_chassis, rs.mains_power_shooter);
-}
-
-void SerialBoard::handleBass(const bassPacket & pkt)
-{
-  if (pkt.reset) {
-    reset_pending_.store(true);
-    tools::logger()->info("[SerialBoard] Reset signal received from MCU");
-  }
-}
-
-bool SerialBoard::read(uint8_t * buffer, size_t size)
-{
-  try {
-    const size_t n = transport_->read(buffer, size, 50);
-    if (recorder_ && n > 0) recorder_->record_rx(buffer, n);
-    return n == size;
-  } catch (const std::exception & e) {
-    return false;
   }
 }
 
 void SerialBoard::receiveThread()
 {
   tools::logger()->info("[SerialBoard] receiveThread started.");
-  int error_count = 0;
-  int valid_packet_count = 0;
-  bool first_imu_received = false;
-  bool first_valid_header = false;
 
-  std::vector<uint8_t> flag(1);
-  std::vector<uint8_t> headdata;
-  std::vector<uint8_t> data;
-
-  auto last_status_time = std::chrono::steady_clock::now();
+  std::vector<uint8_t> buffer(1024);
+  int silence_count = 0;
+  auto last_warn = std::chrono::steady_clock::now();
 
   while (!quit_) {
-    if (error_count > 5000) {
-      error_count = 0;
-      tools::logger()->warn("[SerialBoard] Too many errors, reconnecting...");
+    size_t n = 0;
+    try {
+      n = transport_->read(buffer.data(), buffer.size(), 50);
+    } catch (const std::exception &) {
+      n = 0;
+    }
+
+    if (n > 0) {
+      silence_count = 0;
+      if (recorder_) recorder_->record_rx(buffer.data(), n);
+      // 分帧、CRC 与解包全部在 Receiver 里完成，解出的帧经 link_.on_frame 回调业务处理
+      receiver_.Feed(buffer.data(), n);
+      continue;
+    }
+
+    if (++silence_count > 5000) {
+      tools::logger()->warn("[SerialBoard] No bytes for a long time, reconnecting...");
+      silence_count = 0;
       reconnect();
       continue;
     }
 
-    // 每 10 秒报告一次串口状态（直到收到第一个 IMU 包为止） -- 该功能废止
-    auto now = std::chrono::steady_clock::now();
-    auto since_last = std::chrono::duration_cast<std::chrono::seconds>(now - last_status_time).count();
-    // if (!first_imu_received && since_last >= 10) {
-    //   tools::logger()->warn(
-    //     "[SerialBoard] No IMU (0x502) yet — {} packets seen, {} read errors (using identity q)",
-    //     valid_packet_count, error_count);
-    //   last_status_time = now;
-    // }
-
-    if (!read(flag.data(), 1)) {
-      error_count++;
-      continue;
-    }
-
-    if (flag[0] != 0xA5) continue;
-
-    headdata.resize(sizeof(Header) - 1);
-    if (!read(headdata.data(), headdata.size())) {
-      error_count++;
-      continue;
-    }
-
-    headdata.insert(headdata.begin(), flag[0]);
-    Header header = fromVector<Header>(headdata);
-
-    if (!crc8::Verify_CRC8_Check_Sum(
-          reinterpret_cast<const uint8_t *>(&header), sizeof(header) - 2)) {
-      continue;
-    }
-
-    valid_packet_count++;
-
-    if (!first_valid_header) {
-      first_valid_header = true;
-      uint16_t first_cmd_id = header.cmd_id;
-      // tools::logger()->info("[SerialBoard] First valid packet received: cmd_id=0x{:x}", first_cmd_id);
-    }
-
-    switch (header.cmd_id) {
-      case 0x502: {
-        data.resize(sizeof(IMUPacket) - sizeof(Header));
-        if (!read(data.data(), data.size())) { error_count++; break; }
-        data.insert(data.begin(), headdata.begin(), headdata.end());
-        IMUPacket imu_packet = fromVector<IMUPacket>(data);
-
-        if (!crc16::Verify_CRC16_Check_Sum(
-              reinterpret_cast<const uint8_t *>(&imu_packet), sizeof(imu_packet))) {
-          break;
-        }
-
-        // 双yaw：lower = 大yaw（IMU 与四个全向相机所在轴），upper = 小yaw（主相机所在轴）
-        // packed 结构体的字段不能直接绑定到引用，先拷到局部变量（fmt 也受益）
-        const float pitch = imu_packet.pitch;
-        const float roll = imu_packet.roll;
-        const double lower = imu_packet.lower_yaw;
-        const double upper = imu_packet.upper_yaw;
-        // psi 取最短弧，避免 0/2π 边界（如 lower=350°、upper=10°）被算成 -340°
-        const double psi = tools::limit_rad(upper - lower);
-
-        // —— 云台关节反馈（ROS2 JointState）——
-        // 每帧新采样回调一次，绝不在没收到新帧时重复包装旧角度。
-        // 注意：0x502 目前只上报「以上电时车头朝向为 0」的世界系绝对 lower_yaw，
-        // 没有底盘 yaw / 相对关节角字段，因此这里暂时用绝对角充当关节角。
-        // 导航侧要求的是「相对底盘」，需下位机在 0x502 补 float chassis_yaw
-        // （或直接补 relative_yaw，包长 26 -> 30 字节），补齐后把下面改成
-        // tools::limit_rad(lower - chassis_yaw) 即可，其余代码无需改动。
-        // 大yaw 轴没有俯仰自由度，pitch 恒为 0。
-        {
-          GimbalJointCallback callback;
-          {
-            std::lock_guard<std::mutex> lock(joint_callback_mutex_);
-            callback = joint_callback_;
-          }
-          if (callback) {
-            try {
-              callback(tools::limit_rad(lower), 0.0);
-            } catch (const std::exception & e) {
-              tools::logger()->warn("[SerialBoard] Gimbal joint callback failed: {}", e.what());
-            }
-          }
-        }
-
-        if (!first_imu_received) {
-          first_imu_received = true;
-          tools::logger()->info(
-            "[SerialBoard] First IMU packet received (pitch={:.3f} roll={:.3f} "
-            "upper_yaw={:.3f} lower_yaw={:.3f} psi={:.3f} rad) — unblocking",
-            pitch, roll, upper, lower, psi);
-
-          // 防呆：视觉侧一律用 lower_yaw 当云台(大yaw)角。若固件把单yaw 平台的
-          // 唯一 yaw 填进了 upper_yaw，云台会被当成"从不转动"，这里提前报出来。
-          if (std::abs(upper) > 1e-3 && std::abs(lower) < 1e-3) {
-            tools::logger()->warn(
-              "[SerialBoard] upper_yaw 非零而 lower_yaw 为 0：单yaw 兵种若把 yaw 填在 "
-              "upper_yaw，云台姿态会恒为 0，请与固件确认字段归属");
-          }
-        }
-
-        error_count = 0;
-        auto t_now = std::chrono::steady_clock::now();
-
-        // 只存原始角度，各坐标系姿态由调用方 / tf 树复合：
-        //   大yaw  = Rz(lower)                          （纯 yaw，无 pitch/roll）
-        //   小yaw  = Rz(upper)·Ry(pitch)·Rx(roll)       （主相机所在板）
-        queue_.push({ImuState{pitch, roll, upper, lower}, t_now});
-        break;
-      }
-      case 0x503: {
-        data.resize(sizeof(classisPacket) - sizeof(Header));
-        if (!read(data.data(), data.size())) { error_count++; break; }
-        data.insert(data.begin(), headdata.begin(), headdata.end());
-        classisPacket pkt = fromVector<classisPacket>(data);
-        if (!crc16::Verify_CRC16_Check_Sum(
-              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
-        error_count = 0;
-        break;
-      }
-      case 0x504: {
-        data.resize(sizeof(bottonPacket) - sizeof(Header));
-        if (!read(data.data(), data.size())) { error_count++; break; }
-        data.insert(data.begin(), headdata.begin(), headdata.end());
-        bottonPacket pkt = fromVector<bottonPacket>(data);
-        if (!crc16::Verify_CRC16_Check_Sum(
-              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
-        error_count = 0;
-        break;
-      }
-      case 0x505: {
-        data.resize(sizeof(bassPacket) - sizeof(Header));
-        if (!read(data.data(), data.size())) { error_count++; break; }
-        data.insert(data.begin(), headdata.begin(), headdata.end());
-        bassPacket pkt = fromVector<bassPacket>(data);
-        if (!crc16::Verify_CRC16_Check_Sum(
-              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
-        error_count = 0;
-        handleBass(pkt);
-        break;
-      }
-      case 0x0001:
-      case 0x0100: {
-        data.resize(sizeof(GameStatusPacket) - sizeof(Header));
-        if (!read(data.data(), data.size())) { error_count++; break; }
-        data.insert(data.begin(), headdata.begin(), headdata.end());
-        GameStatusPacket pkt = fromVector<GameStatusPacket>(data);
-        if (!crc16::Verify_CRC16_Check_Sum(
-              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
-        error_count = 0;
-        handleGameStatus(pkt);
-        break;
-      }
-      case 0x0201:
-      case 0x0102: {
-        data.resize(sizeof(GameRobotStatusPacket) - sizeof(Header));
-        if (!read(data.data(), data.size())) { error_count++; break; }
-        data.insert(data.begin(), headdata.begin(), headdata.end());
-        GameRobotStatusPacket pkt = fromVector<GameRobotStatusPacket>(data);
-        if (!crc16::Verify_CRC16_Check_Sum(
-              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
-        error_count = 0;
-        handleGameRobotStatus(pkt);
-        break;
-      }
-      default: {
-        uint16_t payload_len = header.data_length;
-        if (payload_len > 0 && payload_len < 256) {
-          data.resize(payload_len);
-          read(data.data(), data.size());
-        }
-        break;
-      }
+    // 链路上一直没解出合法帧时给一次提示，避免"接错线但串口能开"时完全静默
+    const auto now = std::chrono::steady_clock::now();
+    if (receiver_.stats().frames == 0 &&
+        std::chrono::duration<double>(now - last_warn).count() >= 10.0) {
+      last_warn = now;
+      tools::logger()->warn(
+        "[SerialBoard] No valid frame yet (crc8_err={} crc16_err={} garbage={}B) — "
+        "检查接线/TX-RX 交叉/波特率/下位机是否上电",
+        receiver_.stats().crc8_errors, receiver_.stats().crc16_errors,
+        receiver_.stats().garbage_bytes);
     }
   }
 
-  tools::logger()->info("[SerialBoard] receiveThread stopped.");
+  tools::logger()->info(
+    "[SerialBoard] receiveThread stopped (frames={} crc8_err={} crc16_err={} garbage={}B).",
+    receiver_.stats().frames, receiver_.stats().crc8_errors, receiver_.stats().crc16_errors,
+    receiver_.stats().garbage_bytes);
 }
 
 void SerialBoard::reconnect()
@@ -532,6 +480,8 @@ void SerialBoard::reconnect()
     try {
       if (!transport_) throw std::runtime_error("null transport");
       transport_->open();
+      // 重连后旧半包已经没有意义，清掉重新同步；统计量保留便于定位问题
+      receiver_.Reset();
       queue_.clear();
       tools::logger()->info("[SerialBoard] Reconnected successfully.");
       return;

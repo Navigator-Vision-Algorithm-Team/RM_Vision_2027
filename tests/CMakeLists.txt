@@ -7,7 +7,10 @@ cmake_minimum_required(VERSION 3.16.3)
 # ============================================================================
 add_executable(serial_communication_test
     serial_communication_test.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
+    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp
+    ${PROJECT_SOURCE_DIR}/io/serial/protocol/referee.cpp
+    ${PROJECT_SOURCE_DIR}/io/serial/protocol/host_protocol.cpp
+    ${PROJECT_SOURCE_DIR}/io/serial/protocol/seasons/2027/protocol.cpp)
 target_link_libraries(serial_communication_test serial)
 
 # ============================================================================

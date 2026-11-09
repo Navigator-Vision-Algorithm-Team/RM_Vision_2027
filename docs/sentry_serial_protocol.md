@@ -5,6 +5,31 @@
 
 本文件描述 `sentry_multithread` 入口从下位机**接收**的数据，以及为完成闭环**发送**给下位机的数据。
 
+> **2026-11 接收方向协议变更（下行未动）**
+> 下位机（`UICRM-Embedded`，分支 `Martin/referee`）已把上位机通信改成 `host_comm` v1.0 上行帧 +
+> 裁判帧原样转发。上位机解包同步重写，代码在 `io/serial/protocol/`：
+> `referee.hpp/.cpp`（A5 分帧 + CRC + 重同步）、`host_protocol.hpp/.cpp`（0x0500~0x0505）、
+> `seasons/2027/protocol.hpp/.cpp`（裁判转发帧）、`link.hpp/.cpp`（按 cmd_id 号段分派）。
+>
+> **下文 §3「接收」的 cmd_id 与字段已作废**，现行映射：
+>
+> | cmd_id | 内容 | 结构体 |
+> | --- | --- | --- |
+> | 0x0500 | 协议版本与硬件构型（`gimbal_type` 决定关节角解释方式），1Hz | `host_comm::host_version_t` |
+> | 0x0501 | 机器人状态（软件使能 / 模式 / 在线位域），1Hz | `host_comm::host_robot_status_t` |
+> | 0x0502 | 底盘实测速度与航向角反馈，100Hz | `host_comm::host_chassis_status_t` |
+> | 0x0503 | 云台姿态（IMU 世界角 + 小yaw 关节角 + 自瞄裁决），500Hz | `host_comm::host_gimbal_status_t` |
+> | 0x0504 | 发射模块状态，50Hz | `host_comm::host_shoot_status_t` |
+> | 0x0505 | 调试日志，事件驱动 | `host_comm::host_log_t` |
+> | 0x0001 / 0x0003 / 0x0201 / 0x0202 / 0x0206 / 0x0207 / 0x0208 / 0x020D | 下位机转发的裁判帧（2027 赛季） | `referee_comm::v2027::*` |
+>
+> `ImuState` 的搬运关系（IMU 在小yaw / 相机板，可用 `gimbal_imu_axis: lower` 反转）：
+> `upper_yaw = yaw_angle`，`lower_yaw = yaw_angle - upper_yaw_angle`，
+> `pitch = pitch_angle`，`roll = roll_angle`。
+> `reset_pending()` 改为「0x0500 的 `uptime_ms` 回落」即 MCU 重启。
+>
+> §2 的帧头 / CRC 规则与 §4 之后的下行（0x0402 / 0x0405）**保持不变**。
+
 ---
 
 ## 1. 通信链路

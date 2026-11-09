@@ -23,7 +23,7 @@
 | D | `small_yaw` 相对 `world` 的高度 `h` | 1 个 | `tf.frames.small_yaw.offset` | **手工测量**，见 §4.1 |
 
 不需要标的量：`Rz(lower_yaw)`、`Rz(upper_yaw)·Ry(pitch)·Rx(roll)` —— 这两条是动态边，
-每帧由 0x502 直接给出。
+每帧由 0x0503 直接给出。
 
 ---
 

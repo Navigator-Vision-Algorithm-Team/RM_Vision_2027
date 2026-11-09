@@ -13,6 +13,8 @@
 
 #include "io/command.hpp"
 #include "io/serial/gimbal/packet.hpp"
+#include "io/serial/protocol/link.hpp"
+#include "io/serial/protocol/referee.hpp"
 #include "io/sim/common.hpp"
 #include "io/sim/recorder.hpp"
 #include "io/sim/transport.hpp"
@@ -21,8 +23,10 @@
 namespace io
 {
 
-// 0x502 一帧姿态量（弧度）
+// 一帧姿态量（弧度），全部是「上电时车头朝向为 0」的世界系绝对角：
 //   大yaw(lower) 只有 yaw；pitch/roll 属于小yaw(upper)，即主相机所在的那块板。
+// 数据来源是 host 协议 0x0503（云台姿态 500Hz），双yaw 的关节角由 upper_yaw_angle
+// 与 yaw_angle 复合得到，详见 SerialBoard::handleGimbal。
 struct ImuState
 {
   double pitch = 0.0;      // 小yaw 板俯仰，低头为正
@@ -49,18 +53,18 @@ public:
   void send(Command command) const;
   void send(NavCommand command) const;
 
-  // 云台关节反馈回调：收到一帧 CRC 正确的 0x502 就回调一次（yaw_rad 为已转成
+  // 云台关节反馈回调：收到一帧 CRC 正确的 0x0503 就回调一次（yaw_rad 为已转成
   // (-π, π] 的关节角，pitch_rad 恒为 0，因为大yaw 轴没有俯仰自由度）。
   // 回调发生在接收线程内，按真实帧率触发；不会把上一帧旧值重复喂给上层。
   using GimbalJointCallback = std::function<void(double yaw_rad, double pitch_rad)>;
   void set_gimbal_joint_callback(GimbalJointCallback callback);
 
-  // Game / match state from MCU
+  // Game / match state（来自下位机转发的裁判 0x0001 / 0x0201）
   GameStatus game_status() const;
   RobotStatus robot_status() const;
   bool is_game_started() const;
 
-  // Reset signal from MCU (bassPacket.reset)
+  // MCU 重启信号（0x0500 的 uptime_ms 回落，等价旧 0x505 的 reset 位）
   bool reset_pending();
 
 private:
@@ -73,6 +77,12 @@ private:
   // 把队列里的新样本搬进 data_ahead_ / data_behind_
   void update_imu_samples();
 
+  // 解码器每解出一帧回调一次（接收线程内），把载荷搬进本类的业务状态
+  void on_frame(uint16_t cmd_id);
+  void handle_gimbal(const host_comm::host_gimbal_status_t & pkt);
+  void handle_game_status(const referee_comm::v2027::game_status_t & pkt);
+  void handle_robot_status(const referee_comm::v2027::robot_status_t & pkt);
+
   // 数据源：真实串口 / 内置虚拟下位机 / 原始字节回放，由配置决定，解析逻辑完全一致
   sim::IByteTransport::Ptr transport_;
   sim::SourceMode source_mode_ = sim::SourceMode::Real;
@@ -80,6 +90,10 @@ private:
 
   std::string device_name_;
   uint32_t baud_rate_ = 921600;
+
+  // 链路解包：分帧器 + 号段分派（0x05xx 上行 / 0x0001~0x0A06 裁判转发）
+  MinipcLink link_;
+  referee_comm::Receiver receiver_{link_};
 
   std::thread receive_thread_;
   std::atomic<bool> quit_ = false;
@@ -102,12 +116,17 @@ private:
   bool use_referee_system_ = false;
   int game_start_progress_threshold_ = 4;
 
-  bool read(uint8_t * buffer, size_t size);
+  // 0x0503 的 yaw_angle 是 IMU（相机/枪管）世界系 yaw。双yaw 平台上 IMU 装在小yaw 板，
+  // 因此 小yaw 世界角 = yaw_angle，大yaw 世界角 = yaw_angle - upper_yaw_angle。
+  // 若实车把 IMU 装在大yaw 轴上，把 gimbal_imu_axis 配成 lower 即可互换。
+  bool imu_on_upper_axis_ = true;
+
+  uint32_t last_uptime_ms_ = 0;
+  bool config_logged_ = false;
+  bool first_imu_received_ = false;
+
   void receiveThread();
   void reconnect();
-  void handleGameStatus(const GameStatusPacket & pkt);
-  void handleGameRobotStatus(const GameRobotStatusPacket & pkt);
-  void handleBass(const bassPacket & pkt);
 };
 
 }  // namespace io
