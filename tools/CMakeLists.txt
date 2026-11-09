@@ -13,5 +13,4 @@ add_library(tools OBJECT
     logger.cpp
     pid.cpp
     crc.cpp
-    tuning.cpp
 )

@@ -48,6 +48,12 @@ struct TargetConfig
   double acc_damping = 0.90;  // M2 加速度衰减系数
   double damping_tau = 0.30;  // M3 平移速度衰减时间常数
 
+  // 半径 / 半径差物理限幅（每次 update 之后、IMM 融合之前逐个模型夹住）。
+  // 单板、画面偏暗或远距离时 r 会被观测推飞，一旦越出 diverged() 的区间就瞬间判丢。
+  double r_clamp_min = 0.10;  // r 下限 (m)，标准车半径约 0.2m
+  double r_clamp_max = 0.40;  // r 上限 (m)
+  double l_clamp = 0.04;      // |r2 - r1| 上限 (m)，保证 r+l 也不越界
+
   double pi_diag = 0.90;  // 模型保持概率
   double pi_off = 0.05;   // 模型跳转概率，需满足 pi_diag + 2*pi_off = 1
   std::array<double, 3> mu0{{0.8, 0.15, 0.05}};

@@ -136,7 +136,9 @@ graph LR
 | `first_tolerance` / `second_tolerance` / `judge_distance` | `shooter.cpp:13-15`、`27-31` | 开火角度容差与远近判定 | 同名字段 |
 | `auto_fire` | `shooter.cpp:16` | 是否由视觉控制开火 | 同名字段 |
 
-配置文件位置（哨兵）：`configs/sentry_example.yaml:223-241`，虚拟哨兵 `configs/sentry_virtual.yaml:172-192`。
+配置文件位置（哨兵）：Aimer / Shooter 参数在 `configs/sentry_example.yaml` 的
+`# ----- 瞄准器 (Aimer)` 与 `# ----- 射手 (Shooter)` 两段；卡尔曼 / 跟踪器参数**不在主配置里**，
+统一在同目录的 `configs/IMM.yaml`（旧的 `tuning:` 段已删除，它从来没有被任何代码读取）。
 
 ---
 

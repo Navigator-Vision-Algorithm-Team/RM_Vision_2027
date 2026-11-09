@@ -105,6 +105,28 @@
 - **调小**：静止判定更硬，但拖累平移跟踪。
 - 建议范围 **0.2 ~ 0.5 秒**。
 
+### `motion.r_clamp_min` / `motion.r_clamp_max` / `motion.l_clamp` —— 半径物理限幅
+
+当前 **0.10 / 0.40 / 0.04**（米）。
+
+每次 `update` 之后、IMM 融合之前，对三个模型的 `r` 与 `l` 逐个 `clamp`：
+
+```cpp
+ekf_[j].x[8] = std::clamp(ekf_[j].x[8], r_clamp_min, r_clamp_max);  // r
+ekf_[j].x[9] = std::clamp(ekf_[j].x[9], -l_clamp, l_clamp);         // l = r2 - r1
+```
+
+原因：`r` / `l` **没有直接观测**，只靠多帧观测间接收敛。单板、画面偏暗或远距离
+（PnP 深度噪声大）时 `r` 会被观测推飞，一旦越出 `diverged()` 的判据
+（`r ∈ (0.05, 0.5)` 且 `r + l ∈ (0.05, 0.5)`，见 `target.cpp` 的 `Target::diverged()`）
+就立刻判 `lost`，外部表现是「Foxglove 里明明有框，追踪却突然断了」。
+
+- `r_clamp_min` / `r_clamp_max`：标准车半径约 **0.2 m**，上下限只用来兜住异常值，
+  不要收得比真实半径还窄，否则转弯时会被硬夹出偏差。
+- `l_clamp`：必须满足 `r_clamp_min − l_clamp > 0.05`，否则 `r + l` 仍可能跌破
+  `diverged()` 的下限。默认 0.10 − 0.04 = 0.06 满足该条件。
+- 因为融合是权重和为 1 的凸组合，逐模型夹住后 `x_fused_` 的 `r` / `l` 自然也在区间内。
+
 ---
 
 ## 4. IMM 层参数
