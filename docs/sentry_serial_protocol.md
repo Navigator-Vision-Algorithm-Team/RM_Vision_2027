@@ -28,6 +28,14 @@
 > `pitch = pitch_angle`，`roll = roll_angle`。
 > `reset_pending()` 改为「0x0500 的 `uptime_ms` 回落」即 MCU 重启。
 >
+> **已接入的业务语义**
+> - 敌我颜色：`0x0201.robot_id`（红方 1~11，蓝方 101~111；3/103 步兵，7/107 哨兵）→
+>   `SerialBoard::own_team_red()` → 取反作为敌人颜色，覆盖配置里的 `enemy_color`
+>   （`Tracker::set_enemy_color` / `Decider::set_enemy_color`）。拿不到 robot_id 时仍用配置值。
+> - 热量保护：`0x0202.shooter_17mm_barrel_heat` + `0x0201.shooter_barrel_heat_limit` →
+>   `SerialBoard::can_shoot()`：热量到 `limit - heat_stop_margin` 停止开火，
+>   回落到 `limit - 2*heat_stop_margin` 自动恢复（只掐 `shoot` 位，跟瞄照常）。
+>
 > §2 的帧头 / CRC 规则与 §4 之后的下行（0x0402 / 0x0405）**保持不变**。
 
 ---

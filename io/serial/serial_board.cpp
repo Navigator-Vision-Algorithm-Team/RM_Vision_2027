@@ -24,6 +24,9 @@ SerialBoard::SerialBoard(const std::string & config_path)
   bullet_speed = yaml["bullet_speed"].as<double>(28.0);
   use_referee_system_ = yaml["use_referee_system"].as<bool>(false);
   game_start_progress_threshold_ = yaml["game_start_progress_threshold"].as<int>(4);
+  // 到热量上限前 heat_stop_margin 就停火；回落到 limit - 2*margin 后恢复。
+  // 17mm 单发热量约 10，默认 10 即"再打一发就顶到上限"时收手。
+  heat_stop_margin_ = yaml["heat_stop_margin"].as<int>(10);
 
   // 0x0503 的 yaw_angle 是 IMU 世界系 yaw。哨兵的双yaw 平台把 IMU 装在小yaw（相机）板上，
   // 因此默认 upper；若实车 IMU 在大yaw 轴上，配成 lower。
@@ -298,6 +301,9 @@ void SerialBoard::on_frame(uint16_t cmd_id)
     case v2027::ROBOT_STATUS:
       handle_robot_status(link_.referee.robot_status);
       break;
+    case v2027::POWER_HEAT_DATA:
+      handle_power_heat(link_.referee.power_heat_data);
+      break;
     default:
       // 其余上行/转发帧已经解到 link_ 里，业务侧需要时直接读，不在这里做副作用
       break;
@@ -409,10 +415,102 @@ void SerialBoard::handle_robot_status(const referee_comm::v2027::robot_status_t 
   rs.mains_power_chassis = pkt.power_management_chassis_output != 0;
   rs.mains_power_shooter = pkt.power_management_shooter_output != 0;
 
+  bool new_team = false;
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
+    if (robot_id_ != pkt.robot_id) {
+      robot_id_ = pkt.robot_id;
+      new_team = true;
+    }
+    heat_limit_ = pkt.shooter_barrel_heat_limit;
     robot_status_ = rs;
   }
+
+  if (new_team) {
+    // 红方 1~11，蓝方 101~111（蓝方 = 红方 + 100），2/102 为保留位
+    if (referee_comm::v2027::IsValidId(robot_id_)) {
+      const bool own_red = referee_comm::v2027::IsRedId(robot_id_);
+      tools::logger()->info(
+        "[SerialBoard] 机器人 ID = {}（{}方{}）-> 敌人{}方（enemy_color 配置值仅作兜底）",
+        robot_id_, own_red ? "红" : "蓝", referee_comm::v2027::RobotRoleName(robot_id_),
+        own_red ? "蓝" : "红");
+    } else if (robot_id_ != 0) {
+      tools::logger()->warn(
+        "[SerialBoard] 收到非法 robot_id={}（应为红 1~11 / 蓝 101~111），敌我颜色继续用配置值",
+        robot_id_);
+    }
+  }
+
+  update_heat_gate();
+}
+
+void SerialBoard::handle_power_heat(const referee_comm::v2027::power_heat_data_t & pkt)
+{
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    barrel_heat_ = pkt.shooter_17mm_barrel_heat;
+  }
+  update_heat_gate();
+}
+
+void SerialBoard::update_heat_gate()
+{
+  const int limit = heat_limit_;
+  const int heat = barrel_heat_;
+
+  // 没有裁判数据（limit=0）时不限火，避免离线/仿真时开不出枪
+  if (limit <= 0) {
+    if (heat_blocked_.exchange(false))
+      tools::logger()->info("[SerialBoard] 热量门限解除（无热量上限数据）");
+    return;
+  }
+
+  const int margin = std::max(0, heat_stop_margin_);
+  const int stop_at = limit - margin;
+  const int resume_at = std::max(0, limit - 2 * margin);
+
+  if (!heat_blocked_.load() && heat >= stop_at) {
+    heat_blocked_.store(true);
+    tools::logger()->info(
+      "[SerialBoard] 枪管热量 {}/{} 已达停火线 {}，暂停开火（冷却 {} 后恢复）", heat, limit,
+      stop_at, resume_at);
+  } else if (heat_blocked_.load() && heat <= resume_at) {
+    heat_blocked_.store(false);
+    tools::logger()->info(
+      "[SerialBoard] 枪管热量 {}/{} 已回落到 {} 以下，恢复开火", heat, limit, resume_at);
+  }
+}
+
+uint8_t SerialBoard::robot_id() const
+{
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  return robot_id_;
+}
+
+std::optional<bool> SerialBoard::own_team_red() const
+{
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  // 红方 1~11、蓝方 101~111；0 与越界值一律当作"未知"，交给调用方用配置兜底
+  if (referee_comm::v2027::IsRedId(robot_id_)) return true;
+  if (referee_comm::v2027::IsBlueId(robot_id_)) return false;
+  return std::nullopt;
+}
+
+uint16_t SerialBoard::barrel_heat() const
+{
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  return barrel_heat_;
+}
+
+uint16_t SerialBoard::heat_limit() const
+{
+  std::lock_guard<std::mutex> lock(status_mutex_);
+  return heat_limit_;
+}
+
+bool SerialBoard::can_shoot() const
+{
+  return !heat_blocked_.load();
 }
 
 void SerialBoard::receiveThread()

@@ -275,6 +275,15 @@ void VirtualMcu::emit_referee(const Sink & sink)
   n = referee_comm::Receiver::Encode(
     frame, sizeof(frame), seq_++, referee_comm::v2027::ROBOT_STATUS, &robot, sizeof(robot));
   if (n > 0) sink(frame, n);
+
+  // 0x0202 热量/缓冲能量：heat 可配，用来验证上位机的热量保护
+  referee_comm::v2027::power_heat_data_t heat{};
+  heat.buffer_energy = 60;
+  heat.shooter_17mm_barrel_heat = cfg_.heat;
+  heat.shooter_42mm_barrel_heat = 0;
+  n = referee_comm::Receiver::Encode(
+    frame, sizeof(frame), seq_++, referee_comm::v2027::POWER_HEAT_DATA, &heat, sizeof(heat));
+  if (n > 0) sink(frame, n);
 }
 
 void VirtualMcu::maybe_log()
@@ -368,7 +377,7 @@ IByteTransport::Ptr make_transport(const SimConfig & config)
       tools::logger()->info(
         "[SOURCE] Serial transport = FAKE/INTERNAL VirtualMcu (gimbal={}Hz)", s.imu_hz);
       return std::make_unique<VirtualSerialTransport>(
-        std::make_unique<VirtualMcu>(s, config.fault, config.seed));
+        std::make_unique<VirtualMcu>(s, config.fault, config.seed, s.robot_id));
 
     case SourceMode::Replay:
       tools::logger()->info("[SOURCE] Serial transport = REPLAY ({})", s.replay_file);

@@ -6,6 +6,8 @@
 
 # ----- 敌方颜色 -----
 # 可选值: "red" 或 "blue"
+# 仅在还没收到裁判 0x0201（robot_id）时生效：拿到 robot_id 后由 SerialBoard 自动判定己方颜色
+# 并取反作为敌人颜色（红方 1~11，蓝方 101~111；3/103 步兵，7/107 哨兵）覆盖本项。
 enemy_color: "red"
 
 # ----- 串口通信 (SerialBoard) -----
@@ -16,6 +18,9 @@ bullet_speed: 28.0                   # 默认弹速 (m/s), 会被下位机数据
 # 因此默认按 upper 解释，大yaw = yaw_angle - upper_yaw_angle（小yaw 关节角）。
 # 若实车把 IMU 装在大yaw 轴上，改成 lower：小yaw = yaw_angle + upper_yaw_angle。
 # gimbal_imu_axis: upper
+# 热量保护：枪管热量（裁判 0x0202）到达 上限(0x0201) - heat_stop_margin 时停止开火，
+# 回落到 上限 - 2*heat_stop_margin 后自动恢复。17mm 单发约 10 热量，默认 10 = 再打一发就顶线。
+# heat_stop_margin: 10
 
 # ----- 主相机 (sursign="main") -----
 # camera_name 决定相机类型: "hikrobot" | "mindvision" | "Usbcamera"

@@ -203,10 +203,15 @@ struct SerialSourceConfig
   //   external=true  → 使用外部进程（Python 虚拟下位机）创建的 pty，port 指向该 pts
   //   external=false → 使用 C++ 内置虚拟下位机生成真实协议字节
   bool external = false;
-  double imu_hz = 500.0;        // 四元数(0x502)发送频率
-  double chassis_hz = 50.0;     // 底盘速度(0x503)频率
-  double status_hz = 1.0;       // 比赛状态(0x0001)频率
-  double reset_period_s = 0.0;  // 复位信号周期(0=不注入)
+  double imu_hz = 500.0;        // 云台姿态(0x0503)发送频率
+  double chassis_hz = 50.0;     // 底盘反馈(0x0502)频率
+  double status_hz = 1.0;       // 裁判转发帧(0x0001/0x0201)频率
+  double reset_period_s = 0.0;  // MCU 重启(uptime 回落)周期(0=不注入)
+  // fake 模式下 0x0201 上报的 robot_id：红方 1~11，蓝方 101~111（3/103 步兵，7/107 哨兵）。
+  // 0 = 不模拟裁判身份，上位机回退到配置里的 enemy_color。
+  uint8_t robot_id = 0;
+  // fake 模式下 0x0202 上报的 17mm 当前热量，用来验证热量保护（上限取自 0x0201）
+  uint16_t heat = 30;
   std::string replay_file;      // replay 模式：串口原始字节记录文件
 
   static SerialSourceConfig load(const YAML::Node & yaml, SourceMode fallback)
@@ -220,6 +225,8 @@ struct SerialSourceConfig
     c.chassis_hz = node_as<double>(yaml, "fake_chassis_hz", c.chassis_hz);
     c.status_hz = node_as<double>(yaml, "fake_status_hz", c.status_hz);
     c.reset_period_s = node_as<double>(yaml, "fake_reset_period_s", c.reset_period_s);
+    c.robot_id = static_cast<uint8_t>(node_as<int>(yaml, "fake_robot_id", c.robot_id));
+    c.heat = static_cast<uint16_t>(node_as<int>(yaml, "fake_heat", c.heat));
     c.replay_file = node_as<std::string>(
       yaml, "serial_replay_file", std::string("logs/virtual_session/serial.bin"));
     return c;

@@ -45,6 +45,86 @@ enum Cmd : uint16_t
   SENTRY_INFO = 0x020D,
 };
 
+/**
+ * @brief 机器人 ID（`0x0201.robot_id`，uint8_t）。
+ * @details 依据《RoboMaster 2027 机甲大师高校系列赛通信协议》：红方 1~11，蓝方 101~111
+ * （蓝方 ID = 红方 ID + 100）。2/102 为保留位。
+ */
+enum RobotId : uint8_t
+{
+  RED_HEAVY = 1,         ///< 红方重装机器人
+  RED_RESERVED = 2,      ///< 红方保留位
+  RED_INFANTRY_3 = 3,    ///< 红方 3 号步兵
+  RED_INFANTRY_4 = 4,    ///< 红方 4 号步兵
+  RED_INFANTRY_5 = 5,    ///< 红方 5 号步兵
+  RED_AERIAL = 6,        ///< 红方空中系统
+  RED_SENTRY = 7,        ///< 红方哨兵机器人
+  RED_DART = 8,          ///< 红方飞镖
+  RED_RADAR = 9,         ///< 红方雷达
+  RED_BASE = 10,         ///< 红方基地
+  RED_OUTPOST_R = 11,    ///< R 前哨
+
+  BLUE_HEAVY = 101,      ///< 蓝方重装机器人
+  BLUE_RESERVED = 102,   ///< 蓝方保留位
+  BLUE_INFANTRY_3 = 103, ///< 蓝方 3 号步兵
+  BLUE_INFANTRY_4 = 104, ///< 蓝方 4 号步兵
+  BLUE_INFANTRY_5 = 105, ///< 蓝方 5 号步兵
+  BLUE_AERIAL = 106,     ///< 蓝方空中系统
+  BLUE_SENTRY = 107,     ///< 蓝方哨兵机器人
+  BLUE_DART = 108,       ///< 蓝方飞镖
+  BLUE_RADAR = 109,      ///< 蓝方雷达
+  BLUE_BASE = 110,       ///< 蓝方基地
+  BLUE_OUTPOST_B = 111,  ///< B 前哨
+};
+
+/** @brief 红方 ID 上界（1~11 为红方）。 */
+constexpr uint8_t ID_RED_MAX = 11;
+/** @brief 蓝方 ID = 红方 ID + 100（101~111 为蓝方）。 */
+constexpr uint8_t ID_BLUE_OFFSET = 100;
+
+/** @brief 是否红方 ID（1~11）。 */
+constexpr bool IsRedId(uint8_t id) { return id >= 1 && id <= ID_RED_MAX; }
+/** @brief 是否蓝方 ID（101~111）。 */
+constexpr bool IsBlueId(uint8_t id)
+{
+  return id >= ID_BLUE_OFFSET + 1 && id <= ID_BLUE_OFFSET + ID_RED_MAX;
+}
+/** @brief 是否合法的机器人 ID（0 表示未收到）。 */
+constexpr bool IsValidId(uint8_t id) { return IsRedId(id) || IsBlueId(id); }
+/** @brief 换成对应的红方编号（107 -> 7），便于按兵种查表。 */
+constexpr uint8_t RedEquivalentId(uint8_t id) { return IsBlueId(id) ? id - ID_BLUE_OFFSET : id; }
+
+/** @brief 兵种名（红蓝共用，按红方编号），用于日志。 */
+inline const char * RobotRoleName(uint8_t id)
+{
+  switch (RedEquivalentId(id)) {
+    case RED_HEAVY:
+      return "重装";
+    case RED_RESERVED:
+      return "保留位";
+    case RED_INFANTRY_3:
+      return "3号步兵";
+    case RED_INFANTRY_4:
+      return "4号步兵";
+    case RED_INFANTRY_5:
+      return "5号步兵";
+    case RED_AERIAL:
+      return "空中系统";
+    case RED_SENTRY:
+      return "哨兵";
+    case RED_DART:
+      return "飞镖";
+    case RED_RADAR:
+      return "雷达";
+    case RED_BASE:
+      return "基地";
+    case RED_OUTPOST_R:
+      return "前哨";
+    default:
+      return "未知";
+  }
+}
+
 /* ===== 0x0001 比赛状态 11 字节 1Hz ===== */
 typedef struct
 {

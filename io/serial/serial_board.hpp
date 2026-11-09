@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -64,6 +65,23 @@ public:
   RobotStatus robot_status() const;
   bool is_game_started() const;
 
+  // 自己的机器人 ID（裁判 0x0201 的 robot_id，uint8_t）。
+  // 红方 1~11，蓝方 101~111（蓝方 = 红方 + 100），2/102 保留位；0 表示还没收到。
+  uint8_t robot_id() const;
+
+  // 己方是否红方。红方 1~11、蓝方 101~111，ID 非法/未收到时返回 nullopt，
+  // 调用方应回退到配置里的 enemy_color。
+  std::optional<bool> own_team_red() const;
+
+  // 枪管热量：当前值来自裁判 0x0202 的 shooter_17mm_barrel_heat，
+  // 上限来自 0x0201 的 shooter_barrel_heat_limit。
+  uint16_t barrel_heat() const;
+  uint16_t heat_limit() const;
+
+  // 是否允许开火：热量接近上限时提前停火（提前量 heat_stop_margin），
+  // 回落到 limit - 2*margin 后自动恢复；没有裁判数据（limit 为 0）时恒为 true。
+  bool can_shoot() const;
+
   // MCU 重启信号（0x0500 的 uptime_ms 回落，等价旧 0x505 的 reset 位）
   bool reset_pending();
 
@@ -82,6 +100,9 @@ private:
   void handle_gimbal(const host_comm::host_gimbal_status_t & pkt);
   void handle_game_status(const referee_comm::v2027::game_status_t & pkt);
   void handle_robot_status(const referee_comm::v2027::robot_status_t & pkt);
+  void handle_power_heat(const referee_comm::v2027::power_heat_data_t & pkt);
+  // 热量门限状态机：接近上限锁定开火，回落后解锁（仅在接收线程内调用）
+  void update_heat_gate();
 
   // 数据源：真实串口 / 内置虚拟下位机 / 原始字节回放，由配置决定，解析逻辑完全一致
   sim::IByteTransport::Ptr transport_;
@@ -115,6 +136,13 @@ private:
   std::atomic<bool> reset_pending_{false};
   bool use_referee_system_ = false;
   int game_start_progress_threshold_ = 4;
+
+  // 裁判 0x0201 / 0x0202 的机器人身份与枪管热量（接收线程写，业务线程读 status_mutex_）
+  uint8_t robot_id_ = 0;  // 红方 1~11，蓝方 101~111；0 = 未知
+  uint16_t barrel_heat_ = 0;
+  uint16_t heat_limit_ = 0;
+  int heat_stop_margin_ = 10;           // 停火提前量（热量单位），配置项 heat_stop_margin
+  std::atomic<bool> heat_blocked_{false};  // true = 热量过高，暂停开火
 
   // 0x0503 的 yaw_angle 是 IMU（相机/枪管）世界系 yaw。双yaw 平台上 IMU 装在小yaw 板，
   // 因此 小yaw 世界角 = yaw_angle，大yaw 世界角 = yaw_angle - upper_yaw_angle。

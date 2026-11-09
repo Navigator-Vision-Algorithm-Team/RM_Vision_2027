@@ -180,6 +180,16 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
+  // 敌我颜色：以裁判 0x0201 的 robot_id 为准（红方 1~11，蓝方 101~111），敌人颜色取反。
+  // 还没收到裁判帧（或没接裁判系统）时 own_team_red() 为空，继续用配置里的 enemy_color。
+  auto refresh_enemy_color = [&]() {
+    const auto own_red = serial_board.own_team_red();
+    if (!own_red) return;
+    const auto enemy_color = *own_red ? auto_aim::blue : auto_aim::red;
+    tracker.set_enemy_color(enemy_color);
+    decider.set_enemy_color(enemy_color);
+  };
+
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程
   std::vector<auto_aim::multithread::CameraJob> camera_jobs;
   {
@@ -348,6 +358,8 @@ int main(int argc, char * argv[])
                   command.shoot, spin_when_no_omni ? "spin" : "hold", ""});
     } else {
       //这是主相机的处理，立马处理的目标
+      // 先按裁判给的身份刷新敌我颜色，再做过滤
+      refresh_enemy_color();
       // 过滤敌人
       decider.armor_filter(armors);
 
@@ -400,7 +412,8 @@ int main(int argc, char * argv[])
         has_omni_cache = false;
       }
 
-      command.shoot = shooter.shoot(command, aimer, target, gimbal_pos);
+      // 热量保护：枪管热量到 0x0201 上限前 heat_stop_margin 就停止开火
+      command.shoot = shooter.shoot(command, aimer, target, gimbal_pos) && serial_board.can_shoot();
 
       // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
       auto_aim::DebugStatus status{
