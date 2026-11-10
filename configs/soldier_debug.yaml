@@ -1,0 +1,119 @@
+# =============================================================================
+#  【调试配置】由 configs/soldier.yaml 复制，唯一区别是打开了 debug_ros2。
+#  用法：
+#    ros2 launch foxglove_bridge foxglove_bridge_launch.xml   # 板子上起桥接
+#    ./build/soldier configs/soldier_debug.yaml
+#    Foxglove 连 ws://<板子IP>:8765，看 /sp_debug/soldier/*
+#  正式上场请用 configs/soldier.yaml（调试流保持关闭）。
+# =============================================================================
+
+# soldier.cpp 专用配置：YOLO 检测 + Tracker/EKF 跟踪 + Aimer 预测瞄准
+# 键集合已按代码逐一核对，缺键会导致 tools::read / yaml .as<T>() 直接退出或抛异常
+# 不需要 shooter / planner / buff 相关键
+# can用
+
+#####-----兵种与敌我-----#####
+# soldier 主循环按 0x513.robot_id 动态选敌方颜色；这里的键仅供 Tracker 构造兼容读取，
+# 实际调用 tracker.track(..., false) 会跳过它的静态颜色过滤。
+enemy_color: "red"
+# enemy_color: "blue"
+
+#####-----YOLO-----#####
+yolo_name: yolov5
+classify_model: assets/tiny_resnet.onnx  # YOLOV5 内部 Detector->Classifier 无条件加载，必填
+yolov5_model_path: assets/yolov5.xml
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
+min_confidence: 0.8                      # YOLO 后处理与传统 Detector 共用该键
+use_traditional: true                    # 传统方法二次矫正 YOLO 角点，影响 PnP 精度
+
+#####-----ROI-----#####
+# 即使 use_roi 为 false 也必须保留本块，代码无存在性判断
+roi:
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+use_roi: false
+
+#####-----传统方法参数（Detector 构造函数无条件读取，全部必填）-----#####
+threshold: 150            # 二值化阈值，仅传统方法使用
+max_angle_error: 45       # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+
+#####-----相机（当前采用 standard4 配置，后续自行修改）-----#####
+# TODO: 与本车实际相机核对。hikrobot 只读 camera_name / exposure_ms / gain，
+#       vid_pid 仅在 mindvision 下生效；换 mindvision 时注释下面三行并启用下方注释块
+camera_name: "hikrobot"
+exposure_ms: 2
+gain: 16
+# camera_name: "mindvision"
+# exposure_ms: 8
+# gamma: 0.6
+# vid_pid: "f622:d13a"
+
+#####-----串口（SerialBoard 构造时强制读取，缺任一键会直接退出）-----#####
+com_port: "/dev/gimbal"
+baud_rate: 921600
+bullet_speed: 28.0
+use_referee_system: false
+
+#####-----步兵 Mini-PC ↔ C 板 CAN 协议-----#####
+can_interface: "can0"
+# CAN ID、DLC、缩放和超时固定按 io/can/soldier_can_config.hpp 中的电控协议实现。
+# pitch_raw 与算法 pitch 之间必须通过实车标定零点和方向；未标定时程序不发送跟踪命令。
+pitch_encoder_zero_rad: 0.0
+pitch_encoder_direction: 1       # 只允许 +1 或 -1；需按编码器正方向标定
+pitch_encoder_calibrated: false # 标定后才设为 true
+
+#####-----标定参数（当前采用 standard4 配置，决定 PnP 精度，务必替换为实车标定值）-----#####
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+# 重投影误差: 0.3145px
+camera_matrix: [1851.7070167840545, 0, 721.12585328714192, 0, 1851.8175594364079, 571.69879709276688, 0, 0, 1]
+distort_coeffs: [-0.093662536083526302, 0.18945726820633155, -0.00040424349861928674, -0.0040568403852123142, 0]
+
+# 平行安装：相机系 x右/y下/z前 -> 执行机构系 x前/y左/z上。
+# 执行轴为瞄准原点；相机在其左侧 77.64 mm、上方约 5 mm，前后偏移暂按 0。
+# p_gimbal = R_camera2gimbal * p_camera + t_camera2gimbal，单位 m。
+R_camera2gimbal: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+t_camera2gimbal: [0.0, 0.07764, 0.005]
+# 无有效目标时准星使用的参考前向距离 (m)；跟踪时按预测目标深度更新。
+# 准星表示执行轴的几何投影，弹道下坠仍由 Aimer 单独计算。
+reticle_distance_m: 3.0
+
+#####-----目标跟踪（Tracker + EKF）-----#####
+min_detect_count: 5                 # 连续检测帧数达到此值后进入 tracking
+max_temp_lost_count: 25             # 普通目标短暂丢失容忍帧数
+outpost_max_temp_lost_count: 75     # 前哨站短暂丢失容忍帧数
+
+#####-----预测瞄准（Aimer）-----#####
+# 偏置先设为 0；确认预测链路和坐标方向后，再用实车标定调整。
+yaw_offset: 0.0                     # yaw 静态补偿 (degree)
+pitch_offset: 0.0                   # pitch 静态补偿 (degree)
+comming_angle: 60                   # Aimer 必需参数 (degree)
+leaving_angle: 20                   # Aimer 必需参数 (degree)
+decision_speed: 10                  # 角速度阈值 (rad/s)，选择高速/低速延迟
+high_speed_delay_time: 0.026        # 高速状态下额外延迟 (s)，沿用哨兵示例值
+low_speed_delay_time: 0.010         # 低速状态下额外延迟 (s)，沿用哨兵示例值
+
+#####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
+# 整个 debug_ros2 段可以整段删除：没有这一段就不启动调试数据流。
+# 话题（tag = soldier）：/sp_debug/soldier/{image,image_raw,yolo_input,status,ekf_convergence,gimbal_pose,target_pose}
+# 用法：板子上起桥接 `ros2 launch foxglove_bridge foxglove_bridge_launch.xml`，
+#      桌面 Foxglove Studio -> Open connection -> Foxglove WebSocket -> ws://<板子IP>:8765
+debug_ros2:
+  enable: true             # 调试流总开关；正式配置 soldier.yaml 里保持注释
+  namespace: "/sp_debug"   # 话题前缀 -> /sp_debug/soldier/*
+  image_hz: 15             # 图像推送上限，0 = 每帧都推（带宽会明显变大）
+  jpeg_quality: 75         # 1-100，越小带宽越低
+  publish_raw: false       # 是否额外推送相机原图
+  publish_yolo_input: true # 是否推送 YOLO 预处理后的输入图（ROI + letterbox）
+  # PnP 一级校验：在 image 话题的图上叠加「检测点 vs 重投影点 + 残差 + 板面三轴」。
+  # 只依赖上面的 camera_matrix / distort_coeffs；内参缺失时自动不绘制。
+  pnp_check: true
