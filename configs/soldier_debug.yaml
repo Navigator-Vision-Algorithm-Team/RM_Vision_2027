@@ -63,8 +63,8 @@ can_channel: 0                  # 达妙 USB-CAN 通道；经典 CAN 2.0、1 Mbp
 # CAN ID、DLC、缩放和超时固定按 io/can/soldier_can_config.hpp 中的电控协议实现。
 # pitch_raw 与算法 pitch 之间必须通过实车标定零点和方向；未标定时程序不发送跟踪命令。
 pitch_encoder_zero_rad: 0.0
-pitch_encoder_direction: 1       # 只允许 +1 或 -1；需按编码器正方向标定
-pitch_encoder_calibrated: false # 标定后才设为 true
+pitch_encoder_direction: -1       # 只允许 +1 或 -1；需按编码器正方向标定
+pitch_encoder_calibrated: true # 标定后才设为 true
 
 #####-----标定参数（主相机 DA8419516，1440x1080）-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
