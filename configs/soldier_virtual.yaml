@@ -2,8 +2,7 @@
 #  soldier 虚拟输入配置：无相机、无下位机也能跑通整条自瞄链路
 #
 #  用法：
-#    ./build/soldier        configs/soldier_virtual.yaml
-#    ./build/tests/soldier_debug configs/soldier_virtual.yaml
+#    ./build/soldier configs/soldier_virtual.yaml
 #
 #  与 configs/soldier.yaml 的唯一区别是数据源：相机换成伪相机、串口换成内置虚拟下位机，
 #  业务参数（YOLO / Tracker / Aimer / 标定）完全相同，所以这里跑通即等价于实车流程跑通。
@@ -129,7 +128,7 @@ record:
   save_images: true
 
 #####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
-# src/soldier.cpp 和 tests/soldier_debug.cpp 均读取本段；串口 fake 模式使用 soldier_debug。
+# src/soldier.cpp 读取本段；串口 fake 模式与 CAN 无关，真车仍走 SoldierCanBoard。
 # 正式 soldier 使用 CAN 状态，不因本文件的 serial_mode: fake 而切换到虚拟 CAN。
 # 虚拟跑时打开它，可以在没有车的情况下看检测框 / EKF 遥测 / 预测命中点。
 #debug_ros2:

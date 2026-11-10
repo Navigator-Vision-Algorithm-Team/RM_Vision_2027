@@ -38,9 +38,8 @@ if(NOT (ament_cmake_FOUND AND rclcpp_FOUND AND sensor_msgs_FOUND))
     return()
 endif()
 
-# 步兵调试入口：YOLO 检测 + PnP 位姿定位，默认配置 configs/soldier.yaml
-add_executable(soldier_debug soldier_debug.cpp)
-target_link_libraries(soldier_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
+# 步兵没有独立调试入口：src/soldier.cpp 已内置 DebugStream，
+# 通过配置里的 debug_ros2 段开关即可，无需另起进程。
 
 # 哨兵调试入口：多线程自瞄（主相机 + 全向），默认配置 configs/sentry.yaml
 add_executable(sentry_multithread_debug sentry_multithread_debug.cpp)
@@ -52,4 +51,4 @@ target_link_libraries(
 add_executable(yolodebug yolodebug.cpp)
 target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 
-install(TARGETS soldier_debug sentry_multithread_debug yolodebug RUNTIME DESTINATION bin)
+install(TARGETS sentry_multithread_debug yolodebug RUNTIME DESTINATION bin)
