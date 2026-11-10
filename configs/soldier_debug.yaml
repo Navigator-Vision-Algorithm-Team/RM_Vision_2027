@@ -1,5 +1,6 @@
 # =============================================================================
-#  【调试配置】由 configs/soldier.yaml 复制，唯一区别是打开了 debug_ros2。
+#  【调试配置】与正式步兵使用同一个 soldier 程序和达妙 CAN 2.0 链路。
+#  编译前加载小电脑上的 ROS 2 环境，再按 io/can/README.md 配置达妙 SDK。
 #  用法：
 #    ros2 launch foxglove_bridge foxglove_bridge_launch.xml   # 板子上起桥接
 #    ./build/soldier configs/soldier_debug.yaml
@@ -10,7 +11,6 @@
 # soldier.cpp 专用配置：YOLO 检测 + Tracker/EKF 跟踪 + Aimer 预测瞄准
 # 键集合已按代码逐一核对，缺键会导致 tools::read / yaml .as<T>() 直接退出或抛异常
 # 不需要 shooter / planner / buff 相关键
-# can用
 
 #####-----兵种与敌我-----#####
 # soldier 主循环按 0x513.robot_id 动态选敌方颜色；这里的键仅供 Tracker 构造兼容读取，
@@ -57,14 +57,8 @@ gain: 16
 # gamma: 0.6
 # vid_pid: "f622:d13a"
 
-#####-----串口（SerialBoard 构造时强制读取，缺任一键会直接退出）-----#####
-com_port: "/dev/gimbal"
-baud_rate: 921600
-bullet_speed: 28.0
-use_referee_system: false
-
 #####-----步兵 Mini-PC ↔ C 板 CAN 协议-----#####
-can_interface: "can0"
+can_channel: 0                  # 达妙 USB-CAN 通道；经典 CAN 2.0、1 Mbps 由程序固定设置
 # CAN ID、DLC、缩放和超时固定按 io/can/soldier_can_config.hpp 中的电控协议实现。
 # pitch_raw 与算法 pitch 之间必须通过实车标定零点和方向；未标定时程序不发送跟踪命令。
 pitch_encoder_zero_rad: 0.0

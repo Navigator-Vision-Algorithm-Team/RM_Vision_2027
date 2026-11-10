@@ -150,12 +150,17 @@ cmake -S . -B build -DOpenVINO_DIR=/path/to/openvino/runtime/cmake
 
 启动前请先核对对应 YAML 文件中的相机型号、相机参数、串口设备路径、波特率、敌方颜色和本车标定数据。仓库配置中的示例参数不一定适用于你的车辆。
 
+步兵使用达妙 USB-CAN SDK，构建时需要指定 SDK 路径，见 [步兵 CAN 构建步骤](io/can/README.md#在小电脑上构建步兵程序)。
+
 ```bash
 # 标准自瞄：需要匹配的相机、下位机和实车配置
 ./build/mt_standard configs/mtstandard.yaml
 
 # 步兵入口
 ./build/soldier configs/soldier.yaml
+
+# 步兵 Foxglove 调试：同一 CAN 2.0 入口，构建时需要 ROS 2
+./build/soldier configs/soldier_debug.yaml
 
 # 哨兵入口：仅在构建时检测到 ROS 2 依赖后可用
 ./build/sentry_multithread configs/sentry_example.yaml

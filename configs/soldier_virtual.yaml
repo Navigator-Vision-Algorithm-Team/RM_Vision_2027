@@ -84,13 +84,8 @@ fake_chassis_hz: 50.0            # 0x503 底盘帧率
 fake_status_hz: 1.0              # 0x0001 比赛状态帧率
 fake_reset_period_s: 0.0         # >0 时周期性注入复位信号，可用来验证 tracker.reset()
 
-#####-----CBoard（CAN id 当前采用 standard4 配置，后续自行修改）-----#####
-# TODO: 与主控固件核对。注意 mvs.yaml / mtstandard.yaml 用的是 0x01 / 0x110，
-#       send_canid 虽不发送指令，但 CBoard::read_yaml 仍强制读取
-quaternion_canid: 0x100
-bullet_speed_canid: 0x101
-send_canid: 0xff
-can_interface: "can0"
+#####-----步兵 Mini-PC ↔ C 板 CAN 协议-----#####
+can_channel: 0  # 仅相机等输入可模拟，步兵 CAN 仍使用达妙 USB-CAN 通道
 
 #####-----标定参数（当前采用 standard4 配置，决定 PnP 精度，务必替换为实车标定值）-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]

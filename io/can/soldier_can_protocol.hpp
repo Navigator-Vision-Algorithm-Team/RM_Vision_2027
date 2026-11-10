@@ -83,9 +83,8 @@ using Telemetry = std::variant<Pose, Chassis, RobotStatus, Heat>;
 // always encode zero angles and clear fire_advice, as required by the protocol.
 Payload encode_command(const Command & command);
 
-// Pass the complete SocketCAN can_id, including its flags, and the actual DLC.
-// Unsupported IDs, extended/remote/error frames, bad lengths and pose versions
-// return nullopt. Freshness, sample grouping and sequence ordering are caller state.
+// Pass the 11-bit identifier and payload of a classic CAN standard data frame.
+// Unsupported IDs, bad lengths and unsupported pose versions return nullopt.
 std::optional<Telemetry> decode_telemetry(
   std::uint32_t can_id, std::span<const std::uint8_t> payload);
 

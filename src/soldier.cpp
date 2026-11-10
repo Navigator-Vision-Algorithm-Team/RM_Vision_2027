@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <opencv2/opencv.hpp>
 #include <thread>
 
@@ -23,7 +24,7 @@ const std::string keys =
   "{help h usage ? |                      | 输出命令行参数说明}"
   "{@config-path   | configs/soldier.yaml | 位置参数，yaml配置文件路径 }";
 
-int main(int argc, char * argv[])
+int main(int argc, char * argv[]) try
 {
   cv::CommandLineParser cli(argc, argv, keys);
   auto config_path = cli.get<std::string>(0);
@@ -33,13 +34,6 @@ int main(int argc, char * argv[])
   }
 
   auto yaml = tools::load(config_path);
-
-  if (!yaml["can_interface"]) {
-    tools::logger()->error(
-      "[soldier] {} 缺少 CAN 接口配置，请设置 can_interface（例如 can0）",
-      config_path);
-    return 1;
-  }
 
   const double pitch_encoder_zero_rad = yaml["pitch_encoder_zero_rad"].as<double>(0.0);
   const int pitch_encoder_direction = yaml["pitch_encoder_direction"].as<int>(1);
@@ -53,8 +47,8 @@ int main(int argc, char * argv[])
       "[soldier] pitch encoder calibration is incomplete; tracking commands will stay idle");
   }
 
-  io::Camera camera(config_path);  // 不带 sursign：读取 camera_name / exposure_ms / gain
   io::SoldierCanBoard can_board(config_path);
+  io::Camera camera(config_path);  // 不带 sursign：读取 camera_name / exposure_ms / gain
 
   auto_aim::YOLO detector(config_path, false);
   auto_aim::Solver solver(config_path);
@@ -62,6 +56,12 @@ int main(int argc, char * argv[])
   auto_aim::Aimer aimer(config_path);
   // 可选调试流直接读取 CAN 主链路的同帧结果，避免另起串口调试入口比对姿态。
   auto_aim::DebugStream debug(config_path, "soldier");
+  if (const auto debug_yaml = yaml["debug_ros2"];
+      debug_yaml && debug_yaml["enable"].as<bool>(false) && !debug.enabled()) {
+    tools::logger()->error(
+      "[soldier] ROS 2 debug stream unavailable; check the startup log and the ROS 2 build environment");
+    return 1;
+  }
   // ROS2 初始化会注册信号处理器，Exiter 需在它之后构造。
   tools::Exiter exiter;
 
@@ -235,4 +235,9 @@ int main(int argc, char * argv[])
   }
 
   return 0;
+}
+catch (const std::exception & error)
+{
+  tools::logger()->error("[soldier] {}", error.what());
+  return 1;
 }

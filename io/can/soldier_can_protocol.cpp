@@ -68,8 +68,7 @@ Payload encode_command(const Command & command)
 std::optional<Telemetry> decode_telemetry(
   std::uint32_t can_id, std::span<const std::uint8_t> payload)
 {
-  // SocketCAN places EFF/RTR/ERR flags above the 11-bit standard identifier.
-  if (can_id > 0x7FF || payload.size() != 8) return std::nullopt;
+  if (can_id > config::kMaxStandardId || payload.size() != config::kPayloadSize) return std::nullopt;
   const auto sequence = payload[0];
   const auto flags = payload[1];
 

@@ -13,12 +13,8 @@
 
 #include "soldier_can_protocol.hpp"
 
-struct can_frame;
-
 namespace io
 {
-class SocketCAN;
-
 class SoldierCanBoard
 {
 public:
@@ -100,8 +96,7 @@ private:
   static bool forward(std::uint8_t previous, std::uint8_t next);
   void reset_locked();
   bool reference_valid(const PoseSample & reference, TimePoint now) const;
-  void callback(const can_frame & frame);
-  static std::string read_yaml(const std::string & config_path);
+  class DamiaoCan;
 
   Writer writer_;
   Now now_;
@@ -115,7 +110,7 @@ private:
   std::uint64_t session_ = 0;
   std::uint8_t next_sequence_ = 0;
   // 最先销毁传输层，确保接收线程退出时缓存和锁仍然有效。
-  std::shared_ptr<SocketCAN> can_;
+  std::shared_ptr<DamiaoCan> can_;
 };
 
 }  // namespace io

@@ -12,15 +12,42 @@
 | `soldier_can_config.hpp` | 协议 ID、版本、DLC 和 100ms 有效期等常量。 |
 | `soldier_can_protocol.hpp/.cpp` | 定义协议数据类型；编码 `0x510`，解码 `0x511–0x514`。 |
 | `soldier_can_board.hpp/.cpp` | 姿态历史、超时、序号、同组状态快照、会话变化和发送安全检查。 |
-| `soldier_can_socketcan.cpp` | 将步兵协议回调接到 Linux SocketCAN，并读取 YAML 中的 `can_interface`。 |
-| `socketcan.hpp` | 底层 Linux SocketCAN 收发线程、错误恢复和帧读写；由步兵和原 CBoard 共用。 |
-| `CMakeLists.txt` | 将两套实现编进 `io_can` 静态库。 |
+| `soldier_can_damiao.cpp` | 通过达妙 SDK 打开 USB 转接器，配置经典 CAN 2.0、1 Mbps，并收发标准数据帧。 |
+| `socketcan.hpp` | 原 CBoard 使用的 Linux SocketCAN 收发和错误恢复。 |
+| `CMakeLists.txt` | 分别构建 `io_soldier_can` 和 `io_can`。 |
+
+## 在小电脑上构建步兵程序
+
+在项目根目录运行以下命令。达妙 SDK 使用官方仓库的 v1.1.0 C/C++ 库，CMake 按目标架构选取 `.so`。
+
+```bash
+git clone https://github.com/dmBots/dm-device-sdk.git "$HOME/dm-device-sdk"
+git -C "$HOME/dm-device-sdk" checkout --detach 36a8b3971dc35608701d128f353a32cad3ee6cdb
+cmake -S . -B build -DDMCAN_SDK_ROOT="$HOME/dm-device-sdk"
+cmake --build build --target soldier -j2
+```
+
+小电脑需要能通过达妙 SDK 打开转接器（使用兼容的 USB 固件模式，并按厂商说明给当前用户配置 USB 访问权限）。只连接一个达妙设备，在 YAML 设置 `can_channel: 0`；双通道设备按实际接线可用 `1`。程序启动后设置并回读经典 CAN 2.0、1 Mbps，无需创建 `can0`。如果转接器中途拔掉，重新插上后重启 `soldier`。
+
+## 步兵 Foxglove 调试
+
+在运行 CMake 前先加载小电脑所用 ROS 2 发行版的 `setup.bash`，再按上文构建 `soldier`。启动程序和桥接的两个终端都加载同一 ROS 2 环境，并使用相同的 `ROS_DOMAIN_ID`。
+
+```bash
+# 终端一，启动步兵调试配置
+./build/soldier configs/soldier_debug.yaml
+
+# 终端二，启动桥接
+ros2 launch foxglove_bridge foxglove_bridge_launch.xml
+```
+
+在 Foxglove 连接 `ws://<小电脑IP>:8765`，查看 `/sp_debug/soldier/image`、`/sp_debug/soldier/status` 和 `/sp_debug/soldier/ekf_convergence`。调试配置沿用达妙 CAN 2.0 收发，ROS 2 负责发布调试数据。`debug_ros2.enable: true` 时，如果调试流无法初始化，程序会报错退出。若日志停在 `Waiting for valid CAN`，检测框和跟踪状态仍需等待 CAN 数据与控制状态就绪。
 
 ## 电控文件逐项映射
 
 ### `视觉对接.md`
 
-- 物理层：Classic CAN 2.0A、11 位标准帧、DLC 8、1 Mbit/s。Linux CAN 网卡的波特率仍需在系统侧设置。
+- 总线格式：Classic CAN 2.0A、11 位标准帧、DLC 8、1 Mbit/s。波特率由步兵程序通过达妙 SDK 设置。
 - Mini-PC → C 板：`0x510`。字节依次为序号、版本/标志、地面 yaw（mrad）、pitch 编码器原始角（mrad）、参考姿态时间戳。
 - C 板 → Mini-PC：`0x511` 姿态、`0x512` 底盘、`0x513` 机器人/弹速状态、`0x514` 热量状态。四帧仅在序号相同时合成一个状态快照。
 - 多字节数：小端序；角度在协议线上为 `int16 mrad`，程序结构体中解码为弧度。
@@ -37,7 +64,7 @@
 
 ### `minipc_can.py`
 
-Python 文件是纯编解码参考，不负责打开 CAN 设备。C++ `soldier_can_protocol.cpp` 对应 `pack_command()` 和 `unpack_telemetry()`：相同的 ID、little-endian、有符号字段、单位、边界和 idle 编码。CAN 标准帧标志和 DLC 检查放在 SocketCAN 适配层完成。
+Python 文件是纯编解码参考，不负责打开 CAN 设备。C++ `soldier_can_protocol.cpp` 对应 `pack_command()` 和 `unpack_telemetry()`：相同的 ID、little-endian、有符号字段、单位、边界和 idle 编码。达妙适配层检查通道、帧格式和 DLC。
 
 ### `minipc_config.h`
 

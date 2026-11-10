@@ -27,7 +27,8 @@ Tracker 和 Aimer 使用这个结果，所以跟踪、目标预测、yaw 和弹�
 需启用 `debug_ros2.enable` 才会发布调试画面。
 正式 CAN 入口 `soldier` 也接入了此调试流；核对实车时应观察该入口的图像，
 以保证准星、目标预测点和 CAN 指令使用同一帧姿态。
-`soldier_debug` 仍是串口调试入口，`yolodebug` 则只显示参考深度下的准星。
+实车调试用 `./build/soldier configs/soldier_debug.yaml`，仍使用同一个达妙 CAN 2.0 收发入口。
+`yolodebug` 只显示参考深度下的准星。
 
 相机在左上方，因此执行轴投影应位于相机主点的右下方，且距离越近偏移越大。
 忽略畸变时，深度为 `d` 米的像素坐标为
