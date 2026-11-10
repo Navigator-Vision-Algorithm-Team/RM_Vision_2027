@@ -11,10 +11,10 @@ add_executable(serial_communication_test
 target_link_libraries(serial_communication_test serial)
 
 # ============================================================================
-#  串口通信延迟探针（只发不收，协议见 time_delay_test.cpp 文件头）
+#  串口通信延迟测试（回环 RTT，协议见 time_delay_test.cpp 文件头）
 #    ./time_delay_test        # 无参数：/dev/ttyACM0 921600 100Hz 30s，写 delay.csv
-#  按固定频率发 0x0410（带 send 时间戳 seq/tx_us/boot_id），延迟由下位机侧解算；
-#  上位机只统计发送频率、发送周期抖动与写串口耗时
+#  发 0x0410（带时间戳，帧格式不变），下位机把 data 段原样回传（cmd_id 不限），
+#  上位机统计 RTT / 单向延迟 / 抖动 / 丢包，同时记录发送频率与写串口耗时
 # ============================================================================
 add_executable(time_delay_test
     time_delay_test.cpp
