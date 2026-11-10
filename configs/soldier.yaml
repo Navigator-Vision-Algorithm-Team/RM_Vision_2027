@@ -41,6 +41,7 @@ max_rectangular_error: 25 # degree
 # TODO: 与本车实际相机核对。hikrobot 只读 camera_name / exposure_ms / gain，
 #       vid_pid 仅在 mindvision 下生效；换 mindvision 时注释下面三行并启用下方注释块
 camera_name: "hikrobot"
+serial_number: "DA8419516"
 exposure_ms: 2
 gain: 16
 # camera_name: "mindvision"
