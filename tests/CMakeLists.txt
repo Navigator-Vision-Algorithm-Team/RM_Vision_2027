@@ -10,6 +10,17 @@ add_executable(serial_communication_test
     ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
 target_link_libraries(serial_communication_test serial)
 
+# ============================================================================
+#  串口通信延迟测试（回环 RTT，协议见 time_delay_test.cpp 文件头）
+#    ./time_delay_test        # 无参数：/dev/ttyACM0 921600 100Hz 30s，写 delay.csv
+#  发 0x0410（带时间戳，帧格式不变），下位机把 data 段原样回传（cmd_id 不限），
+#  上位机统计 RTT / 单向延迟 / 抖动 / 丢包，同时记录发送频率与写串口耗时
+# ============================================================================
+add_executable(time_delay_test
+    time_delay_test.cpp
+    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
+target_link_libraries(time_delay_test serial)
+
 # 交互式云台响应测试：输入绝对 yaw/pitch（度），每行发送一条 0x0402 指令。
 add_executable(testgimbalspeed testgimbalspeed.cpp)
 target_link_libraries(
