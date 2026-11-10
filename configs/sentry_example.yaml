@@ -237,8 +237,8 @@ low_speed_delay_time: 0.010         # 低速状态下弹道延迟时间 (s)
 
 # ----- 射手 (Shooter) -----
 auto_fire: true                     # 是否由自瞄自动控制开火
-first_tolerance: 5                  # 近距离射击容差 (度)
-second_tolerance: 3                 # 远距离射击容差 (度)
+first_tolerance: 2                  # 近距离射击容差 (度)
+second_tolerance: 1                 # 远距离射击容差 (度)
 judge_distance: 3                   # 近/远距离判断阈值 (m)
 
 # ----- 决策器 (Decider) -----
