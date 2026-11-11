@@ -41,6 +41,7 @@ max_rectangular_error: 25 # degree
 #       vid_pid 仅在 mindvision 下生效；换 mindvision 时注释下面三行并启用下方注释块
 camera_name: "hikrobot"
 serial_number: "DA8419516"
+frame_rate: 165.0
 exposure_ms: 2
 gain: 16
 # camera_name: "mindvision"

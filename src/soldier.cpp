@@ -99,6 +99,8 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   auto_aim::multithread::CameraJob main_job;
   main_job.camera = &camera;
   main_job.keep_image = true;
+  main_job.pin_cpu = false;           // 解除步兵 YOLO 工作线程的绑核
+  main_job.single_thread_cpu = false; // 解除 OpenVINO 的单线程限制
   auto_aim::multithread::YoloPipeline pipeline(config_path, {main_job}, false);
   tools::logger()->info("[soldier] Tracker + IMM/EKF + Aimer，fire_advice=0");
 
