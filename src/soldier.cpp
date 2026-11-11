@@ -1,18 +1,19 @@
+#include "soldier.hpp"
+
+#include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdint>
 #include <exception>
+#include <numbers>
 #include <opencv2/opencv.hpp>
 #include <optional>
+#include <string>
 #include <thread>
 
 #include "io/camera.hpp"
 #include "io/can/soldier_can_board.hpp"
-#include "tasks/auto_aim/aimer.hpp"
-#include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/debug_stream.hpp"
 #include "tasks/auto_aim/solver.hpp"
-#include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/yolo.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
@@ -21,33 +22,28 @@
 
 using namespace std::chrono_literals;
 
-const std::string keys =
-  "{help h usage ? |                      | 输出命令行参数说明}"
-  "{can-rx-only    | false                | 只接收 CAN 并统计 0x511 到达间隔}"
-  "{can-geometry-only | false             | 云台几何跟踪联调，始终关闭开火建议}"
-  "{@config-path   | configs/soldier.yaml | 位置参数，yaml配置文件路径 }";
-
-int main(int argc, char * argv[]) try
+int run_soldier(int argc, char * argv[], const std::string & default_config) try
 {
+  const std::string keys =
+    "{help h usage ? |       | 输出命令行参数说明}"
+    "{can-rx-only | false | 只接收 CAN 并统计 0x511 到达间隔}"
+    "{can-geometry-only | true | 兼容旧启动命令，当前始终直接跟随}"
+    "{@config-path | " + default_config + " | 位置参数，YAML 配置文件路径}";
   cv::CommandLineParser cli(argc, argv, keys);
-  auto config_path = cli.get<std::string>(0);
+  const auto config_path = cli.get<std::string>(0);
   if (cli.has("help") || config_path.empty()) {
     cli.printMessage();
     return 0;
   }
-
   const bool can_rx_only = cli.get<bool>("can-rx-only");
-  const bool geometry_only = cli.get<bool>("can-geometry-only");
-  const auto aim_mode = geometry_only ? io::SoldierCanBoard::AimMode::geometric
-                                     : io::SoldierCanBoard::AimMode::ballistic;
   if (!cli.check()) {
     cli.printErrors();
     return 1;
   }
 
+  io::SoldierCanBoard can_board(config_path, io::SoldierCanBoard::AimMode::direct);
   if (can_rx_only) {
     tools::Exiter exiter;
-    io::SoldierCanBoard can_board(config_path);
     tools::logger()->info("[soldier] CAN receive-only diagnostics");
     while (!exiter.exit()) {
       std::this_thread::sleep_for(1s);
@@ -59,283 +55,122 @@ int main(int argc, char * argv[]) try
     return 0;
   }
 
-  auto yaml = tools::load(config_path);
-
-  if (geometry_only) {
-    tools::logger()->info("[soldier] CAN geometry-only mode: fire_advice=0");
-  }
-
-  const double pitch_encoder_zero_rad = yaml["pitch_encoder_zero_rad"].as<double>(0.0);
-  const int pitch_encoder_direction = yaml["pitch_encoder_direction"].as<int>(1);
-  const bool pitch_encoder_calibrated = yaml["pitch_encoder_calibrated"].as<bool>(false);
-  if (pitch_encoder_direction != -1 && pitch_encoder_direction != 1) {
-    tools::logger()->error("[soldier] pitch_encoder_direction 必须为 +1 或 -1");
+  const auto yaml = tools::load(config_path);
+  const double pitch_zero = yaml["pitch_encoder_zero_rad"].as<double>(0.0);
+  const int pitch_direction = yaml["pitch_encoder_direction"].as<int>(1);
+  const double yaw_offset = yaml["yaw_offset"].as<double>(0.0) * std::numbers::pi / 180.0;
+  const double pitch_offset = yaml["pitch_offset"].as<double>(0.0) * std::numbers::pi / 180.0;
+  if ((pitch_direction != -1 && pitch_direction != 1) || !std::isfinite(pitch_zero) ||
+      !std::isfinite(yaw_offset) || !std::isfinite(pitch_offset)) {
+    tools::logger()->error("[soldier] 云台角度配置无效，pitch_encoder_direction 必须为 +1 或 -1");
     return 1;
   }
-  if (!pitch_encoder_calibrated) {
-    tools::logger()->warn(
-      "[soldier] pitch encoder calibration is incomplete; tracking commands will stay idle");
-  }
 
-  io::SoldierCanBoard can_board(config_path);
-  io::Camera camera(config_path);  // 不带 sursign：读取 camera_name / exposure_ms / gain
-
+  io::Camera camera(config_path);
   auto_aim::YOLO detector(config_path, false);
   auto_aim::Solver solver(config_path);
-  auto_aim::Tracker tracker(config_path, solver);
-  auto_aim::Aimer aimer(config_path);
-  // 可选调试流直接读取 CAN 主链路的同帧结果，避免另起串口调试入口比对姿态。
   auto_aim::DebugStream debug(config_path, "soldier");
   if (const auto debug_yaml = yaml["debug_ros2"];
       debug_yaml && debug_yaml["enable"].as<bool>(false) && !debug.enabled()) {
-    tools::logger()->error(
-      "[soldier] ROS 2 debug stream unavailable; check the startup log and the ROS 2 build environment");
+    tools::logger()->error("[soldier] ROS 2 调试流初始化失败");
     return 1;
   }
-  // ROS2 初始化会注册信号处理器，Exiter 需在它之后构造。
+  // ROS 2 注册信号处理器后，再建立程序自己的退出处理器。
   tools::Exiter exiter;
+  tools::logger()->info("[soldier] YOLO 直接跟随，fire_advice=0");
 
   cv::Mat img;
-  std::chrono::steady_clock::time_point t;
-
-  auto last_log_time = std::chrono::steady_clock::now();
-  auto last_can_send_time = std::chrono::steady_clock::time_point::min();
-  auto last_can_warning_time = std::chrono::steady_clock::time_point::min();
-  std::uint64_t last_session = can_board.session();
-  bool waiting_logged = false;
-  bool invalid_robot_logged = false;
+  io::SoldierCanBoard::TimePoint t;
+  auto last_send = io::SoldierCanBoard::TimePoint::min();
+  auto last_log = io::SoldierCanBoard::Clock::now();
   std::optional<bool> last_autoaim_active;
   std::optional<auto_aim::DebugCanTx> last_debug_tx;
-  const auto monotonic_us = [](std::chrono::steady_clock::time_point stamp) {
+  const auto monotonic_us = [](io::SoldierCanBoard::TimePoint stamp) {
     return std::chrono::duration_cast<std::chrono::microseconds>(stamp.time_since_epoch()).count();
   };
 
   while (!exiter.exit()) {
     camera.read(img, t);
     if (img.empty()) continue;
-    const bool debug_frame_requested = debug.frame(img);
+    const bool debug_frame = debug.frame(img);
+    debug.begin_yolo();
+    auto armors = detector.detect(img);
+    debug.end_yolo();
 
-    const auto current_session = can_board.session_status();
-    if (current_session.id != last_session) {
-      tracker.reset();
-      tools::logger()->info(
-        "[soldier] CAN session changed {}->{} reason={} rx_gap_ms={:.1f} seq={}->{} "
-        "reference_ms={}->{} rejected_pose_sequences={}",
-        last_session, current_session.id, current_session.reason, current_session.rx_gap_ms,
-        current_session.previous_seq, current_session.incoming_seq,
-        current_session.previous_reference_ms, current_session.incoming_reference_ms,
-        current_session.rejected_pose_sequences);
-      last_session = current_session.id;
-    }
-
-    // 取与本帧图像时间相邻的姿态样本；之后把实际使用的参考时间戳回传给 C 板。
     const auto frame_pose = can_board.pose_at(t - 1ms);
     const auto status = can_board.snapshot();
-    // C 板接受首条有效跟踪指令后，才会回报实际接管。
     if (status && last_autoaim_active != status->pose.value.autoaim_active) {
       last_autoaim_active = status->pose.value.autoaim_active;
       tools::logger()->info("[soldier] C board autoaim_active={}", *last_autoaim_active);
     }
-    const bool can_control_ready =
-      frame_pose && status && frame_pose->reference.session == status->pose.session &&
-      status->pose.value.pose_valid && status->pose.value.unfolded &&
-      status->robot && status->robot->robot_status_valid && status->robot->enabled &&
-      status->robot->autoaim_requested;
 
-    const auto now = std::chrono::steady_clock::now();
-    const bool send_due =
-      last_can_send_time == std::chrono::steady_clock::time_point::min() ||
-      now - last_can_send_time >= io::soldier_can::config::kMinimumSendPeriod;
-    auto send = [&](io::soldier_can::Command command,
-                    const std::optional<io::SoldierCanBoard::PoseSample> & reference = {}) {
+    io::soldier_can::Command command;
+    std::optional<io::SoldierCanBoard::PoseSample> reference;
+    Eigen::Vector3d gimbal_pos = Eigen::Vector3d::Zero();
+    Eigen::Vector3d target_pos = Eigen::Vector3d::Zero();
+    const char * state = armors.empty() ? "no_target" : "waiting_pose";
+    bool pnp_solved = false;
+    if (frame_pose) {
+      const double pitch = pitch_direction * (frame_pose->pitch_raw_rad - pitch_zero);
+      gimbal_pos = {frame_pose->yaw_rad, pitch, 0.0};
+      target_pos = gimbal_pos;
+      const Eigen::Quaterniond q(
+        Eigen::AngleAxisd(gimbal_pos[0], Eigen::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()));
+      solver.set_R_gimbal2world(q.toRotationMatrix());
+
+      if (!armors.empty()) {
+        auto & armor = armors.front();
+        try {
+          pnp_solved = solver.solve(armor) && armor.xyz_in_world.allFinite() &&
+                       armor.xyz_in_world.squaredNorm() > 0.0;
+        } catch (const cv::Exception &) {
+          pnp_solved = false;
+        }
+        // PnP 缺少可用深度时仍可沿检测中心的视线跟随。
+        const Eigen::Vector3d direction = pnp_solved ? armor.xyz_in_world : solver.world_ray(armor.center);
+        const auto ypd = tools::xyz2ypd(direction);
+        command.tracking = true;
+        command.yaw_rad = tools::limit_rad(ypd[0] + yaw_offset);
+        command.pitch_raw_rad = std::clamp(
+          pitch_zero - pitch_direction * (ypd[1] + pitch_offset),
+          io::soldier_can::config::kMinPitchRawRad, io::soldier_can::config::kMaxPitchRawRad);
+        reference = frame_pose->reference;
+        target_pos = {
+          command.yaw_rad, pitch_direction * (command.pitch_raw_rad - pitch_zero), 0.0};
+        state = "tracking";
+      }
+    }
+
+    const auto now = io::SoldierCanBoard::Clock::now();
+    if (last_send == io::SoldierCanBoard::TimePoint::min() ||
+        now - last_send >= io::soldier_can::config::kMinimumSendPeriod) {
+      last_send = now;
       io::SoldierCanBoard::SendAttempt attempt{};
-      const auto result =
-        can_board.send(command, reference, debug.enabled() ? &attempt : nullptr, aim_mode);
-      if (debug.enabled()) {
-        last_debug_tx = auto_aim::DebugCanTx{
-          attempt.payload, monotonic_us(t), monotonic_us(attempt.started_at),
-          static_cast<int>(result), result != io::SoldierCanBoard::SendResult::transport_error};
-      }
-      if (result != io::SoldierCanBoard::SendResult::sent &&
-          (last_can_warning_time == std::chrono::steady_clock::time_point::min() ||
-           now - last_can_warning_time >= 1s)) {
-        tools::logger()->warn("[soldier] CAN send status={}", static_cast<int>(result));
-        last_can_warning_time = now;
-      }
-      last_can_send_time = now;
-    };
-    auto publish_preview = [&](const char * state) {
-      if (!debug_frame_requested) return;
-      // 电控未就绪时，只在调试采样帧做检测，结果不送入 Tracker。
-      debug.begin_yolo();
-      const auto armors = detector.detect(img);
-      debug.end_yolo();
-      auto_aim::DebugStatus preview;
-      preview.state = state;
-      preview.frame_us = monotonic_us(t);
-      preview.can_tx = last_debug_tx;
-      debug.publish(armors, preview);
-    };
-
-    if (!can_control_ready) {
-      if (send_due) send({});
-      if (!waiting_logged) {
-        tools::logger()->info(
-          "[soldier] Waiting for valid CAN pose, unfolded and enabled robot, and auto-aim request");
-        waiting_logged = true;
-      }
-      publish_preview("waiting_can");
-      std::this_thread::sleep_for(1ms);
-      continue;
-    }
-    waiting_logged = false;
-
-    // 协议回传地面 yaw 和 pitch 编码器角；按配置零点/方向构造算法所需姿态。
-    const double pitch_world_rad = pitch_encoder_direction *
-      (frame_pose->pitch_raw_rad - pitch_encoder_zero_rad);
-    const Eigen::Quaterniond q(
-      Eigen::AngleAxisd(frame_pose->yaw_rad, Eigen::Vector3d::UnitZ()) *
-      Eigen::AngleAxisd(pitch_world_rad, Eigen::Vector3d::UnitY()));
-    solver.set_R_gimbal2world(q.toRotationMatrix());
-    const Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
-
-    const auto robot_id = status->robot->robot_id;
-    auto_aim::Color enemy_color;
-    if (robot_id >= 1 && robot_id <= 11) {
-      enemy_color = auto_aim::blue;
-    } else if (robot_id >= 101 && robot_id <= 111) {
-      enemy_color = auto_aim::red;
-    } else {
-      // 协议要求 robot_id 无效时不能猜测本机阵营。
-      if (send_due) send({});
-      if (!invalid_robot_logged) {
-        tools::logger()->warn("[soldier] Invalid robot_id {}; keeping CAN command idle", robot_id);
-        invalid_robot_logged = true;
-      }
-      publish_preview("invalid_robot_id");
-      continue;
-    }
-    invalid_robot_logged = false;
-
-    // YOLO 检测。敌方颜色来自 0x513.robot_id；Tracker 跳过 YAML 颜色过滤，只负责跟踪。
-    debug.begin_yolo();
-    auto armors = detector.detect(img);
-    debug.end_yolo();
-    armors.remove_if([&enemy_color](const auto_aim::Armor & armor) {
-      return armor.color != enemy_color;
-    });
-
-    // Tracker 内部完成 PnP、目标关联、EKF 预测与观测更新。
-    // 使用相机帧时间戳 t，让滤波时间间隔对应真实帧间隔。
-    const auto * target = tracker.track(armors, t, false, img.size());
-
-    // 联调时直接瞄准装甲板，正常模式等待有效实测弹速后才做弹道预测。
-    const auto & robot = *status->robot;
-    const bool aim_ready = geometry_only || (robot.bullet_speed_valid && robot.bullet_speed_m_s > 0.0);
-    io::Command command{false, false, gimbal_pos[0], gimbal_pos[1]};
-    if (target != nullptr && aim_ready) {
-      command = geometry_only ? aimer.aim_geometric(*target)
-                              : aimer.aim_ballistic(*target, t, robot.bullet_speed_m_s);
-      // 无有效瞄准解时，调试数据用当前云台角，CAN 发送空闲帧。
-      if (!command.control) {
-        command.yaw = gimbal_pos[0];
-        command.pitch = gimbal_pos[1];
-      }
-      command.shoot = false;  // 步兵程序不接管发射
+      const auto result = can_board.send(command, reference, &attempt);
+      last_debug_tx = auto_aim::DebugCanTx{
+        attempt.payload, monotonic_us(t), monotonic_us(attempt.started_at), static_cast<int>(result),
+        result != io::SoldierCanBoard::SendResult::transport_error};
     }
 
-    // 0x510：yaw 是地面角；pitch 转成编码器原始角。步兵当前不发送开火建议。
-    if (send_due) {
-      io::soldier_can::Command can_command;
-      can_command.tracking = command.control && pitch_encoder_calibrated;
-      can_command.fire_advice = false;
-      if (can_command.tracking) {
-        can_command.yaw_rad = tools::limit_rad(command.yaw);
-        can_command.pitch_raw_rad = pitch_encoder_zero_rad +
-          pitch_encoder_direction * command.pitch;
-      }
-      send(can_command, frame_pose->reference);
-    }
-
-    if (debug_frame_requested) {
+    if (debug_frame) {
       auto_aim::DebugStatus debug_status{
-        gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0),
-        command.control && pitch_encoder_calibrated, false,
-        aim_ready ? tracker.state() : "waiting_bullet_speed",
-        geometry_only ? "GEOMETRY ONLY" : ""};
+        gimbal_pos, target_pos, command.tracking, false, state, "YOLO DIRECT"};
       debug_status.frame_us = monotonic_us(t);
       debug_status.can_tx = last_debug_tx;
-      if (target != nullptr) {
-        // Tracker 已解算本帧同类装甲板，保留视觉观测供回放对齐。
-        for (const auto & armor : armors) {
-          if (armor.name == target->name && armor.type == target->armor_type &&
-              armor.ypd_in_world[2] > 0 && armor.xyz_in_world.allFinite()) {
-            debug_status.observed_armor_world.push_back(armor.xyz_in_world);
-          }
-        }
-        const auto x = target->ekf_x();
-        if (x.size() >= 11) {
-          debug_status.has_ekf = true;
-          debug_status.target_center = Eigen::Vector3d(x[0], x[2], x[4]);
-          debug_status.target_vel = Eigen::Vector2d(x[1], x[3]);
-          debug_status.target_w = x[7];
-          debug_status.target_r = x[8];
-          debug_status.model_prob = target->model_probabilities();
-          debug_status.nis_ratio = target->nis_ratio();
-          const auto convergence = target->debug_convergence_metrics();
-          debug_status.has_ekf_convergence = true;
-          debug_status.ekf_converged = convergence.converged;
-          debug_status.ekf_convergence_score = convergence.score;
-          debug_status.ekf_covariance_score = convergence.covariance_score;
-          debug_status.ekf_consistency_score = convergence.consistency_score;
-          debug_status.ekf_position_std = convergence.position_std;
-          debug_status.ekf_velocity_std = convergence.velocity_std;
-          debug_status.ekf_yaw_std = convergence.yaw_std;
-          debug_status.ekf_angular_velocity_std = convergence.angular_velocity_std;
-          debug_status.ekf_geometry_std = convergence.geometry_std;
-          debug_status.ekf_nis_failure_rate = convergence.nis_failure_rate;
-          debug_status.ekf_samples = convergence.samples;
-          debug_status.ekf_min_samples = convergence.min_samples;
-        }
-      }
-      if (!geometry_only && command.control && aimer.debug_aim_point.valid &&
-          aimer.debug_aim_point.xyza.head<3>().allFinite()) {
-        const auto & timing = aimer.debug_prediction_timing;
-        debug_status.prediction = auto_aim::DebugPrediction{
-          monotonic_us(timing.target_time), timing.extra_delay_s, timing.flight_time_s};
-        debug_status.has_aim_prediction = true;
-        debug_status.aim_prediction_world = aimer.debug_aim_point.xyza.head<3>();
-        const auto & p = debug_status.aim_prediction_world;
-        const auto pixels = solver.world2pixel({cv::Point3f(p.x(), p.y(), p.z())});
-        if (!pixels.empty()) {
-          debug_status.has_aim_prediction_pixel = true;
-          debug_status.aim_prediction_pixel = pixels.front();
-        }
-      }
-      debug.publish(armors, debug_status, &solver);
+      if (pnp_solved) debug_status.observed_armor_world.push_back(armors.front().xyz_in_world);
+      debug.publish(armors, debug_status, frame_pose ? &solver : nullptr);
     }
 
-    // 2Hz 打印解算与下发结果，便于无显示环境下调试
-    const auto log_now = std::chrono::steady_clock::now();
-    if (log_now - last_log_time > 500ms) {
-      last_log_time = log_now;
-      if (!aim_ready) {
-        tools::logger()->info("[soldier] Waiting for valid measured bullet speed");
-      } else if (target != nullptr) {
-        const Eigen::VectorXd x = target->ekf_x();
-        tools::logger()->info(
-          "[soldier] state={} {} | EKF center({:.2f}, {:.2f}, {:.2f}) velocity({:.2f}, {:.2f}, {:.2f}) | cmd yaw={:.1f} pitch={:.1f}",
-          tracker.state(), auto_aim::ARMOR_NAMES[target->name], x[0], x[2], x[4], x[1], x[3],
-          x[5], command.yaw * 57.3, command.pitch * 57.3);
-      } else {
-        tools::logger()->info(
-          "[soldier] state={} 无有效跟踪目标 | 保持 yaw={:.1f} pitch={:.1f} | gimbal yaw={:.1f}",
-          tracker.state(),
-          command.yaw * 57.3, command.pitch * 57.3, gimbal_pos[0] * 57.3);
-      }
+    if (now - last_log >= 500ms && last_debug_tx) {
+      last_log = now;
+      tools::logger()->info(
+        "[soldier] state={} boxes={} yaw={:.1f} pitch={:.1f} tx_tracking={} tx_result={}",
+        state, armors.size(), target_pos[0] * 180.0 / std::numbers::pi,
+        target_pos[1] * 180.0 / std::numbers::pi, (last_debug_tx->payload[1] & 0x01) != 0,
+        last_debug_tx->result);
     }
   }
-
   return 0;
 }
 catch (const std::exception & error)

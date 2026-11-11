@@ -42,7 +42,7 @@ cmake --build build --target soldier_debug -j2
 ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 ```
 
-在 Foxglove 连接 `ws://<小电脑IP>:8765`，查看 `/sp_debug/soldier/image`、`/sp_debug/soldier/status` 和 `/sp_debug/soldier/ekf_convergence`。调试配置沿用达妙 CAN 2.0 收发，ROS 2 负责发布调试数据。`debug_ros2.enable: true` 时，如果调试流无法初始化，程序会报错退出。若日志停在 `Waiting for valid CAN`，检测框和跟踪状态仍需等待 CAN 数据与控制状态就绪。
+在 Foxglove 连接 `ws://<小电脑IP>:8765`，查看 `/sp_debug/soldier/image` 和 `/sp_debug/soldier/status`。调试配置沿用达妙 CAN 2.0 收发，ROS 2 负责发布调试数据。`debug_ros2.enable: true` 时，如果调试流无法初始化，程序会报错退出。`waiting_pose` 表示 YOLO 已有结果，程序正在等可用于该帧的 `0x511` 姿态。
 
 ## 电控文件逐项映射
 
@@ -55,14 +55,11 @@ ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 - 命令频率：上层按 50–100Hz 提交最新结果；步兵入口限速到最高 100Hz。无目标持续发送 `tracking=0`。
 - 超时和新鲜度：100ms；不排队重发旧目标。发送时回显本次图像解算所使用的 `0x511.reference_ms`。
 - `yaw`：地面参考 yaw，Mini-PC 输出为弧度，编码范围约 `[-pi, pi]`。
-- `pitch_raw`：电机编码器原始角，不是世界系 pitch。`soldier.cpp` 使用 `pitch_encoder_zero_rad` 和 `pitch_encoder_direction` 转换；未标定时禁止发送跟踪目标。
-- `robot_id`：1–11 表示红方，101–111 表示蓝方；Mini-PC 据此选敌方颜色，ID 无效时保持空闲。
-- 弹速：正常模式等待有效实测弹速，等待期间发送 `tracking=0`。`0x513.bullet_speed_valid` 在电控观察到有效测速更新后维持不到 1000 ms。
-- 云台联调可运行 `./build/tests/soldier_debug --can-geometry-only=true`。有有效目标时使用装甲板的几何角度发送跟踪指令，`fire_advice` 始终为 0。
-- `0x512` 底盘模式/yaw/yaw-rate/相对 yaw 和 `0x514` 热量数据已解码并纳入同序号快照。当前自瞄主链路使用云台姿态、机器人状态和弹速。
+- `pitch_raw`：电机编码器原始角。步兵使用 `pitch_encoder_zero_rad` 和 `pitch_encoder_direction` 转换，并限制在协议范围内。
+- 步兵默认跟随 YOLO 返回的第一个装甲板，使用 PnP 位置计算角度，PnP 无法解算时使用检测中心的视线方向。
+- `0x512`、`0x513`、`0x514` 仍可解码。步兵发送链路使用 `0x511` 的姿态和参考时间戳。
 - `fire_advice`：步兵当前程序固定为 false；最终发射仍由操作手/C 板逻辑控制。
-- 下发跟踪指令要求操作手已请求自瞄、机器人已使能、云台完全展开、姿态和机器人状态有效。C 板接受首条有效跟踪指令后回报 `0x511.autoaim_active=1`，步兵在终端记录接管状态变化。
-- 比赛开始位、显式复位位：当前协议没有与旧 `SerialBoard::is_game_started()` / `reset_pending()` 一一对应的字段。步兵改用 CAN 状态使能/自瞄请求门控，并在通信 session 变化时清空 Tracker。
+- 实际接管由 C 板决定。C 板接受跟踪指令后回报 `0x511.autoaim_active=1`，步兵在终端记录接管状态变化。
 
 ### `minipc_can.py`
 
@@ -82,4 +79,4 @@ Python 文件是纯编解码参考，不负责打开 CAN 设备。C++ `soldier_c
 `pose_at()` 用本机接收时刻近似关联相机帧与 C 板姿态。已有前后两个有效样本时插值，否则用图像时刻之前最近的有效样本。回传给 C 板的参考时间戳始终来自真实 CAN 样本。实际时间对齐仍取决于 USB 延迟，精确同步需要硬件触发或两端时钟同步。
 Foxglove 的 `/sp_debug/soldier/status` 会记录调试采样时最近一次 `can_tx`，其中序号、角度、标志和回显时间来自实际编码后的 `0x510`。结果码依次为 0 正常、1 参考过期后改发空闲、2 角度无效后改发空闲、3 提交失败、4 控制条件失效后改发空闲。`sdk_accepted` 只表示 SDK 接受提交。完整收发和接收频率仍以 C 板或总线记录为准。
 
-`frame_us`、`can_tx.attempt_us` 和 `prediction.target_us` 都使用 Mini-PC 的单调时钟。`frame_to_attempt_ms` 从本机图像时间戳算到提交 CAN 之前，`prediction` 记录预测点、额外延迟和飞行时间。`observed_armor_world_m` 是该图像帧里已完成 PnP 的同类装甲板观测。回放时按预测时刻和同一块装甲板对齐，独立真值需要另行测量。
+`frame_us` 和 `can_tx.attempt_us` 都使用 Mini-PC 的单调时钟。`frame_to_attempt_ms` 从本机图像时间戳算到提交 CAN 之前。`observed_armor_world_m` 记录所跟随装甲板的 PnP 世界坐标。

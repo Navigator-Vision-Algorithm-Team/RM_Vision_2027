@@ -15,6 +15,8 @@ inline constexpr std::uint32_t kBitrate = 1'000'000;
 inline constexpr std::uint32_t kMaxStandardId = 0x7FF;
 inline constexpr auto kTimeout = std::chrono::milliseconds(100);
 inline constexpr auto kMinimumSendPeriod = std::chrono::milliseconds(10);  // Maximum 100 Hz.
+inline constexpr double kMinPitchRawRad = -0.25;
+inline constexpr double kMaxPitchRawRad = 0.4;
 }  // namespace io::soldier_can::config
 
 #endif  // IO__CAN__SOLDIER_CAN_CONFIG_HPP

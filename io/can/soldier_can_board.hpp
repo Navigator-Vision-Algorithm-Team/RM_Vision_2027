@@ -56,7 +56,7 @@ public:
     control_unavailable  // CAN 控制条件在发送前失效，已改发空闲帧。
   };
 
-  enum class AimMode { ballistic, geometric };
+  enum class AimMode { ballistic, geometric, direct };
 
   struct SendAttempt
   {
@@ -84,9 +84,10 @@ public:
     double max_gap_ms = 0;
   };
 
-  explicit SoldierCanBoard(const std::string & config_path);
+  explicit SoldierCanBoard(const std::string & config_path, AimMode aim_mode = AimMode::ballistic);
   // 虚拟收发和确定性测试使用这个构造函数；writer 不应回调本对象的方法。
-  explicit SoldierCanBoard(Writer writer, Now now = [] { return Clock::now(); });
+  explicit SoldierCanBoard(
+    Writer writer, Now now = [] { return Clock::now(); }, AimMode aim_mode = AimMode::ballistic);
 
   // 按本机接收时刻插值，并保留图像时刻之前的真实样本作为协议参考。
   std::optional<FramePose> pose_at(TimePoint image_timestamp) const;
@@ -100,7 +101,7 @@ public:
   // 上层以 50-100Hz 提交最新结果。pitch_raw_rad 应先完成编码器零点/方向转换。
   SendResult send(
     soldier_can::Command command, const std::optional<PoseSample> & reference = {},
-    SendAttempt * attempt = nullptr, AimMode aim_mode = AimMode::ballistic);
+    SendAttempt * attempt = nullptr);
 
   bool receive(std::uint32_t can_id, std::span<const std::uint8_t> payload);
   // 确认电控重启时调用；协议中没有明确的启动标识。
@@ -140,6 +141,7 @@ private:
 
   Writer writer_;
   Now now_;
+  const AimMode aim_mode_;
   mutable std::mutex state_mutex_;
   std::mutex send_mutex_;
   std::optional<PoseSample> pose_;

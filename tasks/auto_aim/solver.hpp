@@ -30,6 +30,8 @@ public:
   //   大yaw（全向相机所在轴，纯 yaw）不经过本类，见 io::tf::Tree 与哨兵入口。
   // 解算成功返回 true；失败时不写入位姿字段。
   bool solve(Armor & armor) const;
+  // 像素中心的世界系视线方向，用于没有深度的直接跟随。
+  Eigen::Vector3d world_ray(const cv::Point2f & pixel) const;
 
   std::vector<cv::Point2f> reproject_armor(
     const Eigen::Vector3d & xyz_in_world, double yaw, ArmorType type, ArmorName name) const;

@@ -1,5 +1,6 @@
 #include "solver.hpp"
 
+#include <opencv2/calib3d.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <cmath>
@@ -50,6 +51,14 @@ void Solver::set_extrinsic(
 {
   R_camera2gimbal_ = R_camera2gimbal;
   t_camera2gimbal_ = t_camera2gimbal;
+}
+
+Eigen::Vector3d Solver::world_ray(const cv::Point2f & pixel) const
+{
+  std::vector<cv::Point2f> normalized;
+  cv::undistortPoints(std::vector<cv::Point2f>{pixel}, normalized, camera_matrix_, distort_coeffs_);
+  return R_gimbal2world_ * R_camera2gimbal_ *
+         Eigen::Vector3d{normalized.front().x, normalized.front().y, 1.0};
 }
 
 //solvePnP（获得姿态）

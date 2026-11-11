@@ -119,8 +119,8 @@ private:
   dmcan_device_handle * device_ = nullptr;
 };
 
-SoldierCanBoard::SoldierCanBoard(const std::string & config_path)
-: SoldierCanBoard(Writer{})
+SoldierCanBoard::SoldierCanBoard(const std::string & config_path, AimMode aim_mode)
+: SoldierCanBoard(Writer{}, [] { return Clock::now(); }, aim_mode)
 {
   const auto yaml = tools::load(config_path);
   const auto channel = yaml["can_channel"] ? yaml["can_channel"].as<int>() : 0;

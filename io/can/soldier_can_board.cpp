@@ -9,8 +9,8 @@
 namespace io
 {
 
-SoldierCanBoard::SoldierCanBoard(Writer writer, Now now)
-: writer_(std::move(writer)), now_(std::move(now))
+SoldierCanBoard::SoldierCanBoard(Writer writer, Now now, AimMode aim_mode)
+: writer_(std::move(writer)), now_(std::move(now)), aim_mode_(aim_mode)
 {
 }
 
@@ -94,7 +94,8 @@ bool SoldierCanBoard::receive(std::uint32_t can_id, std::span<const std::uint8_t
       const char * reason = nullptr;
       if (timed_out) reason = "pose_timeout";
       else if (clock_restarted) reason = "pose_clock_backwards";
-      else if (pose_->value.unfolded != pose->unfolded) reason = "unfolded_changed";
+      else if (aim_mode_ != AimMode::direct && pose_->value.unfolded != pose->unfolded)
+        reason = "unfolded_changed";
       else if (pose_->value.pose_valid && !pose->pose_valid) reason = "pose_became_invalid";
       if (reason) {
         SessionStatus status;
@@ -121,7 +122,7 @@ bool SoldierCanBoard::receive(std::uint32_t can_id, std::span<const std::uint8_t
   if (const auto * robot = std::get_if<soldier_can::RobotStatus>(&*telemetry)) {
     if (robot_ && fresh(robot_->received_at, now) &&
         !forward(robot_->value.sequence, robot->sequence)) return false;
-    if (robot_) {
+    if (robot_ && aim_mode_ != AimMode::direct) {
       const char * reason = nullptr;
       if (robot_->value.enabled != robot->enabled) reason = "robot_enabled_changed";
       else if (robot_->value.autoaim_requested != robot->autoaim_requested)
@@ -199,24 +200,23 @@ bool SoldierCanBoard::reference_valid(const PoseSample & reference, TimePoint no
 }
 
 SoldierCanBoard::SendResult SoldierCanBoard::send(
-  soldier_can::Command command, const std::optional<PoseSample> & reference, SendAttempt * attempt,
-  AimMode aim_mode)
+  soldier_can::Command command, const std::optional<PoseSample> & reference, SendAttempt * attempt)
 {
   std::lock_guard send_lock(send_mutex_);
   std::lock_guard state_lock(state_mutex_);
   const auto now = now_();
   auto result = SendResult::sent;
-  const bool geometric = aim_mode == AimMode::geometric;
-  if (geometric) command.fire_advice = false;
+  if (aim_mode_ != AimMode::ballistic) command.fire_advice = false;
   if (command.tracking && (!reference || !reference_valid(*reference, now))) {
     command.tracking = false;
     result = SendResult::stale_reference;
   }
-  if (command.tracking &&
+  if (command.tracking && aim_mode_ != AimMode::direct &&
       (!pose_->value.unfolded ||
        !robot_ || !fresh(robot_->received_at, now) || !robot_->value.robot_status_valid ||
        !robot_->value.enabled || !robot_->value.autoaim_requested ||
-       (!geometric && (!robot_->value.bullet_speed_valid || robot_->value.bullet_speed_m_s <= 0.0)))) {
+       (aim_mode_ == AimMode::ballistic &&
+        (!robot_->value.bullet_speed_valid || robot_->value.bullet_speed_m_s <= 0.0)))) {
     command.tracking = false;
     result = SendResult::control_unavailable;
   }

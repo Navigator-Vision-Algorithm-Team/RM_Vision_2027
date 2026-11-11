@@ -53,8 +53,8 @@ Payload encode_command(const Command & command)
       command.yaw_rad > std::numbers::pi) {
     throw std::invalid_argument("yaw_rad must be finite and within [-pi, pi]");
   }
-  if (!std::isfinite(command.pitch_raw_rad) || command.pitch_raw_rad < -0.25 ||
-      command.pitch_raw_rad > 0.4) {
+  if (!std::isfinite(command.pitch_raw_rad) || command.pitch_raw_rad < config::kMinPitchRawRad ||
+      command.pitch_raw_rad > config::kMaxPitchRawRad) {
     throw std::invalid_argument("pitch_raw_rad must be finite and within [-0.25, 0.4]");
   }
 
