@@ -53,7 +53,7 @@ camera_name: "hikrobot"
 serial_number: "DA8419516"
 frame_rate: 165.0
 exposure_ms: 2
-gain: 16
+gain: 8
 # camera_name: "mindvision"
 # exposure_ms: 8
 # gamma: 0.6
