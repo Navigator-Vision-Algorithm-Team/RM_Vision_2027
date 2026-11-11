@@ -89,13 +89,13 @@ outpost_max_temp_lost_count: 75     # 前哨站短暂丢失容忍帧数
 
 #####-----预测瞄准（Aimer）-----#####
 # 偏置先设为 0；确认预测链路和坐标方向后，再用实车标定调整。
-yaw_offset: 0.0                     # yaw 静态补偿 (degree)
+yaw_offset: -0.2                     # yaw 静态补偿 (degree)
 pitch_offset: 0.0                   # pitch 静态补偿 (degree)
 comming_angle: 60                   # Aimer 必需参数 (degree)
 leaving_angle: 20                   # Aimer 必需参数 (degree)
 decision_speed: 10                  # 角速度阈值 (rad/s)，选择高速/低速延迟
 high_speed_delay_time: 0.026        # 高速状态下额外延迟 (s)，沿用哨兵示例值
-low_speed_delay_time: 0.010         # 低速状态下额外延迟 (s)，沿用哨兵示例值
+low_speed_delay_time: 0.015         # 低速状态下额外延迟 (s)，沿用哨兵示例值
 
 #####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
 # 整个 debug_ros2 段可以整段删除：没有这一段就不启动调试数据流。
