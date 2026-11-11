@@ -49,8 +49,14 @@ if(NOT (ament_cmake_FOUND AND rclcpp_FOUND AND sensor_msgs_FOUND))
     return()
 endif()
 
-# 步兵没有独立调试入口：src/soldier.cpp 已内置 DebugStream，
-# 通过配置里的 debug_ros2 段开关即可，无需另起进程。
+# 步兵调试入口默认读取 configs/soldier_debug.yaml，使用达妙 USB-CAN SDK。
+if(TARGET io_soldier_can)
+    add_executable(soldier_debug soldier_debug.cpp)
+    target_link_libraries(
+        soldier_debug
+        ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_soldier_can)
+    install(TARGETS soldier_debug RUNTIME DESTINATION bin)
+endif()
 
 # 哨兵调试入口：多线程自瞄（主相机 + 全向），默认配置 configs/sentry.yaml
 add_executable(sentry_multithread_debug sentry_multithread_debug.cpp)

@@ -100,7 +100,7 @@ endif()
 ####################tests###################
 # 调试版入口（sentry_multithread_debug）：业务逻辑与 src/ 完全一致，
 # 只额外通过 ROS2 向 Foxglove 推送图像与位姿，仅在找到 ROS2 时构建。
-# 步兵不单独提供调试入口：src/soldier.cpp 已内置 DebugStream，用配置开关控制。
+# 步兵调试入口由 tests/CMakeLists.txt 按 ROS2 和达妙 SDK 是否可用构建。
 add_subdirectory(tests)
 
 ################## install ##################

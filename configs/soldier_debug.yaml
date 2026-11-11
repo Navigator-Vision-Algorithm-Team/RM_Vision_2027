@@ -1,20 +1,21 @@
 # =============================================================================
-#  【调试配置】与正式步兵使用同一个 soldier 程序和达妙 CAN 2.0 链路。
+#  【调试配置】tests/soldier_debug.cpp 默认读取本文件，复用正式步兵的达妙 CAN 2.0 链路。
 #  编译前加载小电脑上的 ROS 2 环境，再按 io/can/README.md 配置达妙 SDK。
 #  用法：
 #    ros2 launch foxglove_bridge foxglove_bridge_launch.xml   # 板子上起桥接
-#    ./build/soldier configs/soldier_debug.yaml
+#    cmake --build build --target soldier_debug
+#    ./build/tests/soldier_debug
+#    ./build/tests/soldier_debug --can-geometry-only=true  # 无弹速时联调云台
 #    Foxglove 连 ws://<板子IP>:8765，看 /sp_debug/soldier/*
 #  正式上场请用 configs/soldier.yaml（调试流保持关闭）。
 # =============================================================================
 
-# soldier.cpp 专用配置：YOLO 检测 + Tracker/EKF 跟踪 + Aimer 预测瞄准
+# 步兵调试配置：YOLO 检测 + Tracker/EKF 跟踪 + Aimer 预测瞄准
 # 键集合已按代码逐一核对，缺键会导致 tools::read / yaml .as<T>() 直接退出或抛异常
 # 不需要 shooter / planner / buff 相关键
 
 #####-----兵种与敌我-----#####
-# soldier 主循环按 0x513.robot_id 动态选敌方颜色；这里的键仅供 Tracker 构造兼容读取，
-# 实际调用 tracker.track(..., false) 会跳过它的静态颜色过滤。
+# soldier_debug 按本配置过滤敌方颜色；正式 soldier 仍按 0x513.robot_id 选色。
 enemy_color: "red"
 # enemy_color: "blue"
 

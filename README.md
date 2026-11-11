@@ -159,8 +159,9 @@ cmake -S . -B build -DOpenVINO_DIR=/path/to/openvino/runtime/cmake
 # 步兵入口
 ./build/soldier configs/soldier.yaml
 
-# 步兵 Foxglove 调试：同一 CAN 2.0 入口，构建时需要 ROS 2
-./build/soldier configs/soldier_debug.yaml
+# 步兵 Foxglove 调试：复用正式步兵的 CAN 2.0 处理，构建时需要 ROS 2
+cmake --build build --target soldier_debug
+./build/tests/soldier_debug
 
 # 哨兵入口：仅在构建时检测到 ROS 2 依赖后可用
 ./build/sentry_multithread configs/sentry_example.yaml
