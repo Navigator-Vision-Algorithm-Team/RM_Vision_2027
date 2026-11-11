@@ -29,6 +29,24 @@ cmake --build build --target soldier -j2
 
 小电脑需要能通过达妙 SDK 打开转接器（使用兼容的 USB 固件模式，并按厂商说明给当前用户配置 USB 访问权限）。只连接一个达妙设备，在 YAML 设置 `can_channel: 0`；双通道设备按实际接线可用 `1`。程序启动后设置并回读经典 CAN 2.0、1 Mbps，无需创建 `can0`。如果转接器中途拔掉，重新插上后重启 `soldier`。
 
+### Ubuntu 22.04 运行环境（libusb ≥ 1.0.27）
+
+达妙 `libdm_device.so` 使用 `libusb_init_context`（libusb 1.0.27 起提供）。Ubuntu 22.04 自带 1.0.25，运行时报：
+
+```
+symbol lookup error: .../libdm_device.so: undefined symbol: libusb_init_context
+```
+
+用脚本一次性配置（新版 libusb 只装到 `/usr/local`，不覆盖系统库；顺带为当前用户写入 udev 规则）：
+
+```bash
+./io/can/setup_damiao_env.sh                    # 检查 + 安装 libusb 1.0.27 + 写 udev 规则
+./io/can/setup_damiao_env.sh --check            # 只检查，不改动系统
+VID=xxxx PID=xxxx ./io/can/setup_damiao_env.sh  # 自动识别不到设备时手动指定 VID:PID
+```
+
+配置完成后**无需重新编译**，直接运行即可。脚本最后会用 `ldd -r` 校验 `libdm_device.so` 的依赖符号是否全部可解析。
+
 ## 步兵 Foxglove 调试
 
 在运行 CMake 前先加载小电脑所用 ROS 2 发行版的 `setup.bash`，再按上文构建 `soldier`。启动程序和桥接的两个终端都加载同一 ROS 2 环境，并使用相同的 `ROS_DOMAIN_ID`。
