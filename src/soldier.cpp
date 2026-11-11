@@ -132,6 +132,20 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const auto frame_status =
       pipeline.wait_main(frame, io::soldier_can::config::kMinimumSendPeriod);
     if (frame_status == WaitStatus::Stopped) break;
+
+    // 模式只读最新的 0x511 接管反馈，相机暂时没有出帧时也照常更新。
+    const auto status = can_board.snapshot();
+    const auto autoaim_active =
+      status ? std::optional{status->pose.value.autoaim_active} : std::nullopt;
+    const char * mode = !autoaim_active ? "未知（无新鲜 0x511）" :
+      *autoaim_active ? "自瞄模式（C 板已接管）" : "自瞄未接管";
+    if (last_autoaim_active != autoaim_active) {
+      last_autoaim_active = autoaim_active;
+      tools::logger()->info(
+        "[soldier] 当前模式：{} | 0x511 autoaim_active={}", mode,
+        !autoaim_active ? "unknown" : *autoaim_active ? "true" : "false");
+    }
+
     if (frame_status == WaitStatus::Timeout || frame.img.empty()) {
       send_latest();
       continue;
@@ -142,11 +156,6 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const bool debug_frame = debug.frame(frame.img);
     debug.yolo_sample(frame.inference_ms);
 
-    const auto status = can_board.snapshot();
-    if (status && last_autoaim_active != status->pose.value.autoaim_active) {
-      last_autoaim_active = status->pose.value.autoaim_active;
-      tools::logger()->info("[soldier] C board autoaim_active={}", *last_autoaim_active);
-    }
     const auto robot = can_board.latest_robot_status();
     const auto enemy_color = enemy_color_from(robot);
     const auto frame_pose = can_board.pose_at(t - 1ms);
@@ -267,8 +276,9 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     if (now - last_log >= 500ms && last_debug_tx) {
       last_log = now;
       tools::logger()->info(
-        "[soldier] state={} boxes={} candidates={} yaw={:.1f} pitch={:.1f} tx_tracking={} tx_result={}",
-        state, detected_count, enemy_color ? armors.size() : 0,
+        "[soldier] 当前模式：{} | state={} boxes={} candidates={} yaw={:.1f} pitch={:.1f} "
+        "tx_tracking={} tx_result={}",
+        mode, state, detected_count, enemy_color ? armors.size() : 0,
         target_pos[0] * 180.0 / std::numbers::pi,
         target_pos[1] * 180.0 / std::numbers::pi, tx_tracking,
         last_debug_tx->result);
