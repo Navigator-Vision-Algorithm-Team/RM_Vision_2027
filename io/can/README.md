@@ -76,7 +76,7 @@ ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 - `pitch_raw`：电机编码器原始角。步兵使用 `pitch_encoder_zero_rad` 和 `pitch_encoder_direction` 转换，并限制在协议范围内。
 - 步兵复用哨兵主相机的敌我过滤、PnP、Tracker/IMM-EKF 和 Aimer。敌方颜色按新鲜的 `0x513.robot_id` 推导，未知 ID 时发送空闲帧。
 - 目标回显使用本次图像解算所用的 `0x511` 姿态时间戳。独立读取新鲜的 `0x513` 获取阵营和请求状态，同组快照仍核对序号。
-- 实测弹速有效时使用共享 Aimer 的弹道预测。无有效弹速或弹道无解时，使用 Aimer 的非发射几何角继续跟随。实车联调可用 `--can-geometry-only=true` 固定使用几何角。
+- 实测弹速有效时使用共享 Aimer 的弹道预测。无有效弹速或弹道无解时，用同一套延迟补偿预测目标位置并发送非发射几何角，调试数据中的飞行时间为 0。实车联调可用 `--can-geometry-only=true` 固定使用几何角。
 - `fire_advice`：步兵当前程序固定为 false；最终发射仍由操作手/C 板逻辑控制。
 - 视觉在收到自瞄请求并具备有效目标、姿态、使能和展开状态后发送跟踪帧。C 板接受指令后回报 `0x511.autoaim_active=1`，步兵在终端记录接管状态变化。
 

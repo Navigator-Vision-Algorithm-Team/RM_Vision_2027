@@ -165,7 +165,6 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const auto_aim::Target * target = nullptr;
     std::string state = "waiting_pose";
     std::string note;
-    bool ballistic_aim = false;
     aimer.debug_aim_point.valid = false;
     if (frame_pose) {
       const double pitch = pitch_direction * (frame_pose->pitch_raw_rad - pitch_zero);
@@ -184,15 +183,15 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
         state = tracker.state();
         if (target) {
           // 对接协议允许无有效测速时发送非发射几何角。弹道预测只用有效实测值。
-          ballistic_aim = !geometry_only && robot->bullet_speed_valid &&
-                          robot->bullet_speed_m_s > 0.0;
+          bool ballistic_aim =
+            !geometry_only && robot->bullet_speed_valid && robot->bullet_speed_m_s > 0.0;
           io::Command aim{};
           if (ballistic_aim) {
             aim = aimer.aim_ballistic(*target, t, robot->bullet_speed_m_s);
             ballistic_aim = aim.control && std::isfinite(aim.yaw) && std::isfinite(aim.pitch);
           }
           // 单次弹道无解时仍可按文档发非发射几何角。
-          if (!ballistic_aim) aim = aimer.aim_geometric(*target);
+          if (!ballistic_aim) aim = aimer.aim_geometric(*target, t);
           note = ballistic_aim ? "ballistic" : "geometric";
           if (aim.control && std::isfinite(aim.yaw) && std::isfinite(aim.pitch)) {
             command.tracking = true;
@@ -224,7 +223,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
           debug_status.observed_armor_world.push_back(armor.xyz_in_world);
         }
       }
-      if (ballistic_aim && command.tracking && aimer.debug_aim_point.valid) {
+      if (command.tracking && aimer.debug_aim_point.valid) {
         debug_status.has_aim_prediction = true;
         debug_status.aim_prediction_world = aimer.debug_aim_point.xyza.head<3>();
         const auto & timing = aimer.debug_prediction_timing;

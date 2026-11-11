@@ -63,14 +63,41 @@ io::Command Aimer::aim(
 
 io::Command Aimer::aim_geometric(const Target & target)
 {
-  const auto aim_point = choose_aim_point(target);
-  if (!aim_point.valid) return {false, false, 0, 0};
+  debug_aim_point = choose_aim_point(target);
+  if (!debug_aim_point.valid) return {false, false, 0, 0};
 
-  const Eigen::Vector3d xyz = aim_point.xyza.head<3>();
+  const Eigen::Vector3d xyz = debug_aim_point.xyza.head<3>();
   if (!xyz.allFinite() || xyz.head<2>().squaredNorm() <= 0.0) return {false, false, 0, 0};
 
   const auto ypd = tools::xyz2ypd(xyz);
   return {true, false, ypd[0] + yaw_offset_, -(ypd[1] + pitch_offset_)};
+}
+
+Aimer::PredictionTiming Aimer::latency_prediction(
+  std::chrono::steady_clock::time_point timestamp, double yaw_rate, bool to_now) const
+{
+  const double extra_delay =
+    std::abs(yaw_rate) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
+  const double processing_time =
+    to_now ? tools::delta_time(std::chrono::steady_clock::now(), timestamp) : 0.005;
+  const auto delay =
+    std::chrono::microseconds(static_cast<int>((processing_time + extra_delay) * 1e6));
+  return {timestamp + delay, extra_delay, 0.0};
+}
+
+io::Command Aimer::aim_geometric(
+  const Target & target, std::chrono::steady_clock::time_point timestamp, bool to_now)
+{
+  const auto x = target.ekf_x();
+  if (x.size() < 9) return {false, false, 0, 0};
+
+  // 复用弹道路径的延迟补偿。几何角无需估算飞行时间，且不修改 Tracker 状态。
+  const auto timing = latency_prediction(timestamp, x[7], to_now);
+  Target predicted = target;
+  predicted.predict(timing.target_time);
+  const auto command = aim_geometric(predicted);
+  if (command.control) debug_prediction_timing = timing;
+  return command;
 }
 
 io::Command Aimer::aim_ballistic(
@@ -85,24 +112,9 @@ io::Command Aimer::aim_ballistic(
   // 本地副本：下面要对它连续做 predict，EKF 状态必须可写
   Target target = target_in;
 
-  double delay_time =
-    std::abs(ekf_x_in[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
-
-  // 考虑detecor和tracker所消耗的时间，此外假设aimer的用时可忽略不计
-  auto future = timestamp;
-  if (to_now) {
-    double dt;
-    dt = tools::delta_time(std::chrono::steady_clock::now(), timestamp) + delay_time;
-    future += std::chrono::microseconds(int(dt * 1e6));
-    target.predict(future);
-  }
-
-  else {
-    auto dt = 0.005 + delay_time;  //detector-aimer耗时0.005+发弹延时0.1
-    // tools::logger()->info("dt is {:.4f} second", dt);
-    future += std::chrono::microseconds(int(dt * 1e6));
-    target.predict(future);
-  }
+  const auto timing = latency_prediction(timestamp, ekf_x_in[7], to_now);
+  const auto future = timing.target_time;
+  target.predict(future);
 
   auto aim_point0 = choose_aim_point(target);
   debug_aim_point = aim_point0;
@@ -174,7 +186,7 @@ io::Command Aimer::aim_ballistic(
     std::sqrt(final_xyz.x() * final_xyz.x() + final_xyz.y() * final_xyz.y()),
     std::atan2(final_xyz.y(), final_xyz.x()) * 57.3, yaw * 57.3);
 
-  debug_prediction_timing = {predict_time, delay_time, current_traj.fly_time};
+  debug_prediction_timing = {predict_time, timing.extra_delay_s, current_traj.fly_time};
   return {true, false, yaw, pitch};
 }
 

@@ -42,8 +42,10 @@ public:
     const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
     bool to_now = true);
 
-  // 云台联调使用当前装甲板的视线角。
+  // 使用装甲板的视线角。带时间戳的版本会先补偿处理和执行延迟。
   io::Command aim_geometric(const Target & target);
+  io::Command aim_geometric(
+    const Target & target, std::chrono::steady_clock::time_point timestamp, bool to_now = true);
 
   io::Command aim(
     const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
@@ -78,6 +80,8 @@ private:
   double low_speed_delay_time_;
   double decision_speed_;
 
+  PredictionTiming latency_prediction(
+    std::chrono::steady_clock::time_point timestamp, double yaw_rate, bool to_now) const;
   AimPoint choose_aim_point(const Target & target);
 };
 
