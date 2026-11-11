@@ -57,6 +57,12 @@ SoldierCanBoard::SessionStatus SoldierCanBoard::session_status() const
   return session_;
 }
 
+SoldierCanBoard::PoseRxStats SoldierCanBoard::take_pose_rx_stats()
+{
+  std::lock_guard lock(state_mutex_);
+  return std::exchange(pose_rx_stats_, PoseRxStats{});
+}
+
 bool SoldierCanBoard::receive(std::uint32_t can_id, std::span<const std::uint8_t> payload)
 {
   const auto telemetry = soldier_can::decode_telemetry(can_id, payload);
@@ -65,6 +71,16 @@ bool SoldierCanBoard::receive(std::uint32_t can_id, std::span<const std::uint8_t
   std::lock_guard lock(state_mutex_);
 
   if (const auto * pose = std::get_if<soldier_can::Pose>(&*telemetry)) {
+    ++pose_rx_stats_.frames;
+    if (last_pose_rx_ && now >= *last_pose_rx_) {
+      const auto gap = now - *last_pose_rx_;
+      if (gap < std::chrono::milliseconds(2)) ++pose_rx_stats_.gaps_under_2ms;
+      if (gap >= kTimeout) ++pose_rx_stats_.gaps_at_least_100ms;
+      pose_rx_stats_.max_gap_ms = std::max(
+        pose_rx_stats_.max_gap_ms, std::chrono::duration<double, std::milli>(gap).count());
+    }
+    last_pose_rx_ = now;
+
     if (pose_) {
       const auto clock_step = static_cast<std::uint16_t>(pose->reference_ms - pose_->value.reference_ms);
       const bool timed_out = !fresh(pose_->received_at, now);

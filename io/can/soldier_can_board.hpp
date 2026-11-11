@@ -74,6 +74,14 @@ public:
     std::uint64_t rejected_pose_sequences = 0;
   };
 
+  struct PoseRxStats
+  {
+    std::uint64_t frames = 0;
+    std::uint64_t gaps_under_2ms = 0;
+    std::uint64_t gaps_at_least_100ms = 0;
+    double max_gap_ms = 0;
+  };
+
   explicit SoldierCanBoard(const std::string & config_path);
   // 虚拟收发和确定性测试使用这个构造函数；writer 不应回调本对象的方法。
   explicit SoldierCanBoard(Writer writer, Now now = [] { return Clock::now(); });
@@ -84,6 +92,7 @@ public:
   std::optional<Snapshot> snapshot() const;
   std::uint64_t session() const;
   SessionStatus session_status() const;
+  PoseRxStats take_pose_rx_stats();
 
   // reference 必须是本次图像解算使用的样本，序号和回显时间戳由通信类填写。
   // 上层以 50-100Hz 提交最新结果。pitch_raw_rad 应先完成编码器零点/方向转换。
@@ -138,6 +147,8 @@ private:
   std::optional<Timed<soldier_can::Heat>> heat_;
   SessionStatus session_;
   std::uint64_t rejected_pose_sequences_ = 0;
+  PoseRxStats pose_rx_stats_;
+  std::optional<TimePoint> last_pose_rx_;
   std::uint8_t next_sequence_ = 0;
   // 最先销毁传输层，确保接收线程退出时缓存和锁仍然有效。
   std::shared_ptr<DamiaoCan> can_;

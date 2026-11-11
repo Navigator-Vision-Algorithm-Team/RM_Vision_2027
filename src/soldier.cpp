@@ -23,6 +23,7 @@ using namespace std::chrono_literals;
 
 const std::string keys =
   "{help h usage ? |                      | 输出命令行参数说明}"
+  "{can-rx-only    | false                | 只接收 CAN 并统计 0x511 到达间隔}"
   "{@config-path   | configs/soldier.yaml | 位置参数，yaml配置文件路径 }";
 
 int main(int argc, char * argv[]) try
@@ -31,6 +32,26 @@ int main(int argc, char * argv[]) try
   auto config_path = cli.get<std::string>(0);
   if (cli.has("help") || config_path.empty()) {
     cli.printMessage();
+    return 0;
+  }
+
+  const bool can_rx_only = cli.get<bool>("can-rx-only");
+  if (!cli.check()) {
+    cli.printErrors();
+    return 1;
+  }
+
+  if (can_rx_only) {
+    tools::Exiter exiter;
+    io::SoldierCanBoard can_board(config_path);
+    tools::logger()->info("[soldier] CAN receive-only diagnostics");
+    while (!exiter.exit()) {
+      std::this_thread::sleep_for(1s);
+      const auto stats = can_board.take_pose_rx_stats();
+      tools::logger()->info(
+        "[soldier] 0x511 frames={} gaps_under_2ms={} gaps_at_least_100ms={} max_gap_ms={:.3f}",
+        stats.frames, stats.gaps_under_2ms, stats.gaps_at_least_100ms, stats.max_gap_ms);
+    }
     return 0;
   }
 
