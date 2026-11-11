@@ -29,7 +29,8 @@ target_link_libraries(time_delay_test serial)
 # ============================================================================
 if(TARGET io_soldier_can)
     add_executable(can_com_debug can_com_debug.cpp)
-    target_link_libraries(can_com_debug fmt::fmt tools io_soldier_can)
+    # tools 是 OBJECT 库且 recorder.cpp 用到 OpenCV，链接 tools 的可执行文件必须带上 ${OpenCV_LIBS}
+    target_link_libraries(can_com_debug ${OpenCV_LIBS} fmt::fmt tools io_soldier_can)
     install(TARGETS can_com_debug RUNTIME DESTINATION bin)
 endif()
 
