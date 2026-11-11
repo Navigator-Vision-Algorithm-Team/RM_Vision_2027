@@ -88,10 +88,11 @@ int main(int argc, char * argv[]) try
     }
 
     // 取与本帧图像时间相邻的姿态样本；之后把实际使用的参考时间戳回传给 C 板。
-    const auto pose_reference = can_board.pose_at(t - 1ms);
+    const auto frame_pose = can_board.pose_at(t - 1ms);
     const auto status = can_board.snapshot();
     const bool can_control_ready =
-      pose_reference && status && status->pose.value.pose_valid &&
+      frame_pose && status && frame_pose->reference.session == status->pose.session &&
+      status->pose.value.pose_valid &&
       status->pose.value.autoaim_active && status->pose.value.unfolded &&
       status->robot && status->robot->robot_status_valid && status->robot->enabled &&
       status->robot->autoaim_requested && status->robot->bullet_speed_valid;
@@ -99,12 +100,28 @@ int main(int argc, char * argv[]) try
     const auto now = std::chrono::steady_clock::now();
     const bool send_due =
       last_can_send_time == std::chrono::steady_clock::time_point::min() ||
-      now - last_can_send_time >= 10ms;
+      now - last_can_send_time >= io::soldier_can::config::kMinimumSendPeriod;
     auto send_idle = [&] {
       if (send_due) {
-        can_board.send({});
+        const auto result = can_board.send({});
+        if (result != io::SoldierCanBoard::SendResult::sent &&
+            (last_can_warning_time == std::chrono::steady_clock::time_point::min() ||
+             now - last_can_warning_time >= 1s)) {
+          tools::logger()->warn("[soldier] CAN idle send status={}", static_cast<int>(result));
+          last_can_warning_time = now;
+        }
         last_can_send_time = now;
       }
+    };
+    auto publish_preview = [&](const char * state) {
+      if (!debug_frame_requested) return;
+      // 电控未就绪时，只在调试采样帧做检测，结果不送入 Tracker。
+      debug.begin_yolo();
+      const auto armors = detector.detect(img);
+      debug.end_yolo();
+      auto_aim::DebugStatus preview;
+      preview.state = state;
+      debug.publish(armors, preview);
     };
 
     if (!can_control_ready) {
@@ -114,6 +131,7 @@ int main(int argc, char * argv[]) try
           "[soldier] Waiting for valid CAN pose, robot status, auto-aim request and bullet speed");
         waiting_logged = true;
       }
+      publish_preview("waiting_can");
       std::this_thread::sleep_for(1ms);
       continue;
     }
@@ -121,9 +139,9 @@ int main(int argc, char * argv[]) try
 
     // 协议回传地面 yaw 和 pitch 编码器角；按配置零点/方向构造算法所需姿态。
     const double pitch_world_rad = pitch_encoder_direction *
-      (pose_reference->value.pitch_raw_rad - pitch_encoder_zero_rad);
+      (frame_pose->pitch_raw_rad - pitch_encoder_zero_rad);
     const Eigen::Quaterniond q(
-      Eigen::AngleAxisd(pose_reference->value.yaw_rad, Eigen::Vector3d::UnitZ()) *
+      Eigen::AngleAxisd(frame_pose->yaw_rad, Eigen::Vector3d::UnitZ()) *
       Eigen::AngleAxisd(pitch_world_rad, Eigen::Vector3d::UnitY()));
     solver.set_R_gimbal2world(q.toRotationMatrix());
     const Eigen::Vector3d gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
@@ -141,6 +159,7 @@ int main(int argc, char * argv[]) try
         tools::logger()->warn("[soldier] Invalid robot_id {}; keeping CAN command idle", robot_id);
         invalid_robot_logged = true;
       }
+      publish_preview("invalid_robot_id");
       continue;
     }
     invalid_robot_logged = false;
@@ -161,8 +180,7 @@ int main(int argc, char * argv[]) try
     io::Command command{false, false, gimbal_pos[0], gimbal_pos[1]};
     if (target != nullptr) {
       command = aimer.aim(target, t, status->robot->bullet_speed_m_s);
-      // Aimer 在无效瞄准点或弹道不可解时返回 control=false、角度为 0；
-      // 串口仍携带角度字段，因此退回当前云台角，避免无效指令造成跳转。
+      // 无有效瞄准解时，调试数据用当前云台角，CAN 发送空闲帧。
       if (!command.control) {
         command.yaw = gimbal_pos[0];
         command.pitch = gimbal_pos[1];
@@ -180,7 +198,7 @@ int main(int argc, char * argv[]) try
         can_command.pitch_raw_rad = pitch_encoder_zero_rad +
           pitch_encoder_direction * command.pitch;
       }
-      const auto send_result = can_board.send(can_command, pose_reference);
+      const auto send_result = can_board.send(can_command, frame_pose->reference);
       if (send_result != io::SoldierCanBoard::SendResult::sent &&
           (last_can_warning_time == std::chrono::steady_clock::time_point::min() ||
            now - last_can_warning_time >= 1s)) {
@@ -194,6 +212,32 @@ int main(int argc, char * argv[]) try
       auto_aim::DebugStatus debug_status{
         gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0),
         command.control && pitch_encoder_calibrated, false, tracker.state(), ""};
+      if (target != nullptr) {
+        const auto x = target->ekf_x();
+        if (x.size() >= 11) {
+          debug_status.has_ekf = true;
+          debug_status.target_center = Eigen::Vector3d(x[0], x[2], x[4]);
+          debug_status.target_vel = Eigen::Vector2d(x[1], x[3]);
+          debug_status.target_w = x[7];
+          debug_status.target_r = x[8];
+          debug_status.model_prob = target->model_probabilities();
+          debug_status.nis_ratio = target->nis_ratio();
+          const auto convergence = target->debug_convergence_metrics();
+          debug_status.has_ekf_convergence = true;
+          debug_status.ekf_converged = convergence.converged;
+          debug_status.ekf_convergence_score = convergence.score;
+          debug_status.ekf_covariance_score = convergence.covariance_score;
+          debug_status.ekf_consistency_score = convergence.consistency_score;
+          debug_status.ekf_position_std = convergence.position_std;
+          debug_status.ekf_velocity_std = convergence.velocity_std;
+          debug_status.ekf_yaw_std = convergence.yaw_std;
+          debug_status.ekf_angular_velocity_std = convergence.angular_velocity_std;
+          debug_status.ekf_geometry_std = convergence.geometry_std;
+          debug_status.ekf_nis_failure_rate = convergence.nis_failure_rate;
+          debug_status.ekf_samples = convergence.samples;
+          debug_status.ekf_min_samples = convergence.min_samples;
+        }
+      }
       if (target != nullptr && command.control && aimer.debug_aim_point.valid) {
         debug_status.has_aim_prediction = true;
         debug_status.aim_prediction_world = aimer.debug_aim_point.xyza.head<3>();
@@ -205,14 +249,6 @@ int main(int argc, char * argv[]) try
         }
       }
       debug.publish(armors, debug_status, &solver);
-    }
-
-    // 画框与四个关键点（不做 imshow/imwrite，无显示器环境下安全）
-    for (const auto & armor : armors) {
-      cv::rectangle(img, armor.box, cv::Scalar(0, 255, 0), 2);
-      for (const auto & point : armor.points) {
-        cv::circle(img, point, 2, cv::Scalar(0, 0, 255), -1);
-      }
     }
 
     // 2Hz 打印解算与下发结果，便于无显示环境下调试

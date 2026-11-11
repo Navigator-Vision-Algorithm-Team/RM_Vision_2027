@@ -1,6 +1,8 @@
 #include "soldier_can_board.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <numbers>
 #include <stdexcept>
 #include <utility>
 
@@ -81,8 +83,9 @@ bool SoldierCanBoard::receive(std::uint32_t can_id, std::span<const std::uint8_t
     if (robot_ && fresh(robot_->received_at, now) &&
         !forward(robot_->value.sequence, robot->sequence)) return false;
     if (robot_ && (robot_->value.enabled != robot->enabled ||
-                   robot_->value.autoaim_requested != robot->autoaim_requested)) {
-      // 解锁/自瞄请求变化后，等待新的姿态与图像解算。
+                   robot_->value.autoaim_requested != robot->autoaim_requested ||
+                   robot_->value.robot_id != robot->robot_id)) {
+      // 解锁、自瞄请求或阵营变化后，等待新的姿态与图像解算。
       reset_locked();
     }
     robot_ = Timed<soldier_can::RobotStatus>{*robot, now};
@@ -91,23 +94,40 @@ bool SoldierCanBoard::receive(std::uint32_t can_id, std::span<const std::uint8_t
   return store_newer(heat_, std::get<soldier_can::Heat>(*telemetry), now);
 }
 
-std::optional<SoldierCanBoard::PoseSample> SoldierCanBoard::pose_at(TimePoint image_timestamp) const
+std::optional<SoldierCanBoard::FramePose> SoldierCanBoard::pose_at(TimePoint image_timestamp) const
 {
-  const auto now = now_();
   std::lock_guard lock(state_mutex_);
+  const auto now = now_();
   if (!pose_ || !pose_->value.pose_valid || !fresh(pose_->received_at, now) ||
       image_timestamp > now) return std::nullopt;
+  const PoseSample * after = nullptr;
   for (auto sample = history_.rbegin(); sample != history_.rend(); ++sample) {
-    if (sample->received_at <= image_timestamp && fresh(sample->received_at, now) &&
-        image_timestamp - sample->received_at < kTimeout) return *sample;
+    if (!fresh(sample->received_at, now)) break;
+    if (sample->received_at > image_timestamp) {
+      after = &*sample;
+      continue;
+    }
+
+    FramePose estimate{*sample, sample->value.yaw_rad, sample->value.pitch_raw_rad};
+    if (after && sample->received_at < image_timestamp) {
+      const double fraction =
+        std::chrono::duration<double>(image_timestamp - sample->received_at).count() /
+        std::chrono::duration<double>(after->received_at - sample->received_at).count();
+      constexpr double turn = 2.0 * std::numbers::pi;
+      // yaw 走最短弧，避免 +π 到 -π 时插到正前方。
+      const double yaw_step = std::remainder(after->value.yaw_rad - estimate.yaw_rad, turn);
+      estimate.yaw_rad = std::remainder(estimate.yaw_rad + fraction * yaw_step, turn);
+      estimate.pitch_raw_rad = std::lerp(estimate.pitch_raw_rad, after->value.pitch_raw_rad, fraction);
+    }
+    return estimate;
   }
   return std::nullopt;
 }
 
 std::optional<SoldierCanBoard::Snapshot> SoldierCanBoard::snapshot() const
 {
-  const auto now = now_();
   std::lock_guard lock(state_mutex_);
+  const auto now = now_();
   if (!pose_ || !fresh(pose_->received_at, now)) return std::nullopt;
   const auto sequence = pose_->value.sequence;
   return Snapshot{*pose_, matching(chassis_, sequence, now), matching(robot_, sequence, now),
@@ -132,12 +152,20 @@ SoldierCanBoard::SendResult SoldierCanBoard::send(
   soldier_can::Command command, const std::optional<PoseSample> & reference)
 {
   std::lock_guard send_lock(send_mutex_);
-  const auto now = now_();
   std::lock_guard state_lock(state_mutex_);
+  const auto now = now_();
   auto result = SendResult::sent;
   if (command.tracking && (!reference || !reference_valid(*reference, now))) {
     command.tracking = false;
     result = SendResult::stale_reference;
+  }
+  if (command.tracking &&
+      (!pose_->value.autoaim_active || !pose_->value.unfolded ||
+       !robot_ || !fresh(robot_->received_at, now) || !robot_->value.robot_status_valid ||
+       !robot_->value.enabled || !robot_->value.autoaim_requested ||
+       !robot_->value.bullet_speed_valid)) {
+    command.tracking = false;
+    result = SendResult::control_unavailable;
   }
   command.sequence = next_sequence_;
   command.reference_ms = command.tracking ? reference->value.reference_ms :

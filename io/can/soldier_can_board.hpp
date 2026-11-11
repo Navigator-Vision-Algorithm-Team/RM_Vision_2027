@@ -31,6 +31,13 @@ public:
     std::uint64_t session;
   };
 
+  struct FramePose
+  {
+    PoseSample reference;  // 回传给 C 板的真实姿态样本
+    double yaw_rad;
+    double pitch_raw_rad;
+  };
+
   struct Snapshot
   {
     PoseSample pose;
@@ -45,15 +52,16 @@ public:
     sent,               // Queued to the CAN interface; not an MCU acknowledgement.
     stale_reference,    // Replaced the stale target with an idle command.
     invalid_command,    // Replaced invalid target angles with an idle command.
-    transport_error
+    transport_error,
+    control_unavailable  // CAN 控制条件在发送前失效，已改发空闲帧。
   };
 
   explicit SoldierCanBoard(const std::string & config_path);
   // 虚拟收发和确定性测试使用这个构造函数；writer 不应回调本对象的方法。
   explicit SoldierCanBoard(Writer writer, Now now = [] { return Clock::now(); });
 
-  // 用本机接收时刻近似关联图像。硬件触发和两端时钟同步需另行标定。
-  std::optional<PoseSample> pose_at(TimePoint image_timestamp) const;
+  // 按本机接收时刻插值，并保留图像时刻之前的真实样本作为协议参考。
+  std::optional<FramePose> pose_at(TimePoint image_timestamp) const;
   // 返回同组最新快照；调用方检查 pose_valid 和各状态有效位。
   std::optional<Snapshot> snapshot() const;
   std::uint64_t session() const;
