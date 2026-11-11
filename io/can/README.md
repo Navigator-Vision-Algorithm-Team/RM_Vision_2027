@@ -78,3 +78,6 @@ Python 文件是纯编解码参考，不负责打开 CAN 设备。C++ `soldier_c
 `src/soldier.cpp` 已使用 `SoldierCanBoard` 收发步兵协议；哨兵原 `CBoard` 保持独立。CAN 姿态只提供 ground yaw 和 pitch encoder，没有 roll/四元数；当前通过标定过的 pitch 零点和方向构造云台到世界旋转，并直接传给 `Solver`，避免把这组云台角再次当作 IMU 姿态套用 `R_gimbal2imubody`。坡面补偿不在此协议能力内。
 
 `pose_at()` 用本机接收时刻近似关联相机帧与 C 板姿态。已有前后两个有效样本时插值，否则用图像时刻之前最近的有效样本。回传给 C 板的参考时间戳始终来自真实 CAN 样本。实际时间对齐仍取决于 USB 延迟，精确同步需要硬件触发或两端时钟同步。
+Foxglove 的 `/sp_debug/soldier/status` 会记录调试采样时最近一次 `can_tx`，其中序号、角度、标志和回显时间来自实际编码后的 `0x510`。结果码依次为 0 正常、1 参考过期后改发空闲、2 角度无效后改发空闲、3 提交失败、4 控制条件失效后改发空闲。`sdk_accepted` 只表示 SDK 接受提交。完整收发和接收频率仍以 C 板或总线记录为准。
+
+`frame_us`、`can_tx.attempt_us` 和 `prediction.target_us` 都使用 Mini-PC 的单调时钟。`frame_to_attempt_ms` 从本机图像时间戳算到提交 CAN 之前，`prediction` 记录预测点、额外延迟和飞行时间。`observed_armor_world_m` 是该图像帧里已完成 PnP 的同类装甲板观测。回放时按预测时刻和同一块装甲板对齐，独立真值需要另行测量。

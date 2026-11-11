@@ -107,10 +107,11 @@ io::Command Aimer::aim(
   // 只保留一份副本：每轮从 target 重置再预测到本次的飞行时刻。
   // 原实现一次构造 10 个 Target 副本（每个含 3 个 EKF），是每帧最大的一次堆分配。
   Target iteration_target = target;
+  auto predict_time = future;
 
   for (int iter = 0; iter < 10; ++iter) {
     // 预测目标在 future + prev_fly_time 时刻的位置
-    auto predict_time = future + std::chrono::microseconds(static_cast<int>(prev_fly_time * 1e6));
+    predict_time = future + std::chrono::microseconds(static_cast<int>(prev_fly_time * 1e6));
     iteration_target = target;
     iteration_target.predict(predict_time);
 
@@ -153,6 +154,7 @@ io::Command Aimer::aim(
     std::sqrt(final_xyz.x() * final_xyz.x() + final_xyz.y() * final_xyz.y()),
     std::atan2(final_xyz.y(), final_xyz.x()) * 57.3, yaw * 57.3);
 
+  debug_prediction_timing = {predict_time, delay_time, current_traj.fly_time};
   return {true, false, yaw, pitch};
 }
 

@@ -759,6 +759,42 @@ void DebugStream::Impl::emit(Job & job)
       (job.status.target_ypr[1] - job.status.gimbal_ypr[1]) * kRad2Deg);
     msg.data.pop_back();
     msg.data += ekf_json;
+    if (job.status.frame_us) {
+      msg.data += fmt::format(",\"frame_us\":{}", *job.status.frame_us);
+    }
+    if (const auto & tx = job.status.can_tx) {
+      const auto read_u16 = [&](std::size_t offset) {
+        return int(tx->payload[offset]) | (int(tx->payload[offset + 1]) << 8);
+      };
+      const auto read_i16 = [&](std::size_t offset) {
+        const int value = read_u16(offset);
+        return value >= 0x8000 ? value - 0x10000 : value;
+      };
+      msg.data += fmt::format(
+        ",\"can_tx\":{{\"sequence\":{},\"tracking\":{},\"fire_advice\":{},"
+        "\"yaw_mrad\":{},\"pitch_raw_mrad\":{},\"reference_ms\":{},\"result\":{},"
+        "\"sdk_accepted\":{},\"frame_us\":{},\"attempt_us\":{},\"frame_to_attempt_ms\":{:.3f}}}",
+        int(tx->payload[0]), (tx->payload[1] & 0x01) != 0, (tx->payload[1] & 0x02) != 0,
+        read_i16(2), read_i16(4), read_u16(6), tx->result, tx->sdk_accepted,
+        tx->frame_us, tx->attempt_us, (tx->attempt_us - tx->frame_us) / 1000.0);
+    }
+    if (const auto & prediction = job.status.prediction) {
+      const auto & point = job.status.aim_prediction_world;
+      msg.data += fmt::format(
+        ",\"prediction\":{{\"target_us\":{},\"extra_delay_ms\":{:.3f},"
+        "\"flight_time_ms\":{:.3f},\"point_world_m\":[{:.4f},{:.4f},{:.4f}]}}",
+        prediction->target_us, prediction->extra_delay_s * 1000.0,
+        prediction->flight_time_s * 1000.0, point.x(), point.y(), point.z());
+    }
+    if (job.status.frame_us) {
+      msg.data += ",\"observed_armor_world_m\":[";
+      const char * separator = "";
+      for (const auto & point : job.status.observed_armor_world) {
+        msg.data += fmt::format("{}[{:.4f},{:.4f},{:.4f}]", separator, point.x(), point.y(), point.z());
+        separator = ",";
+      }
+      msg.data += "]";
+    }
     msg.data += fmt::format(
       ",\"ekf_convergence\":{{\"available\":{},\"converged\":{},\"score\":{:.1f},"
       "\"covariance_score\":{:.1f},\"consistency_score\":{:.1f},\"samples\":{},"

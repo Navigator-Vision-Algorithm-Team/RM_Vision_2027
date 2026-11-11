@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <exception>
 #include <opencv2/opencv.hpp>
+#include <optional>
 #include <thread>
 
 #include "io/camera.hpp"
@@ -74,17 +75,27 @@ int main(int argc, char * argv[]) try
   std::uint64_t last_session = can_board.session();
   bool waiting_logged = false;
   bool invalid_robot_logged = false;
+  std::optional<auto_aim::DebugCanTx> last_debug_tx;
+  const auto monotonic_us = [](std::chrono::steady_clock::time_point stamp) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(stamp.time_since_epoch()).count();
+  };
 
   while (!exiter.exit()) {
     camera.read(img, t);
     if (img.empty()) continue;
     const bool debug_frame_requested = debug.frame(img);
 
-    const auto current_session = can_board.session();
-    if (current_session != last_session) {
+    const auto current_session = can_board.session_status();
+    if (current_session.id != last_session) {
       tracker.reset();
-      last_session = current_session;
-      tools::logger()->info("[soldier] CAN session changed; cleared target tracker");
+      tools::logger()->info(
+        "[soldier] CAN session changed {}->{} reason={} rx_gap_ms={:.1f} seq={}->{} "
+        "reference_ms={}->{} rejected_pose_sequences={}",
+        last_session, current_session.id, current_session.reason, current_session.rx_gap_ms,
+        current_session.previous_seq, current_session.incoming_seq,
+        current_session.previous_reference_ms, current_session.incoming_reference_ms,
+        current_session.rejected_pose_sequences);
+      last_session = current_session.id;
     }
 
     // 取与本帧图像时间相邻的姿态样本；之后把实际使用的参考时间戳回传给 C 板。
@@ -101,17 +112,22 @@ int main(int argc, char * argv[]) try
     const bool send_due =
       last_can_send_time == std::chrono::steady_clock::time_point::min() ||
       now - last_can_send_time >= io::soldier_can::config::kMinimumSendPeriod;
-    auto send_idle = [&] {
-      if (send_due) {
-        const auto result = can_board.send({});
-        if (result != io::SoldierCanBoard::SendResult::sent &&
-            (last_can_warning_time == std::chrono::steady_clock::time_point::min() ||
-             now - last_can_warning_time >= 1s)) {
-          tools::logger()->warn("[soldier] CAN idle send status={}", static_cast<int>(result));
-          last_can_warning_time = now;
-        }
-        last_can_send_time = now;
+    auto send = [&](io::soldier_can::Command command,
+                    const std::optional<io::SoldierCanBoard::PoseSample> & reference = {}) {
+      io::SoldierCanBoard::SendAttempt attempt{};
+      const auto result = can_board.send(command, reference, debug.enabled() ? &attempt : nullptr);
+      if (debug.enabled()) {
+        last_debug_tx = auto_aim::DebugCanTx{
+          attempt.payload, monotonic_us(t), monotonic_us(attempt.started_at),
+          static_cast<int>(result), result != io::SoldierCanBoard::SendResult::transport_error};
       }
+      if (result != io::SoldierCanBoard::SendResult::sent &&
+          (last_can_warning_time == std::chrono::steady_clock::time_point::min() ||
+           now - last_can_warning_time >= 1s)) {
+        tools::logger()->warn("[soldier] CAN send status={}", static_cast<int>(result));
+        last_can_warning_time = now;
+      }
+      last_can_send_time = now;
     };
     auto publish_preview = [&](const char * state) {
       if (!debug_frame_requested) return;
@@ -121,11 +137,13 @@ int main(int argc, char * argv[]) try
       debug.end_yolo();
       auto_aim::DebugStatus preview;
       preview.state = state;
+      preview.frame_us = monotonic_us(t);
+      preview.can_tx = last_debug_tx;
       debug.publish(armors, preview);
     };
 
     if (!can_control_ready) {
-      send_idle();
+      if (send_due) send({});
       if (!waiting_logged) {
         tools::logger()->info(
           "[soldier] Waiting for valid CAN pose, robot status, auto-aim request and bullet speed");
@@ -154,7 +172,7 @@ int main(int argc, char * argv[]) try
       enemy_color = auto_aim::red;
     } else {
       // 协议要求 robot_id 无效时不能猜测本机阵营。
-      send_idle();
+      if (send_due) send({});
       if (!invalid_robot_logged) {
         tools::logger()->warn("[soldier] Invalid robot_id {}; keeping CAN command idle", robot_id);
         invalid_robot_logged = true;
@@ -198,21 +216,23 @@ int main(int argc, char * argv[]) try
         can_command.pitch_raw_rad = pitch_encoder_zero_rad +
           pitch_encoder_direction * command.pitch;
       }
-      const auto send_result = can_board.send(can_command, frame_pose->reference);
-      if (send_result != io::SoldierCanBoard::SendResult::sent &&
-          (last_can_warning_time == std::chrono::steady_clock::time_point::min() ||
-           now - last_can_warning_time >= 1s)) {
-        tools::logger()->warn("[soldier] CAN send status={}", static_cast<int>(send_result));
-        last_can_warning_time = now;
-      }
-      last_can_send_time = now;
+      send(can_command, frame_pose->reference);
     }
 
     if (debug_frame_requested) {
       auto_aim::DebugStatus debug_status{
         gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0),
         command.control && pitch_encoder_calibrated, false, tracker.state(), ""};
+      debug_status.frame_us = monotonic_us(t);
+      debug_status.can_tx = last_debug_tx;
       if (target != nullptr) {
+        // Tracker 已解算本帧同类装甲板，保留视觉观测供回放对齐。
+        for (const auto & armor : armors) {
+          if (armor.name == target->name && armor.type == target->armor_type &&
+              armor.ypd_in_world[2] > 0 && armor.xyz_in_world.allFinite()) {
+            debug_status.observed_armor_world.push_back(armor.xyz_in_world);
+          }
+        }
         const auto x = target->ekf_x();
         if (x.size() >= 11) {
           debug_status.has_ekf = true;
@@ -238,7 +258,11 @@ int main(int argc, char * argv[]) try
           debug_status.ekf_min_samples = convergence.min_samples;
         }
       }
-      if (target != nullptr && command.control && aimer.debug_aim_point.valid) {
+      if (target != nullptr && command.control && aimer.debug_aim_point.valid &&
+          aimer.debug_aim_point.xyza.head<3>().allFinite()) {
+        const auto & timing = aimer.debug_prediction_timing;
+        debug_status.prediction = auto_aim::DebugPrediction{
+          monotonic_us(timing.target_time), timing.extra_delay_s, timing.flight_time_s};
         debug_status.has_aim_prediction = true;
         debug_status.aim_prediction_world = aimer.debug_aim_point.xyza.head<3>();
         const auto & p = debug_status.aim_prediction_world;

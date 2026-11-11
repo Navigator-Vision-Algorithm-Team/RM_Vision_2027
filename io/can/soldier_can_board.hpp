@@ -56,6 +56,24 @@ public:
     control_unavailable  // CAN 控制条件在发送前失效，已改发空闲帧。
   };
 
+  struct SendAttempt
+  {
+    soldier_can::Payload payload;
+    TimePoint started_at;
+  };
+
+  struct SessionStatus
+  {
+    std::uint64_t id = 0;
+    const char * reason = "startup";
+    double rx_gap_ms = 0;
+    int previous_seq = -1;
+    int incoming_seq = -1;
+    int previous_reference_ms = -1;
+    int incoming_reference_ms = -1;
+    std::uint64_t rejected_pose_sequences = 0;
+  };
+
   explicit SoldierCanBoard(const std::string & config_path);
   // 虚拟收发和确定性测试使用这个构造函数；writer 不应回调本对象的方法。
   explicit SoldierCanBoard(Writer writer, Now now = [] { return Clock::now(); });
@@ -65,10 +83,13 @@ public:
   // 返回同组最新快照；调用方检查 pose_valid 和各状态有效位。
   std::optional<Snapshot> snapshot() const;
   std::uint64_t session() const;
+  SessionStatus session_status() const;
 
   // reference 必须是本次图像解算使用的样本，序号和回显时间戳由通信类填写。
   // 上层以 50-100Hz 提交最新结果。pitch_raw_rad 应先完成编码器零点/方向转换。
-  SendResult send(soldier_can::Command command, const std::optional<PoseSample> & reference = {});
+  SendResult send(
+    soldier_can::Command command, const std::optional<PoseSample> & reference = {},
+    SendAttempt * attempt = nullptr);
 
   bool receive(std::uint32_t can_id, std::span<const std::uint8_t> payload);
   // 确认电控重启时调用；协议中没有明确的启动标识。
@@ -102,7 +123,7 @@ private:
 
   static bool fresh(TimePoint received_at, TimePoint now);
   static bool forward(std::uint8_t previous, std::uint8_t next);
-  void reset_locked();
+  void reset_locked(SessionStatus status);
   bool reference_valid(const PoseSample & reference, TimePoint now) const;
   class DamiaoCan;
 
@@ -115,7 +136,8 @@ private:
   std::optional<Timed<soldier_can::Chassis>> chassis_;
   std::optional<Timed<soldier_can::RobotStatus>> robot_;
   std::optional<Timed<soldier_can::Heat>> heat_;
-  std::uint64_t session_ = 0;
+  SessionStatus session_;
+  std::uint64_t rejected_pose_sequences_ = 0;
   std::uint8_t next_sequence_ = 0;
   // 最先销毁传输层，确保接收线程退出时缓存和锁仍然有效。
   std::shared_ptr<DamiaoCan> can_;

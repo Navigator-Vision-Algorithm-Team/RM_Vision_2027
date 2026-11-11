@@ -25,9 +25,12 @@ bool SoldierCanBoard::forward(std::uint8_t previous, std::uint8_t next)
   return distance > 0 && distance < 128;
 }
 
-void SoldierCanBoard::reset_locked()
+void SoldierCanBoard::reset_locked(SessionStatus status)
 {
-  ++session_;
+  status.id = session_.id + 1;
+  status.rejected_pose_sequences = rejected_pose_sequences_;
+  session_ = status;
+  rejected_pose_sequences_ = 0;
   pose_.reset();
   history_.clear();
   chassis_.reset();
@@ -38,10 +41,17 @@ void SoldierCanBoard::reset_locked()
 void SoldierCanBoard::reset()
 {
   std::lock_guard lock(state_mutex_);
-  reset_locked();
+  SessionStatus status;
+  status.reason = "explicit_reset";
+  reset_locked(status);
 }
 
 std::uint64_t SoldierCanBoard::session() const
+{
+  return session_status().id;
+}
+
+SoldierCanBoard::SessionStatus SoldierCanBoard::session_status() const
 {
   std::lock_guard lock(state_mutex_);
   return session_;
@@ -59,17 +69,30 @@ bool SoldierCanBoard::receive(std::uint32_t can_id, std::span<const std::uint8_t
       const auto clock_step = static_cast<std::uint16_t>(pose->reference_ms - pose_->value.reference_ms);
       const bool timed_out = !fresh(pose_->received_at, now);
       const bool clock_restarted = clock_step >= 32768;
-      if (!timed_out && !clock_restarted && !forward(pose_->value.sequence, pose->sequence))
+      if (!timed_out && !clock_restarted && !forward(pose_->value.sequence, pose->sequence)) {
+        ++rejected_pose_sequences_;
         return false;
+      }
       // 65535 -> 0 的正常回绕视为前进。时钟倒退会清空旧会话，
       // 但仅凭这两个循环计数无法唯一识别每一次电控重启。
-      if (timed_out || clock_restarted ||
-          pose_->value.unfolded != pose->unfolded ||
-          (pose_->value.pose_valid && !pose->pose_valid)) {
-        reset_locked();
+      const char * reason = nullptr;
+      if (timed_out) reason = "pose_timeout";
+      else if (clock_restarted) reason = "pose_clock_backwards";
+      else if (pose_->value.unfolded != pose->unfolded) reason = "unfolded_changed";
+      else if (pose_->value.pose_valid && !pose->pose_valid) reason = "pose_became_invalid";
+      if (reason) {
+        SessionStatus status;
+        status.reason = reason;
+        status.rx_gap_ms =
+          std::chrono::duration<double, std::milli>(now - pose_->received_at).count();
+        status.previous_seq = pose_->value.sequence;
+        status.incoming_seq = pose->sequence;
+        status.previous_reference_ms = pose_->value.reference_ms;
+        status.incoming_reference_ms = pose->reference_ms;
+        reset_locked(status);
       }
     }
-    pose_ = PoseSample{*pose, now, session_};
+    pose_ = PoseSample{*pose, now, session_.id};
     if (pose->pose_valid) history_.push_back(*pose_);
     while (!history_.empty() &&
            (history_.size() > 128 || !fresh(history_.front().received_at, now))) {
@@ -82,11 +105,22 @@ bool SoldierCanBoard::receive(std::uint32_t can_id, std::span<const std::uint8_t
   if (const auto * robot = std::get_if<soldier_can::RobotStatus>(&*telemetry)) {
     if (robot_ && fresh(robot_->received_at, now) &&
         !forward(robot_->value.sequence, robot->sequence)) return false;
-    if (robot_ && (robot_->value.enabled != robot->enabled ||
-                   robot_->value.autoaim_requested != robot->autoaim_requested ||
-                   robot_->value.robot_id != robot->robot_id)) {
-      // 解锁、自瞄请求或阵营变化后，等待新的姿态与图像解算。
-      reset_locked();
+    if (robot_) {
+      const char * reason = nullptr;
+      if (robot_->value.enabled != robot->enabled) reason = "robot_enabled_changed";
+      else if (robot_->value.autoaim_requested != robot->autoaim_requested)
+        reason = "autoaim_request_changed";
+      else if (robot_->value.robot_id != robot->robot_id) reason = "robot_id_changed";
+      if (reason) {
+        // 解锁、自瞄请求或阵营变化后，等待新的姿态与图像解算。
+        SessionStatus status;
+        status.reason = reason;
+        status.rx_gap_ms =
+          std::chrono::duration<double, std::milli>(now - robot_->received_at).count();
+        status.previous_seq = robot_->value.sequence;
+        status.incoming_seq = robot->sequence;
+        reset_locked(status);
+      }
     }
     robot_ = Timed<soldier_can::RobotStatus>{*robot, now};
     return true;
@@ -136,7 +170,7 @@ std::optional<SoldierCanBoard::Snapshot> SoldierCanBoard::snapshot() const
 
 bool SoldierCanBoard::reference_valid(const PoseSample & reference, TimePoint now) const
 {
-  if (reference.session != session_ || !fresh(reference.received_at, now) || !pose_ ||
+  if (reference.session != session_.id || !fresh(reference.received_at, now) || !pose_ ||
       !pose_->value.pose_valid || !fresh(pose_->received_at, now)) return false;
   const auto board_age = static_cast<std::uint16_t>(
     pose_->value.reference_ms - reference.value.reference_ms);
@@ -149,7 +183,7 @@ bool SoldierCanBoard::reference_valid(const PoseSample & reference, TimePoint no
 }
 
 SoldierCanBoard::SendResult SoldierCanBoard::send(
-  soldier_can::Command command, const std::optional<PoseSample> & reference)
+  soldier_can::Command command, const std::optional<PoseSample> & reference, SendAttempt * attempt)
 {
   std::lock_guard send_lock(send_mutex_);
   std::lock_guard state_lock(state_mutex_);
@@ -179,6 +213,7 @@ SoldierCanBoard::SendResult SoldierCanBoard::send(
     payload = soldier_can::encode_command(command);
     result = SendResult::invalid_command;
   }
+  if (attempt) *attempt = SendAttempt{payload, now_()};
   try {
     if (!writer_) return SendResult::transport_error;
     writer_(soldier_can::kCommandId, payload);

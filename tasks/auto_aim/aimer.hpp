@@ -22,6 +22,13 @@ class Aimer
 {
 public:
   AimPoint debug_aim_point;
+  struct PredictionTiming
+  {
+    std::chrono::steady_clock::time_point target_time;
+    double extra_delay_s;
+    double flight_time_s;
+  };
+  PredictionTiming debug_prediction_timing{};
   explicit Aimer(const std::string & config_path);
 
   // 单目标版本：只读引用，内部按需拷贝一份用于预测迭代。

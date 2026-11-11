@@ -2,9 +2,12 @@
 #define AUTO_AIM__DEBUG_STREAM_HPP
 
 #include <Eigen/Dense>
+#include <array>
+#include <cstdint>
 #include <list>
 #include <memory>
 #include <opencv2/opencv.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,6 +21,22 @@ struct PnpDebugInfo
 {
   cv::Rect box;
   Eigen::Vector3d xyz_in_gimbal = Eigen::Vector3d::Zero();
+};
+
+struct DebugCanTx
+{
+  std::array<std::uint8_t, 8> payload;
+  std::int64_t frame_us;
+  std::int64_t attempt_us;
+  int result;
+  bool sdk_accepted;
+};
+
+struct DebugPrediction
+{
+  std::int64_t target_us;
+  double extra_delay_s;
+  double flight_time_s;
 };
 
 // 一帧调试状态：只填「业务侧才知道」的量。
@@ -59,6 +78,10 @@ struct DebugStatus
   Eigen::Vector3d aim_prediction_world = Eigen::Vector3d::Zero();  // Aimer 最终提前瞄准点
   bool has_aim_prediction_pixel = false;
   cv::Point2f aim_prediction_pixel;
+  std::optional<DebugCanTx> can_tx;
+  std::optional<DebugPrediction> prediction;
+  std::optional<std::int64_t> frame_us;
+  std::vector<Eigen::Vector3d> observed_armor_world;
 };
 
 // ROS2 -> Foxglove 实时调试数据流。
