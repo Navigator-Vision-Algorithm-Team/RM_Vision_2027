@@ -57,7 +57,8 @@ add_executable(mt_standard src/mt_standard.cpp)
 # 步兵主程序使用达妙 USB-CAN SDK，默认配置 configs/soldier.yaml。
 if(TARGET io_soldier_can)
     add_executable(soldier src/soldier_main.cpp src/soldier.cpp)
-    target_link_libraries(soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_soldier_can)
+    target_link_libraries(
+        soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
 endif()
 # 虚拟数据源运行器（无硬件可跑通 real / fake / replay）
 add_executable(virtual_run src/virtual_run.cpp)

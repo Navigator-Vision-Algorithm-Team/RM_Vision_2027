@@ -20,7 +20,7 @@ Decider::Decider(const std::string & config_path) : count_(0)
   auto yaml = YAML::LoadFile(config_path);
   enemy_color_ =
     (yaml["enemy_color"].as<std::string>() == "red") ? auto_aim::Color::red : auto_aim::Color::blue;
-  mode_ = yaml["mode"].as<double>();
+  mode_ = yaml["mode"].as<double>(MODE_ONE);
 }
 
 io::Command Decider::decide(
@@ -183,9 +183,14 @@ Eigen::Vector2d Decider::delta_angle(
 */
 bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
 {
+  return armor_filter(armors, enemy_color_);
+}
+
+bool Decider::armor_filter(std::list<auto_aim::Armor> & armors, auto_aim::Color enemy_color)
+{
   if (armors.empty()) return true;
   // 过滤非敌方装甲板
-  armors.remove_if([&](const auto_aim::Armor & a) { return a.color != enemy_color_; });
+  armors.remove_if([enemy_color](const auto_aim::Armor & a) { return a.color != enemy_color; });
 
   // 25赛季没有5号装甲板
   armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::five; });

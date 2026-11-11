@@ -93,6 +93,8 @@ public:
   std::optional<FramePose> pose_at(TimePoint image_timestamp) const;
   // 返回同组最新快照；调用方检查 pose_valid 和各状态有效位。
   std::optional<Snapshot> snapshot() const;
+  // 独立读取 0x513，供阵营等状态使用。与姿态合并时仍使用 snapshot() 核对序号。
+  std::optional<soldier_can::RobotStatus> latest_robot_status() const;
   std::uint64_t session() const;
   SessionStatus session_status() const;
   PoseRxStats take_pose_rx_stats();

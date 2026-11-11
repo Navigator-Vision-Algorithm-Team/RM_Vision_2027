@@ -38,6 +38,7 @@ public:
     const cv::Size & image_size = cv::Size());
 
   bool armor_filter(std::list<auto_aim::Armor> & armors);
+  bool armor_filter(std::list<auto_aim::Armor> & armors, auto_aim::Color enemy_color);
 
   // 【已停用】后续无法可靠判断兵种(ArmorName)，暂停按兵种设置优先级
   // void set_priority(std::list<auto_aim::Armor> & armors);

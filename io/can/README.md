@@ -3,7 +3,7 @@
 本目录包含两套用途不同的 CAN 通信实现：
 
 - `cboard.*`：原有 CBoard 接口，保留给哨兵/原 CAN 协议使用。
-- `soldier_can_*`：步兵 Mini-PC ↔ C 板协议，依据电控提供的 `视觉对接.md`、`minipc_config.h` 和 `minipc_can.py`。
+- `soldier_can_*`：步兵 Mini-PC ↔ C 板协议，依据电控提供的 `视觉对接(1).md`、`minipc_config.h` 和 `minipc_can.py`。
 
 ## 步兵文件职责
 
@@ -60,11 +60,11 @@ cmake --build build --target soldier_debug -j2
 ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 ```
 
-在 Foxglove 连接 `ws://<小电脑IP>:8765`，查看 `/sp_debug/soldier/image` 和 `/sp_debug/soldier/status`。调试配置沿用达妙 CAN 2.0 收发，ROS 2 负责发布调试数据。`debug_ros2.enable: true` 时，如果调试流无法初始化，程序会报错退出。`waiting_pose` 表示 YOLO 已有结果，程序正在等可用于该帧的 `0x511` 姿态。
+在 Foxglove 连接 `ws://<小电脑IP>:8765`，查看 `/sp_debug/soldier/image` 和 `/sp_debug/soldier/status`。调试配置沿用达妙 CAN 2.0 收发，ROS 2 负责发布调试数据。`debug_ros2.enable: true` 时，如果调试流无法初始化，程序会报错退出。`waiting_pose` 表示当前图像缺少可配对的 `0x511` 姿态。`waiting_enemy_color` 表示当前缺少可确认本机阵营的 `0x513`。
 
 ## 电控文件逐项映射
 
-### `视觉对接.md`
+### `视觉对接(1).md`
 
 - 总线格式：Classic CAN 2.0A、11 位标准帧、DLC 8、1 Mbit/s。波特率由步兵程序通过达妙 SDK 设置。
 - Mini-PC → C 板：`0x510`。字节依次为序号、版本/标志、地面 yaw（mrad）、pitch 编码器原始角（mrad）、参考姿态时间戳。
@@ -74,14 +74,15 @@ ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 - 超时和新鲜度：100ms；不排队重发旧目标。发送时回显本次图像解算所使用的 `0x511.reference_ms`。
 - `yaw`：地面参考 yaw，Mini-PC 输出为弧度，编码范围约 `[-pi, pi]`。
 - `pitch_raw`：电机编码器原始角。步兵使用 `pitch_encoder_zero_rad` 和 `pitch_encoder_direction` 转换，并限制在协议范围内。
-- 步兵默认跟随 YOLO 返回的第一个装甲板，使用 PnP 位置计算角度，PnP 无法解算时使用检测中心的视线方向。
-- `0x512`、`0x513`、`0x514` 仍可解码。步兵发送链路使用 `0x511` 的姿态和参考时间戳。
+- 步兵复用哨兵主相机的敌我过滤、PnP、Tracker/IMM-EKF 和 Aimer。敌方颜色按新鲜的 `0x513.robot_id` 推导，未知 ID 时发送空闲帧。
+- 目标回显使用本次图像解算所用的 `0x511` 姿态时间戳。独立读取新鲜的 `0x513` 获取阵营和请求状态，同组快照仍核对序号。
+- 实测弹速有效时使用共享 Aimer 的弹道预测。无有效弹速或弹道无解时，使用 Aimer 的非发射几何角继续跟随。实车联调可用 `--can-geometry-only=true` 固定使用几何角。
 - `fire_advice`：步兵当前程序固定为 false；最终发射仍由操作手/C 板逻辑控制。
-- 实际接管由 C 板决定。C 板接受跟踪指令后回报 `0x511.autoaim_active=1`，步兵在终端记录接管状态变化。
+- 视觉在收到自瞄请求并具备有效目标、姿态、使能和展开状态后发送跟踪帧。C 板接受指令后回报 `0x511.autoaim_active=1`，步兵在终端记录接管状态变化。
 
 ### `minipc_can.py`
 
-Python 文件是纯编解码参考，不负责打开 CAN 设备。C++ `soldier_can_protocol.cpp` 对应 `pack_command()` 和 `unpack_telemetry()`：相同的 ID、little-endian、有符号字段、单位、边界和 idle 编码。达妙适配层检查通道、帧格式和 DLC。
+Python 文件提供纯编解码参考。C++ `soldier_can_protocol.cpp` 沿用其 ID、小端字段、单位和范围；发送空闲帧时按 Markdown 协议把两个角度清零。达妙适配层检查通道、帧格式和 DLC。
 
 ### `minipc_config.h`
 

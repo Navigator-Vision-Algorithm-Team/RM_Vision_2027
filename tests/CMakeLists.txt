@@ -67,7 +67,7 @@ if(TARGET io_soldier_can)
     add_executable(soldier_debug soldier_debug.cpp "${PROJECT_SOURCE_DIR}/src/soldier.cpp")
     target_link_libraries(
         soldier_debug
-        ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_soldier_can)
+        ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
     install(TARGETS soldier_debug RUNTIME DESTINATION bin)
 endif()
 

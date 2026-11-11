@@ -185,6 +185,13 @@ std::optional<SoldierCanBoard::Snapshot> SoldierCanBoard::snapshot() const
                   matching(heat_, sequence, now)};
 }
 
+std::optional<soldier_can::RobotStatus> SoldierCanBoard::latest_robot_status() const
+{
+  std::lock_guard lock(state_mutex_);
+  if (!robot_ || !fresh(robot_->received_at, now_())) return std::nullopt;
+  return robot_->value;
+}
+
 bool SoldierCanBoard::reference_valid(const PoseSample & reference, TimePoint now) const
 {
   if (reference.session != session_.id || !fresh(reference.received_at, now) || !pose_ ||

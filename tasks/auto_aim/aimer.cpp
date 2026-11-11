@@ -225,8 +225,10 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     delta_angle_list.emplace_back(delta_angle);
   }
 
-  // 不考虑小陀螺（3V3 无前哨站，不再单独排除前哨站）
-  if (std::abs(ekf_x[8]) <= 2) {
+  // 慢转时选正对的板，高速旋转时按转向选即将进入视野的板。
+  // Target 的下标 7 是角速度，8 是半径。
+  const double yaw_rate = ekf_x[7];
+  if (std::abs(yaw_rate) <= 2.0) {
     // 选择在可射击范围内的装甲板
     std::vector<int> id_list;
     for (int i = 0; i < armor_num; i++) {
@@ -267,8 +269,8 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   // 在小陀螺时，一侧的装甲板不断出现，另一侧的装甲板不断消失，显然前者被打中的概率更高
   for (int i = 0; i < armor_num; i++) {
     if (std::abs(delta_angle_list[i]) > coming_angle) continue;
-    if (ekf_x[7] > 0 && delta_angle_list[i] < leaving_angle) return {true, armor_xyza_list[i]};
-    if (ekf_x[7] < 0 && delta_angle_list[i] > -leaving_angle) return {true, armor_xyza_list[i]};
+    if (yaw_rate > 0 && delta_angle_list[i] < leaving_angle) return {true, armor_xyza_list[i]};
+    if (yaw_rate < 0 && delta_angle_list[i] > -leaving_angle) return {true, armor_xyza_list[i]};
   }
 
   return {false, armor_xyza_list[0]};
