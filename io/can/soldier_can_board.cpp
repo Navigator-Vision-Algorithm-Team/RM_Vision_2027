@@ -199,21 +199,24 @@ bool SoldierCanBoard::reference_valid(const PoseSample & reference, TimePoint no
 }
 
 SoldierCanBoard::SendResult SoldierCanBoard::send(
-  soldier_can::Command command, const std::optional<PoseSample> & reference, SendAttempt * attempt)
+  soldier_can::Command command, const std::optional<PoseSample> & reference, SendAttempt * attempt,
+  AimMode aim_mode)
 {
   std::lock_guard send_lock(send_mutex_);
   std::lock_guard state_lock(state_mutex_);
   const auto now = now_();
   auto result = SendResult::sent;
+  const bool geometric = aim_mode == AimMode::geometric;
+  if (geometric) command.fire_advice = false;
   if (command.tracking && (!reference || !reference_valid(*reference, now))) {
     command.tracking = false;
     result = SendResult::stale_reference;
   }
   if (command.tracking &&
-      (!pose_->value.autoaim_active || !pose_->value.unfolded ||
+      (!pose_->value.unfolded ||
        !robot_ || !fresh(robot_->received_at, now) || !robot_->value.robot_status_valid ||
        !robot_->value.enabled || !robot_->value.autoaim_requested ||
-       !robot_->value.bullet_speed_valid)) {
+       (!geometric && (!robot_->value.bullet_speed_valid || robot_->value.bullet_speed_m_s <= 0.0)))) {
     command.tracking = false;
     result = SendResult::control_unavailable;
   }

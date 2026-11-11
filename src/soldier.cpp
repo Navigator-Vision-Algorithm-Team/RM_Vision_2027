@@ -24,6 +24,7 @@ using namespace std::chrono_literals;
 const std::string keys =
   "{help h usage ? |                      | 输出命令行参数说明}"
   "{can-rx-only    | false                | 只接收 CAN 并统计 0x511 到达间隔}"
+  "{can-geometry-only | false             | 云台几何跟踪联调，始终关闭开火建议}"
   "{@config-path   | configs/soldier.yaml | 位置参数，yaml配置文件路径 }";
 
 int main(int argc, char * argv[]) try
@@ -36,6 +37,9 @@ int main(int argc, char * argv[]) try
   }
 
   const bool can_rx_only = cli.get<bool>("can-rx-only");
+  const bool geometry_only = cli.get<bool>("can-geometry-only");
+  const auto aim_mode = geometry_only ? io::SoldierCanBoard::AimMode::geometric
+                                     : io::SoldierCanBoard::AimMode::ballistic;
   if (!cli.check()) {
     cli.printErrors();
     return 1;
@@ -56,6 +60,10 @@ int main(int argc, char * argv[]) try
   }
 
   auto yaml = tools::load(config_path);
+
+  if (geometry_only) {
+    tools::logger()->info("[soldier] CAN geometry-only mode: fire_advice=0");
+  }
 
   const double pitch_encoder_zero_rad = yaml["pitch_encoder_zero_rad"].as<double>(0.0);
   const int pitch_encoder_direction = yaml["pitch_encoder_direction"].as<int>(1);
@@ -96,6 +104,7 @@ int main(int argc, char * argv[]) try
   std::uint64_t last_session = can_board.session();
   bool waiting_logged = false;
   bool invalid_robot_logged = false;
+  std::optional<bool> last_autoaim_active;
   std::optional<auto_aim::DebugCanTx> last_debug_tx;
   const auto monotonic_us = [](std::chrono::steady_clock::time_point stamp) {
     return std::chrono::duration_cast<std::chrono::microseconds>(stamp.time_since_epoch()).count();
@@ -122,12 +131,16 @@ int main(int argc, char * argv[]) try
     // 取与本帧图像时间相邻的姿态样本；之后把实际使用的参考时间戳回传给 C 板。
     const auto frame_pose = can_board.pose_at(t - 1ms);
     const auto status = can_board.snapshot();
+    // C 板接受首条有效跟踪指令后，才会回报实际接管。
+    if (status && last_autoaim_active != status->pose.value.autoaim_active) {
+      last_autoaim_active = status->pose.value.autoaim_active;
+      tools::logger()->info("[soldier] C board autoaim_active={}", *last_autoaim_active);
+    }
     const bool can_control_ready =
       frame_pose && status && frame_pose->reference.session == status->pose.session &&
-      status->pose.value.pose_valid &&
-      status->pose.value.autoaim_active && status->pose.value.unfolded &&
+      status->pose.value.pose_valid && status->pose.value.unfolded &&
       status->robot && status->robot->robot_status_valid && status->robot->enabled &&
-      status->robot->autoaim_requested && status->robot->bullet_speed_valid;
+      status->robot->autoaim_requested;
 
     const auto now = std::chrono::steady_clock::now();
     const bool send_due =
@@ -136,7 +149,8 @@ int main(int argc, char * argv[]) try
     auto send = [&](io::soldier_can::Command command,
                     const std::optional<io::SoldierCanBoard::PoseSample> & reference = {}) {
       io::SoldierCanBoard::SendAttempt attempt{};
-      const auto result = can_board.send(command, reference, debug.enabled() ? &attempt : nullptr);
+      const auto result =
+        can_board.send(command, reference, debug.enabled() ? &attempt : nullptr, aim_mode);
       if (debug.enabled()) {
         last_debug_tx = auto_aim::DebugCanTx{
           attempt.payload, monotonic_us(t), monotonic_us(attempt.started_at),
@@ -167,7 +181,7 @@ int main(int argc, char * argv[]) try
       if (send_due) send({});
       if (!waiting_logged) {
         tools::logger()->info(
-          "[soldier] Waiting for valid CAN pose, robot status, auto-aim request and bullet speed");
+          "[soldier] Waiting for valid CAN pose, unfolded and enabled robot, and auto-aim request");
         waiting_logged = true;
       }
       publish_preview("waiting_can");
@@ -215,10 +229,13 @@ int main(int argc, char * argv[]) try
     // 使用相机帧时间戳 t，让滤波时间间隔对应真实帧间隔。
     const auto * target = tracker.track(armors, t, false, img.size());
 
-    // 有效跟踪时由 Aimer 做未来位置和弹道预测；无目标时 CAN 层发送 tracking=0。
+    // 联调时直接瞄准装甲板，正常模式等待有效实测弹速后才做弹道预测。
+    const auto & robot = *status->robot;
+    const bool aim_ready = geometry_only || (robot.bullet_speed_valid && robot.bullet_speed_m_s > 0.0);
     io::Command command{false, false, gimbal_pos[0], gimbal_pos[1]};
-    if (target != nullptr) {
-      command = aimer.aim(target, t, status->robot->bullet_speed_m_s);
+    if (target != nullptr && aim_ready) {
+      command = geometry_only ? aimer.aim_geometric(*target)
+                              : aimer.aim_ballistic(*target, t, robot.bullet_speed_m_s);
       // 无有效瞄准解时，调试数据用当前云台角，CAN 发送空闲帧。
       if (!command.control) {
         command.yaw = gimbal_pos[0];
@@ -243,7 +260,9 @@ int main(int argc, char * argv[]) try
     if (debug_frame_requested) {
       auto_aim::DebugStatus debug_status{
         gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0),
-        command.control && pitch_encoder_calibrated, false, tracker.state(), ""};
+        command.control && pitch_encoder_calibrated, false,
+        aim_ready ? tracker.state() : "waiting_bullet_speed",
+        geometry_only ? "GEOMETRY ONLY" : ""};
       debug_status.frame_us = monotonic_us(t);
       debug_status.can_tx = last_debug_tx;
       if (target != nullptr) {
@@ -279,7 +298,7 @@ int main(int argc, char * argv[]) try
           debug_status.ekf_min_samples = convergence.min_samples;
         }
       }
-      if (target != nullptr && command.control && aimer.debug_aim_point.valid &&
+      if (!geometry_only && command.control && aimer.debug_aim_point.valid &&
           aimer.debug_aim_point.xyza.head<3>().allFinite()) {
         const auto & timing = aimer.debug_prediction_timing;
         debug_status.prediction = auto_aim::DebugPrediction{
@@ -300,7 +319,9 @@ int main(int argc, char * argv[]) try
     const auto log_now = std::chrono::steady_clock::now();
     if (log_now - last_log_time > 500ms) {
       last_log_time = log_now;
-      if (target != nullptr) {
+      if (!aim_ready) {
+        tools::logger()->info("[soldier] Waiting for valid measured bullet speed");
+      } else if (target != nullptr) {
         const Eigen::VectorXd x = target->ekf_x();
         tools::logger()->info(
           "[soldier] state={} {} | EKF center({:.2f}, {:.2f}, {:.2f}) velocity({:.2f}, {:.2f}, {:.2f}) | cmd yaw={:.1f} pitch={:.1f}",

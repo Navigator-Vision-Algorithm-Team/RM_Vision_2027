@@ -56,10 +56,11 @@ ros2 launch foxglove_bridge foxglove_bridge_launch.xml
 - `yaw`：地面参考 yaw，Mini-PC 输出为弧度，编码范围约 `[-pi, pi]`。
 - `pitch_raw`：电机编码器原始角，不是世界系 pitch。`soldier.cpp` 使用 `pitch_encoder_zero_rad` 和 `pitch_encoder_direction` 转换；未标定时禁止发送跟踪目标。
 - `robot_id`：1–11 表示红方，101–111 表示蓝方；Mini-PC 据此选敌方颜色，ID 无效时保持空闲。
-- 弹速：只有 `bullet_speed_valid` 时传给 Aimer；无效弹速不进入瞄准计算。
-- `0x512` 底盘模式/yaw/yaw-rate/相对 yaw 和 `0x514` 热量数据已解码并纳入同序号快照；当前自瞄主链路暂不消费它们，因为 Aimer 只需云台姿态、目标状态和有效弹速。
+- 弹速：正常模式等待有效实测弹速，等待期间发送 `tracking=0`。`0x513.bullet_speed_valid` 在电控观察到有效测速更新后维持不到 1000 ms。
+- 云台联调可运行 `./build/soldier configs/soldier_debug.yaml --can-geometry-only=true`。有有效目标时使用装甲板的几何角度发送跟踪指令，`fire_advice` 始终为 0。
+- `0x512` 底盘模式/yaw/yaw-rate/相对 yaw 和 `0x514` 热量数据已解码并纳入同序号快照。当前自瞄主链路使用云台姿态、机器人状态和弹速。
 - `fire_advice`：步兵当前程序固定为 false；最终发射仍由操作手/C 板逻辑控制。
-- 下发门控同时要求 `0x511.autoaim_active`（C 板实际接管）和 `0x513.autoaim_requested`（操作手请求），并要求机器人已使能、云台展开、姿态/弹速有效。
+- 下发跟踪指令要求操作手已请求自瞄、机器人已使能、云台完全展开、姿态和机器人状态有效。C 板接受首条有效跟踪指令后回报 `0x511.autoaim_active=1`，步兵在终端记录接管状态变化。
 - 比赛开始位、显式复位位：当前协议没有与旧 `SerialBoard::is_game_started()` / `reset_pending()` 一一对应的字段。步兵改用 CAN 状态使能/自瞄请求门控，并在通信 session 变化时清空 Tracker。
 
 ### `minipc_can.py`

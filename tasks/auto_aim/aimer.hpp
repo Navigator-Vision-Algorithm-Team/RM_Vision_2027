@@ -37,6 +37,14 @@ public:
     const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
     bool to_now = true);
 
+  // 使用传入的有效弹速做弹道预测。
+  io::Command aim_ballistic(
+    const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+    bool to_now = true);
+
+  // 云台联调使用当前装甲板的视线角。
+  io::Command aim_geometric(const Target & target);
+
   io::Command aim(
     const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
     io::ShootMode shoot_mode, bool to_now = true);

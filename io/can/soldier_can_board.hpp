@@ -56,6 +56,8 @@ public:
     control_unavailable  // CAN 控制条件在发送前失效，已改发空闲帧。
   };
 
+  enum class AimMode { ballistic, geometric };
+
   struct SendAttempt
   {
     soldier_can::Payload payload;
@@ -98,7 +100,7 @@ public:
   // 上层以 50-100Hz 提交最新结果。pitch_raw_rad 应先完成编码器零点/方向转换。
   SendResult send(
     soldier_can::Command command, const std::optional<PoseSample> & reference = {},
-    SendAttempt * attempt = nullptr);
+    SendAttempt * attempt = nullptr, AimMode aim_mode = AimMode::ballistic);
 
   bool receive(std::uint32_t can_id, std::span<const std::uint8_t> payload);
   // 确认电控重启时调用；协议中没有明确的启动标识。

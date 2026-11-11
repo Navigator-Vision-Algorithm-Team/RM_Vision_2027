@@ -54,9 +54,31 @@ io::Command Aimer::aim(
 }
 
 io::Command Aimer::aim(
+  const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+  bool to_now)
+{
+  if (bullet_speed < 14) bullet_speed = 23;
+  return aim_ballistic(target, timestamp, bullet_speed, to_now);
+}
+
+io::Command Aimer::aim_geometric(const Target & target)
+{
+  const auto aim_point = choose_aim_point(target);
+  if (!aim_point.valid) return {false, false, 0, 0};
+
+  const Eigen::Vector3d xyz = aim_point.xyza.head<3>();
+  if (!xyz.allFinite() || xyz.head<2>().squaredNorm() <= 0.0) return {false, false, 0, 0};
+
+  const auto ypd = tools::xyz2ypd(xyz);
+  return {true, false, ypd[0] + yaw_offset_, -(ypd[1] + pitch_offset_)};
+}
+
+io::Command Aimer::aim_ballistic(
   const Target & target_in, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   bool to_now)
 {
+  if (!std::isfinite(bullet_speed) || bullet_speed <= 0.0) return {false, false, 0, 0};
+
   const Eigen::VectorXd ekf_x_in = target_in.ekf_x();
   if (ekf_x_in.size() < 9) return {false, false, 0, 0};
 
@@ -65,8 +87,6 @@ io::Command Aimer::aim(
 
   double delay_time =
     std::abs(ekf_x_in[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
-
-  if (bullet_speed < 14) bullet_speed = 23;
 
   // 考虑detecor和tracker所消耗的时间，此外假设aimer的用时可忽略不计
   auto future = timestamp;
