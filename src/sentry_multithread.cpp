@@ -192,7 +192,9 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
-  // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程，
+  // 多相机推理池：每个相机一个独立检测器 + 一个绑定固定 CPU 核的线程。
+  // 主相机固定走 YOLO；四路全向的后端由 omni_detector 决定（默认 traditional，
+  // 即完全不创建 YOLO 实例，见 omniperception::make_omni_jobs）。
   // 相机数据只喂给自己的实例，不再出现多路相机争抢同一个 OpenVINO InferRequest。
   // 结果进入统一队列，主相机结果始终优先。
   // camera_jobs 里面初始的架构就是这个相机对于yolo的特殊处理配置，像是recoder和yolo推理之后的如何处理之类的事情
@@ -258,7 +260,7 @@ int main(int argc, char * argv[])
     }
 
     // 开赛前关闭推理：相机仍持续出图（主相机帧照常入队，供录像使用），
-    // 避免赛前 5 路 YOLO 空转占满 CPU。
+    // 避免赛前 5 路检测空转占满 CPU。
     pipeline.set_inference_enabled(serial_board.is_game_started());
 
     // 限时等待主相机结果：统一结果队列里主相机的优先级最高。

@@ -1,9 +1,11 @@
 #include "yolo_pipeline.hpp"
 
 #include <algorithm>
+#include <memory>
 #include <stdexcept>
 #include <utility>
 
+#include "tasks/auto_aim/detector.hpp"
 #include "tasks/auto_aim/yolo.hpp"
 #include "tools/cpu_affinity.hpp"
 #include "tools/cpu_core_manager.hpp"
@@ -125,9 +127,12 @@ YoloPipeline::YoloPipeline(
   }
   max_omni_results_ = std::max<std::size_t>(8, jobs_.size() * 4);
 
+  const auto traditional_count = std::count_if(
+    jobs_.begin(), jobs_.end(), [](const CameraJob & job) { return job.use_traditional; });
   tools::logger()->info(
-    "[YoloPipeline] 启动 {} 路相机推理（主相机 1 路 + 全向 {} 路），每路一个 YOLO 实例",
-    jobs_.size(), jobs_.size() - 1);
+    "[YoloPipeline] 启动 {} 路相机推理（主相机 1 路 + 全向 {} 路），"
+    "其中 {} 路使用传统检测、{} 路使用 YOLO",
+    jobs_.size(), jobs_.size() - 1, traditional_count, jobs_.size() - traditional_count);
 
   for (std::size_t i = 0; i < jobs_.size(); i++) {
     threads_.emplace_back(&YoloPipeline::run, this, i);
@@ -251,19 +256,31 @@ void YoloPipeline::run(std::size_t index)
         "[YoloPipeline] '{}' 无法绑定到逻辑 CPU {}，将由调度器自由调度", name, target_cpu);
     }
 
-    // 关键顺序：先绑核、后编译模型。对 pin_cpu=true 的任务，OpenVINO 的 CPU 插件
+    // 关键顺序：先绑核、后构造检测器。对 pin_cpu=true 的任务，OpenVINO 的 CPU 插件
     // 在 compile_model 期间创建线程池，新线程继承创建线程的亲和性掩码。
-    YOLO yolo(config_path_, debug_, job.single_thread_cpu);
+    //
+    // 检测后端二选一：use_traditional=true 的路（全向相机）完全不创建 YOLO 实例，
+    // 也就不加载 .xml 模型、不建 YOLO 的推理线程池；传统检测器只带一个
+    // 32×32 的编号分类器，构造开销和常驻内存都远小于 YOLO。
+    std::unique_ptr<YOLO> yolo;
+    std::unique_ptr<Detector> traditional;
+    if (job.use_traditional) {
+      traditional = std::make_unique<Detector>(config_path_, false, job.traditional_key_prefix);
+    } else {
+      yolo = std::make_unique<YOLO>(config_path_, debug_, job.single_thread_cpu);
+    }
 
+    const char * backend = job.use_traditional ? "traditional" : "yolo";
     if (job.pin_cpu) {
       tools::logger()->info(
-        "[YoloPipeline] '{}' 推理线程启动：目标核 {}，编译后实际核 {}（{}，single_thread_cpu={}）",
-        name, target_cpu, tools::current_thread_cpu(), bound ? "已绑定" : "未绑定",
+        "[YoloPipeline] '{}' 推理线程启动：backend={}，目标核 {}，编译后实际核 {}"
+        "（{}，single_thread_cpu={}）",
+        name, backend, target_cpu, tools::current_thread_cpu(), bound ? "已绑定" : "未绑定",
         job.single_thread_cpu ? "true" : "false");
     } else {
       tools::logger()->info(
-        "[YoloPipeline] '{}' 推理线程启动：不绑核（single_thread_cpu={}）", name,
-        job.single_thread_cpu ? "true" : "false");
+        "[YoloPipeline] '{}' 推理线程启动：backend={}，不绑核（single_thread_cpu={}）", name,
+        backend, job.single_thread_cpu ? "true" : "false");
     }
 
     notify_ready(nullptr);
@@ -288,7 +305,7 @@ void YoloPipeline::run(std::size_t index)
 
       if (inference_enabled_.load(std::memory_order_relaxed)) {
         const auto begin = std::chrono::steady_clock::now();
-        result.armors = yolo.detect(img);
+        result.armors = traditional ? traditional->detect(img) : yolo->detect(img);
         last_inference_ms = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - begin)
                               .count();

@@ -11,24 +11,54 @@
 
 namespace auto_aim
 {
-Detector::Detector(const std::string & config_path, bool debug)
-: classifier_(config_path), debug_(debug)
+Detector::Detector(const std::string & config_path, bool debug, const std::string & key_prefix)
+: classifier_(config_path), key_prefix_(key_prefix), save_patterns_(key_prefix.empty()),
+  debug_(debug)
 {
   auto yaml = YAML::LoadFile(config_path);
 
-  threshold_ = yaml["threshold"].as<double>();
-  max_angle_error_ = yaml["max_angle_error"].as<double>() / 57.3;  // degree to rad
-  min_lightbar_ratio_ = yaml["min_lightbar_ratio"].as<double>();
-  max_lightbar_ratio_ = yaml["max_lightbar_ratio"].as<double>();
-  min_lightbar_length_ = yaml["min_lightbar_length"].as<double>();
-  min_armor_ratio_ = yaml["min_armor_ratio"].as<double>();
-  max_armor_ratio_ = yaml["max_armor_ratio"].as<double>();
-  max_side_ratio_ = yaml["max_side_ratio"].as<double>();
-  min_confidence_ = yaml["min_confidence"].as<double>();
-  max_rectangular_error_ = yaml["max_rectangular_error"].as<double>() / 57.3;  // degree to rad
+  // 带前缀的键（如 omni_threshold）存在时覆盖通用键；不存在则沿用通用键，
+  // 这样全向相机只需覆盖少数几个参数，其余继续复用主相机那一套。
+  auto read_double = [&](const char * key) {
+    const std::string scoped = key_prefix_ + key;
+    if (!key_prefix_.empty() && yaml[scoped]) return yaml[scoped].as<double>();
+    return yaml[key].as<double>();
+  };
+  auto read_size = [&](const char * key, std::size_t fallback) {
+    const std::string scoped = key_prefix_ + key;
+    if (!key_prefix_.empty() && yaml[scoped]) return yaml[scoped].as<std::size_t>();
+    if (yaml[key]) return yaml[key].as<std::size_t>();
+    return fallback;
+  };
+  auto read_bool = [&](const char * key, bool fallback) {
+    const std::string scoped = key_prefix_ + key;
+    if (!key_prefix_.empty() && yaml[scoped]) return yaml[scoped].as<bool>();
+    if (yaml[key]) return yaml[key].as<bool>();
+    return fallback;
+  };
+
+  threshold_ = read_double("threshold");
+  max_angle_error_ = read_double("max_angle_error") / 57.3;  // degree to rad
+  min_lightbar_ratio_ = read_double("min_lightbar_ratio");
+  max_lightbar_ratio_ = read_double("max_lightbar_ratio");
+  min_lightbar_length_ = read_double("min_lightbar_length");
+  min_armor_ratio_ = read_double("min_armor_ratio");
+  max_armor_ratio_ = read_double("max_armor_ratio");
+  max_side_ratio_ = read_double("max_side_ratio");
+  min_confidence_ = read_double("min_confidence");
+  max_rectangular_error_ = read_double("max_rectangular_error") / 57.3;  // degree to rad
+
+  // 全图检测的资源上限，缺省值足以覆盖正常场景，配置里可按需收紧。
+  max_lightbars_ = read_size("max_lightbars", 32);
+  max_armor_candidates_ = read_size("max_armor_candidates", 12);
+
+  // 低置信/异常图案写盘：主相机保持原有行为（写），带前缀的实例（全向）默认关闭。
+  // 全向 4 路 × 15 fps 的模糊小目标会产生大量低质量图案，逐个 imwrite 会把磁盘
+  // 写满，并在推理线程里引入几十毫秒的同步 IO。
+  save_patterns_ = read_bool("save_patterns", key_prefix_.empty());
 
   save_path_ = "patterns";
-  std::filesystem::create_directory(save_path_);
+  if (save_patterns_) std::filesystem::create_directory(save_path_);
 }
 
 std::list<Armor> Detector::detect(const cv::Mat & bgr_img, int frame_count)
@@ -40,7 +70,9 @@ std::list<Armor> Detector::detect(const cv::Mat & bgr_img, int frame_count)
   // 进行二值化
   cv::Mat binary_img;
   cv::threshold(gray_img, binary_img, threshold_, 255, cv::THRESH_BINARY);
-  cv::imshow("binary_img", binary_img);
+  // 调试窗口由 debug_ 保护：全向 4 路推理线程共享同一个窗口名，无条件 imshow
+  // 会互相抢 GUI 资源，而且没有配套 waitKey 刷新时会持续堆积事件。
+  if (debug_) cv::imshow("binary_img", binary_img);
 
   // 获取轮廓点
   std::vector<std::vector<cv::Point>> contours;
@@ -60,26 +92,47 @@ std::list<Armor> Detector::detect(const cv::Mat & bgr_img, int frame_count)
     lightbar_id += 1;
   }
 
+  // 灯条数量上限：反光/噪点能把轮廓数推到几百个，后面的两两配对是 O(n²)、
+  // 每个候选还要跑一次分类器网络。按长度保留最长的若干个（远处的装甲板灯条
+  // 同样足够长），其余直接丢弃。主相机走 ROI 二次矫正时不会执行到这里。
+  if (lightbars.size() > max_lightbars_) {
+    lightbars.sort([](const Lightbar & a, const Lightbar & b) { return a.length > b.length; });
+    while (lightbars.size() > max_lightbars_) lightbars.pop_back();
+  }
+
   // 将灯条从左到右排序
   lightbars.sort([](const Lightbar & a, const Lightbar & b) { return a.center.x < b.center.x; });
 
   // 获取装甲板
   std::list<Armor> armors;
-  for (auto left = lightbars.begin(); left != lightbars.end(); left++) {
+  std::size_t classified = 0;
+  bool candidates_full = false;
+  for (auto left = lightbars.begin(); left != lightbars.end() && !candidates_full; left++) {
     for (auto right = std::next(left); right != lightbars.end(); right++) {
       if (left->color != right->color) continue;
 
       auto armor = Armor(*left, *right);
       if (!check_geometry(armor)) continue;
 
+      // 分类器调用次数上限：这是全图传统检测里唯一的重活，必须封顶，
+      // 否则复杂背景下的误配对会让每帧出现几十上百次网络前向。
+      if (classified >= max_armor_candidates_) {
+        candidates_full = true;
+        break;
+      }
+
       armor.pattern = get_pattern(bgr_img, armor);
       classifier_.classify(armor);
+      classified++;
       if (!check_name(armor)) continue;
 
       armor.type = get_type(armor);
       if (!check_type(armor)) continue;
 
       armor.center_norm = get_center_norm(bgr_img, armor.center);
+      // 传统路径原本不填 box（YOLO 构造函数才填）。下游录像/调试画框和
+      // Decider 都按 YOLO 结果的字段来用，这里补上以保持接口一致。
+      armor.box = cv::boundingRect(armor.points) & cv::Rect(0, 0, bgr_img.cols, bgr_img.rows);
       armors.emplace_back(armor);
     }
   }
@@ -304,7 +357,11 @@ cv::Mat Detector::get_pattern(const cv::Mat & bgr_img, const Armor & armor) cons
   auto roi_bottom = std::min<int>(std::max(bl.y, br.y), bgr_img.rows);
   auto roi_tl = cv::Point(roi_left, roi_top);
   auto roi_br = cv::Point(roi_right, roi_bottom);
-  auto roi = cv::Rect(roi_tl, roi_br);
+  auto roi = cv::Rect(roi_tl, roi_br) & cv::Rect(0, 0, bgr_img.cols, bgr_img.rows);
+
+  // 远处小目标、贴边灯条或角点顺序异常时 ROI 可能退化，直接裁剪会抛异常。
+  // 返回空 Mat，Classifier::classify 会据此把 name 置为 not_armor。
+  if (roi.width <= 0 || roi.height <= 0) return {};
 
   return bgr_img(roi);
 }
@@ -349,6 +406,10 @@ cv::Point2f Detector::get_center_norm(const cv::Mat & bgr_img, const cv::Point2f
 
 void Detector::save(const Armor & armor) const
 {
+  // 全向相机默认关闭（save_patterns_ = false）：4 路 × 15 fps 的低质量候选会
+  // 在推理线程里做同步 imwrite，既拖慢检测又把磁盘写满。
+  if (!save_patterns_ || armor.pattern.empty()) return;
+
   auto file_name = fmt::format("{:%Y-%m-%d_%H-%M-%S}", std::chrono::system_clock::now());
   auto img_path = fmt::format("{}/{}_{}.jpg", save_path_, ARMOR_NAMES[armor.name], file_name);
   cv::imwrite(img_path, armor.pattern);

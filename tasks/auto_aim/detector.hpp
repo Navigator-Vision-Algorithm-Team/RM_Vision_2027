@@ -1,6 +1,7 @@
 #ifndef AUTO_AIM__DETECTOR_HPP
 #define AUTO_AIM__DETECTOR_HPP
 
+#include <cstddef>
 #include <list>
 #include <opencv2/opencv.hpp>
 #include <string>
@@ -15,7 +16,11 @@ namespace auto_aim
 class Detector
 {
 public:
-  Detector(const std::string & config_path, bool debug = true);
+  // key_prefix：参数前缀。非空时优先读取 "<key_prefix><键名>"（例如 "omni_threshold"），
+  // 该键不存在则回退到通用键名。全向相机用它单独调参，不影响主相机。
+  Detector(
+    const std::string & config_path, bool debug = true,
+    const std::string & key_prefix = std::string());
 
   std::list<Armor> detect(const cv::Mat & bgr_img, int frame_count = -1);
 
@@ -25,6 +30,14 @@ public:
 
 private:
   Classifier classifier_;
+
+  std::string key_prefix_;
+
+  // 全图检测的资源上限：轮廓数量在没有限制时会被反光/噪点推到几百个，后续两两
+  // 配对是 O(n²)，每个候选还要跑一次分类器网络。全向 4 路并发时必须设上限。
+  std::size_t max_lightbars_ = 32;          // 单帧保留的最长灯条数量
+  std::size_t max_armor_candidates_ = 12;   // 送入分类器的最多候选数
+  bool save_patterns_ = true;               // 低置信/异常图案是否写盘（全向默认关）
 
   double threshold_;
   double max_angle_error_;

@@ -1,10 +1,12 @@
 #include "omni_jobs.hpp"
 
 #include <fmt/core.h>
+#include <yaml-cpp/yaml.h>
 
 #include <Eigen/Geometry>
 #include <list>
 #include <memory>
+#include <string>
 #include <utility>
 
 #include "decider.hpp"
@@ -20,6 +22,23 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
   std::vector<auto_aim::multithread::CameraJob> jobs;
   jobs.reserve(omni_configs.size());
 
+  // ---- 全向检测后端 ----
+  // "traditional"（默认）：纯传统算法（阈值 + 轮廓 + 灯条配对 + tiny_resnet 编号），
+  //                        该路不再加载 YOLO 模型，也不占 YOLO 的推理线程池。
+  // "yolo"：保持旧行为（每路一个 YOLO 实例，可选 use_traditional 角点矫正）。
+  const auto yaml = YAML::LoadFile(config_path);
+  const std::string backend =
+    yaml["omni_detector"] ? yaml["omni_detector"].as<std::string>() : "traditional";
+  if (backend != "traditional" && backend != "yolo") {
+    tools::logger()->warn(
+      "[omni] omni_detector='{}' 无法识别，按 traditional 处理（可选值：traditional | yolo）",
+      backend);
+  }
+  const bool use_traditional = backend != "yolo";
+  tools::logger()->info(
+    "[omni] {} 路全向相机检测后端：{}", omni_configs.size(),
+    use_traditional ? "traditional（不加载 YOLO）" : "yolo");
+
   for (std::size_t i = 0; i < omni_configs.size(); i++) {
     // 拷贝一份配置给 lambda：任务的生命周期长于本函数
     auto cfg = omni_configs[i];
@@ -31,8 +50,16 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
     job.camera = cfg.camera;    job.camera_id = static_cast<int>(i);
     job.keep_image = false;  // 全向结果不把整帧图像带出线程，省内存带宽
 
+    // 检测后端：传统算法不创建 YOLO 实例。参数前缀 "omni_" 让 Detector 读取
+    // omni_threshold / omni_min_confidence 等覆盖键，与主相机共用一份 yaml 但
+    // 各自一套阈值（全向相机曝光、分辨率、安装角度都与主相机不同）。
+    job.use_traditional = use_traditional;
+    if (use_traditional) job.traditional_key_prefix = "omni_";
+
     // 全向只负责搜索，绑到能效核；性能核全部留给不绑核的主相机（OpenVINO
     // 线程池在空闲的大核上自主展开）。能效核不足时 YoloPipeline 会告警并回退。
+    // 传统后端下绑核不再是为了限制推理线程池，而是限流：单帧耗时会随场景
+    // 波动（高亮物多则轮廓多），独占一颗核可以避免它挤占主相机的时间片。
     job.core_preference = tools::CpuCoreType::Efficiency;
 
     job.postprocess = [cfg, decider](

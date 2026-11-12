@@ -22,6 +22,9 @@
 
 namespace auto_aim
 {
+
+class Detector;  // 传统检测器（tasks/auto_aim/detector.hpp），仅用于该路替换 YOLO
+
 namespace multithread
 {
 
@@ -66,6 +69,15 @@ struct CameraJob
   // CPU 推理是否限制为单线程。全向相机默认 true（每路独占一核），
   // 主相机可关闭，允许 OpenVINO 自主并行。
   bool single_thread_cpu = true;
+
+  // ===== 检测后端选择 =====
+  // true 时该路完全不构造 YOLO 实例（不加载 .xml 模型、不创建 OpenVINO 推理
+  // 线程池），改用工作线程内构造的 auto_aim::Detector（阈值 + 轮廓 + 灯条配对 +
+  // tiny_resnet 编号分类）。构造仍然发生在绑核之后，与 YOLO 的初始化顺序一致。
+  bool use_traditional = false;
+  // 传统检测器的参数前缀：Detector 会优先读取 "<prefix>threshold" 等键，
+  // 使全向相机与主相机共用一份 yaml 但各有一套阈值。空字符串 = 直接用通用键。
+  std::string traditional_key_prefix;
   // 推理之后、入队之前的相机相关处理（全向相机：过滤 / 优先级 / 角度解算 / 录像）。
   // img 是 const：处理函数只能读取，需要画框请自行 clone。
   // 原因：伪相机（camera_name=fake）走的是零拷贝缓冲池，且 render_overlay() 每帧

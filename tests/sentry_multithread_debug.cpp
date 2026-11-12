@@ -180,7 +180,8 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
-  // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程
+  // 多相机推理池：每个相机一个独立检测器（主相机 YOLO，全向由 omni_detector
+  // 决定，默认传统算法）+ 一个绑定固定 CPU 核的线程
   std::vector<auto_aim::multithread::CameraJob> camera_jobs;
   {
     auto_aim::multithread::CameraJob main_job;
@@ -354,7 +355,7 @@ int main(int argc, char * argv[])
       // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级（与 sentry_multithread 保持一致）
       // decider.set_priority(armors);
 
-      //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
+      //全向相机中拿出装甲板的候选（各相机独立检测，已按优先级排过序）
       auto detection_queue = omniperception::take_detection_results(pipeline);
 
       decider.sort(detection_queue);

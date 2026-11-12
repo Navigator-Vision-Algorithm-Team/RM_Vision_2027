@@ -29,9 +29,16 @@ frame_rate_main: 150
 
 # ----- 全向感知相机数量 -----
 # 0 = 不启用全向感知 (等价于普通自瞄)
-# YOLO 推理线程数自动按「1 路主相机 + omni_camera_count 路全向相机」分配物理核心，
+# 推理线程数自动按「1 路主相机 + omni_camera_count 路全向相机」分配物理核心，
 # 性能核优先；无需额外配置 CPU 核号。
 omni_camera_count: 0
+
+# ----- 全向相机检测后端 -----
+# "traditional"（默认）：四路全向全部走传统算法（阈值 + 轮廓 + 灯条配对 +
+#   tiny_resnet 编号分类），完全不加载 YOLO 模型，也不占 YOLO 的推理线程池。
+#   参数在下面「全向相机传统检测参数」里用 omni_* 覆盖，与主相机互不影响。
+# "yolo"：保持旧行为，每路一个 YOLO 实例（use_traditional 仅用于角点二次矫正）。
+omni_detector: "traditional"
 
 # ----- 单主相机（omni_camera_count = 0）丢失目标时的云台行为 -----
 # true  = 自旋扫描：云台按固定步长持续转动，扩大搜索范围（缺省值，保持旧行为）
@@ -217,6 +224,18 @@ min_armor_ratio: 1                  # 装甲板最小长宽比
 max_armor_ratio: 5                  # 装甲板最大长宽比
 max_side_ratio: 1.5                 # 配对灯条最大边长比
 max_rectangular_error: 25           # 最大矩形拟合误差 (度)
+
+# ----- 全向相机传统检测参数（omni_ 前缀覆盖上面的同名键）-----
+# 仅在 omni_detector = "traditional" 时生效。
+# 规则：读取时先找 "omni_<键名>"，找不到才回退到上面的通用键，所以只需要写
+#       与主相机不同的那几项。全向相机曝光更长（50ms）、分辨率更低、光轴朝向
+#       四周，二值化阈值和几何约束必须单独调。
+omni_threshold: 150                 # 二值化阈值
+omni_min_lightbar_length: 6         # 灯条最小长度 (像素)：远距离目标比主相机更短
+omni_min_confidence: 0.5            # 编号分类最小置信度（主相机 0.8，全向放宽）
+omni_max_lightbars: 24              # 单帧保留的最多灯条数，防止 O(n²) 配对爆炸
+omni_max_armor_candidates: 8        # 单帧送入分类器的最多候选数（分类器是唯一重活）
+omni_save_patterns: false           # 低置信图案不写盘：4 路 × 15fps 会把磁盘写满
 
 # ----- 跟踪器 (Tracker/EKF) -----
 min_detect_count: 5                 # 连续检测到多少次后进入跟踪状态
