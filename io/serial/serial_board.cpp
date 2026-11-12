@@ -160,6 +160,23 @@ void SerialBoard::update_imu_samples()
 
 void SerialBoard::send(Command command) const
 {
+  // 0x0402 报文里没有 control 位（见 gimbal/packet.hpp 的 SendPacket），固件对
+  // pitch / yaw 无条件执行，control 只参与 shoot 的与运算。
+  // 因此 control=false 时绝不能把 io::Command 默认构造的 0 发下去——那等于命令
+  // 云台回「pitch=0 / 世界系 yaw=0」，切目标或丢目标时会突然归零。
+  // 这里沿用上一次 control=true 的有效目标角，让云台停在最后的位置不动。
+  {
+    std::lock_guard<std::mutex> lock(last_command_mutex_);
+    if (command.control) {
+      last_yaw_ = command.yaw;
+      last_pitch_ = command.pitch;
+      has_last_command_ = true;
+    } else if (has_last_command_) {
+      command.yaw = last_yaw_;
+      command.pitch = last_pitch_;
+    }
+  }
+
   SendPacket packet{};
   packet.header.header = 0xA5;
   packet.header.data_length = sizeof(SendPacket) - sizeof(Header) - 2;
@@ -313,8 +330,9 @@ void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
 
 void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
 {
-  // 裁判帧里的 robot_id 与 0x502 的 roboid 是同一个编号，谁到得晚就用谁
-  if (pkt.robot_id != 0) robot_id_.store(pkt.robot_id);
+  // 裁判帧里的 robot_id 与 0x502 / 0x505 的 roboid 是同一个编号，三路谁先到用谁。
+  // 统一走严格校验：0 不覆盖，表外值忽略并告警。
+  update_robot_id(pkt.robot_id, "0x0201");
 
   RobotStatus rs;
   rs.robot_id = pkt.robot_id;
@@ -343,10 +361,31 @@ void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
 
 void SerialBoard::handleBass(const bassPacket & pkt)
 {
+  // 之前这里只取了 reset 位，0x505 的 roboid 被整帧忽略：只发 0x505 的固件
+  // 永远拿不到 ID，敌我颜色判定因此失效（同时也是全向感知失效的上游原因之一）。
+  update_robot_id(pkt.roboid, "0x505");
+
   if (pkt.reset) {
     reset_pending_.store(true);
     tools::logger()->info("[SerialBoard] Reset signal received from MCU");
   }
+}
+
+void SerialBoard::update_robot_id(uint8_t id, const char * source)
+{
+  if (id == 0) return;  // 0 = 固件没填，不能覆盖其它帧已给的有效值
+
+  if (!is_valid_robot_id(id)) {
+    tools::logger()->warn(
+      "[SerialBoard] {} 上报的 robot_id={} 不在附录二编号表内（1~11 红 / 101~111 蓝），忽略",
+      source, id);
+    return;
+  }
+
+  if (robot_id_.exchange(id) == id) return;  // 值没变，不刷日志
+  tools::logger()->info(
+    "[SerialBoard] robot_id <- {} = {}（{} / {}）", source, id,
+    is_red_robot_id(id) ? "red" : "blue", robot_role_name(id));
 }
 
 bool SerialBoard::read(uint8_t * buffer, size_t size)
@@ -440,8 +479,8 @@ void SerialBoard::receiveThread()
         const double lower = imu_packet.lower_yaw;
         const double upper = imu_packet.upper_yaw;
         // roboid 用于运行时判定敌我颜色（1~11 红方、101~111 蓝方），
-        // 0 表示固件没填，不要让 0 覆盖掉 0x0201 已给的有效值
-        if (imu_packet.roboid != 0) robot_id_.store(imu_packet.roboid);
+        // 与 0x505 / 0x0201 共用同一套严格校验：0 不覆盖、表外值忽略
+        update_robot_id(imu_packet.roboid, "0x502");
         // psi 取最短弧，避免 0/2π 边界（如 lower=350°、upper=10°）被算成 -340°
         const double psi = tools::limit_rad(upper - lower);
 

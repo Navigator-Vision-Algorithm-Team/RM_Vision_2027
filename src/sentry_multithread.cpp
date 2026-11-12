@@ -192,6 +192,15 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
+  // 全向推理线程与主线程共享的运行时状态（目前只有敌方颜色）。
+  // make_omni_jobs 给每路全向建一个独立 Decider，主线程的
+  // Decider::set_enemy_color 传不进推理线程；不同步的后果是全向检测到的装甲板
+  // 被 armor_filter 按旧颜色全部剔除，表现为「全向感知完全失效」。
+  auto omni_state = std::make_shared<omniperception::OmniSharedState>();
+  omni_state->set_enemy_color(
+    yaml["enemy_color"].as<std::string>() == "red" ? auto_aim::Color::red
+                                                  : auto_aim::Color::blue);
+
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程，
   // 相机数据只喂给自己的实例，不再出现多路相机争抢同一个 OpenVINO InferRequest。
   // 结果进入统一队列，主相机结果始终优先。
@@ -206,7 +215,7 @@ int main(int argc, char * argv[])
     main_job.single_thread_cpu = false;
     camera_jobs.push_back(std::move(main_job));
 
-    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
+    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path, omni_state);
     for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
   }
   auto_aim::multithread::YoloPipeline pipeline(config_path, std::move(camera_jobs), false);
@@ -249,11 +258,17 @@ int main(int argc, char * argv[])
         const auto enemy = own_red ? auto_aim::Color::blue : auto_aim::Color::red;
         tracker.set_enemy_color(enemy);
         decider.set_enemy_color(enemy);
+        // 全向四路的 Decider 在各自推理线程里，必须经共享状态同步，
+        // 否则换色后全向仍按旧颜色过滤，检测结果会被全部剔除。
+        omni_state->set_enemy_color(enemy);
         tools::logger()->info(
-          "[Main] robot_id={} -> own={} enemy={}（覆盖配置 enemy_color）", id,
-          own_red ? "red" : "blue", enemy == auto_aim::Color::red ? "red" : "blue");
+          "[Main] robot_id={}（{} / {}）-> own={} enemy={}（覆盖配置 enemy_color）", id,
+          own_red ? "red" : "blue", io::robot_role_name(id), own_red ? "red" : "blue",
+          enemy == auto_aim::Color::red ? "red" : "blue");
       } else {
-        tools::logger()->warn("[Main] robot_id={} 不在编号表内，保持配置的 enemy_color", id);
+        tools::logger()->warn(
+          "[Main] robot_id={} 不在附录二编号表内（1~11 红 / 101~111 蓝），保持配置的 enemy_color",
+          id);
       }
     }
 
@@ -348,6 +363,16 @@ int main(int argc, char * argv[])
 
     io::Command command{false, false, 0, 0};
 
+    // 0x0402 报文里没有 control 位（见 io/serial/gimbal/packet.hpp），固件对
+    // pitch / yaw 无条件执行，control 只参与 shoot 的与运算。所以「视觉不接管」
+    // 也必须下发一个合法角度：这里统一改写成当前姿态，保持云台不动。
+    // 少任何一个分支漏填，都会把默认的 0 当成「转到 pitch=0 / 世界系 yaw=0」。
+    auto hold_current_pose = [&]() {
+      if (command.control) return;
+      command.yaw = gimbal_pos[0];
+      command.pitch = gimbal_pos[1];
+    };
+
     // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
     // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
     // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
@@ -360,6 +385,8 @@ int main(int argc, char * argv[])
         command.control = true;
         // gimbal_pos[0] 是当前世界系绝对 yaw，叠加增量后即为世界系绝对目标角
         command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
+        // 这里的 pitch=0 是**有意的**：自旋搜索时保持平视，不要抬头/低头扫地面。
+        // 与上面两种「漏填默认 0」的情况不同，control 在这里是 true。
         command.pitch = tools::limit_rad(0.0);
       } else {
         // 原地保持：gimbal_pos[0]/[1] 是世界系绝对 yaw/pitch，原样下发即为「保持当前角度」
@@ -369,6 +396,7 @@ int main(int argc, char * argv[])
       }
 
       main_recorder.record(img, q_main, timestamp);
+      hold_current_pose();
       serial_board.send(command);
     } else {
       //这是主相机的处理，立马处理的目标
@@ -393,10 +421,19 @@ int main(int argc, char * argv[])
       // 必须加大yaw 当前的世界系 yaw 才是下位机要求的世界系绝对角。
       // 注意：这里不能用 gimbal_pos[0]——那是小yaw 的 yaw，两个轴是独立的。
       if (tracker.state() == "switching") {
-        command.control = switch_target.armors.empty() ? false : true;
+        // switch_target.armors 为空 = 已决定切换、但新目标还没观测到，此时它的
+        // delta_yaw / delta_pitch 是 DetectionResult 的默认值 0。0x0402 报文里
+        // 没有 control 位、pitch/yaw 会被固件无条件执行，直接下发 0 等于命令云台
+        // 转到「pitch=0、世界系 yaw=0」。所以 control=false 时显式保持当前姿态。
         command.shoot = false;
-        command.pitch = tools::limit_rad(switch_target.delta_pitch);
-        command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
+        command.control = !switch_target.armors.empty();
+        if (command.control) {
+          command.pitch = tools::limit_rad(switch_target.delta_pitch);
+          command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
+        } else {
+          command.pitch = gimbal_pos[1];
+          command.yaw = gimbal_pos[0];
+        }
       }
 
       else if (tracker.state() == "lost") {
@@ -414,6 +451,14 @@ int main(int argc, char * argv[])
           command.shoot = false;
           command.yaw = cached_omni_yaw;
           command.pitch = cached_omni_pitch;
+        } else {
+          // 既没有新的全向结果、也没有缓存：decider.decide() 返回的是
+          // {false, false, 0, 0}，而 0x0402 的 pitch/yaw 会被固件无条件执行。
+          // 直接下发会把云台拽回世界系 0 度，这里显式保持当前姿态。
+          command.control = false;
+          command.shoot = false;
+          command.yaw = gimbal_pos[0];
+          command.pitch = gimbal_pos[1];
         }
       }
 
@@ -456,6 +501,7 @@ int main(int argc, char * argv[])
 
   //     tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
   // command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);
+      hold_current_pose();
       serial_board.send(command);
 
       // //test//

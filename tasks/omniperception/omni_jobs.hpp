@@ -1,22 +1,51 @@
 #ifndef OMNIPERCEPTION__OMNI_JOBS_HPP
 #define OMNIPERCEPTION__OMNI_JOBS_HPP
 
+#include <atomic>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "detection.hpp"
+#include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/multithread/yolo_pipeline.hpp"
 
 namespace omniperception
 {
+
+/*
+ * 全向推理线程与主线程共享的运行时状态。
+ *
+ * make_omni_jobs 给每路相机创建一个独立的 Decider（避免跨线程共享 count_ 等
+ * 可变成员），代价是主线程 Decider::set_enemy_color() 传不进推理线程。
+ *
+ * 颜色不同步的后果非常隐蔽：串口判定敌方为蓝方、而配置里还是红方时，
+ * 推理线程里的 armor_filter 会把检测到的装甲板全部剔除，armors 为空 ->
+ * 结果不入队 -> 表现为「全向感知完全失效」（画面有目标，但系统永远收不到）。
+ *
+ * 这里只同步颜色这一个量：主线程调用 set_enemy_color()，各推理线程在每帧
+ * 过滤前读一次并和自己的缓存比较，不同才更新本路的 Decider。
+ */
+struct OmniSharedState
+{
+  void set_enemy_color(auto_aim::Color color) { enemy_color.store(color); }
+
+  std::atomic<auto_aim::Color> enemy_color{auto_aim::Color::red};
+};
+
+using OmniSharedStatePtr = std::shared_ptr<OmniSharedState>;
 
 // 为一组全向相机创建推理任务：每路相机一个 YOLO 实例（由 YoloPipeline 在各线程内
 // 构造）、一个绑定固定核的线程。推理之后在这里完成：
 //   敌方过滤 -> 装甲板优先级 -> 按优先级排序 -> 相对大yaw 的 delta_yaw/delta_pitch
 //   以及（可选）录像。
 // camera_id 从 0 开始按 omni_configs 顺序编号。
+//
+// shared 非空时，各路 Decider 的敌方颜色会跟随主线程同步；为空则各用自己的
+// 配置值（与旧行为一致）。
 std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
-  const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path);
+  const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path,
+  OmniSharedStatePtr shared = nullptr);
 
 // 取走推理池里积压的全向结果，并转换成 tracker/decider 使用的 DetectionResult。
 std::vector<DetectionResult> take_detection_results(

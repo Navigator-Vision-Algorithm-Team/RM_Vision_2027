@@ -15,10 +15,16 @@ namespace omniperception
 {
 
 std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
-  const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path)
+  const std::vector<OmniCameraConfig> & omni_configs, const std::string & config_path,
+  OmniSharedStatePtr shared)
 {
   std::vector<auto_aim::multithread::CameraJob> jobs;
   jobs.reserve(omni_configs.size());
+
+  // 各路 lambda 的颜色缓存初值。共享状态非空时以它为准，保证第一帧不会用
+  // Decider 构造时的配置值把正确的颜色又覆盖回去。
+  const auto initial_color =
+    shared ? shared->enemy_color.load() : auto_aim::Color::red;
 
   for (std::size_t i = 0; i < omni_configs.size(); i++) {
     // 拷贝一份配置给 lambda：任务的生命周期长于本函数
@@ -35,10 +41,10 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
     // 线程池在空闲的大核上自主展开）。能效核不足时 YoloPipeline 会告警并回退。
     job.core_preference = tools::CpuCoreType::Efficiency;
 
-    job.postprocess = [cfg, decider](
+    job.postprocess = [cfg, decider, shared, last_color = initial_color](
                         const cv::Mat & img, std::chrono::steady_clock::time_point ts,
                         std::list<auto_aim::Armor> & armors,
-                        auto_aim::multithread::CameraResult & result) {
+                        auto_aim::multithread::CameraResult & result) mutable {
       // 录像：必须 clone 后再画框。虽然 hikrobot/mindvision 每帧返回的都是独立缓冲，
       // 但伪相机走零拷贝缓冲池、只重画左上角 overlay，直接在原图画框会污染池缓冲
       // 并在后续帧留下残影。这路相机 keep_image=false，原图无人使用，克隆出来的
@@ -60,9 +66,27 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
         cfg.recorder->record(display_img, Eigen::Quaterniond::Identity(), ts);
       }
 
+      // 同步主线程的敌方颜色（串口上报 robot_id 后可能已换色）。
+      // 不同步的后果：armor_filter 会把本该保留的装甲板全部剔除，armors 为空 ->
+      // 结果不入队 -> 全向感知表现为「完全失效」。
+      if (shared) {
+        const auto color = shared->enemy_color.load();
+        if (color != last_color) {
+          decider->set_enemy_color(color);
+          last_color = color;
+        }
+      }
+
       // 先过滤、排序，再算角度：保证 delta_yaw/delta_pitch 描述的目标
       // 与 armors.front() 始终一致（否则角度会指向已被过滤掉的装甲板）。
+      const auto detected = armors.size();
       decider->armor_filter(armors);
+      if (armors.empty() && detected > 0) {
+        tools::logger()->debug(
+          "[{}] {} 块装甲板全部被敌方颜色过滤（enemy_color={}），请检查串口 robot_id 与配置",
+          cfg.camera ? cfg.camera->device_name() : "omni", detected,
+          auto_aim::COLORS[static_cast<int>(last_color)]);
+      }
       // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级（与 sentry_multithread 保持一致）；
       // 下方按 priority 的排序在全相等时退化为稳定排序，实际由“离图像中心最近”决定。
       // decider->set_priority(armors);
