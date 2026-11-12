@@ -71,6 +71,18 @@ std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
     if (roi_.height == -1) {  // -1 表示该维度不裁切
       roi_.height = raw_img.rows;
     }
+
+    // ROI 可能越界：配置里的 roi 是按主相机分辨率写的，而同一份配置也可能被
+    // 拼接大图（全向融合）复用。越界裁剪会抛异常，这里先收缩到图像内，并把
+    // offset 同步成实际裁剪原点，否则 parse() 还原坐标会整体偏移。
+    roi_ &= cv::Rect(0, 0, raw_img.cols, raw_img.rows);
+    offset_ = roi_.tl();
+    if (roi_.width <= 0 || roi_.height <= 0) {
+      tools::logger()->warn(
+        "[yolov5] ROI 与图像 {}x{} 无交集，本帧跳过", raw_img.cols, raw_img.rows);
+      return std::list<Armor>();
+    }
+
     bgr_img = raw_img(roi_);
   } else {
     bgr_img = raw_img;

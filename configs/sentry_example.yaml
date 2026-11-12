@@ -33,6 +33,22 @@ frame_rate_main: 150
 # 性能核优先；无需额外配置 CPU 核号。
 omni_camera_count: 0
 
+# ----- 全向相机融合（all in one）-----
+# true （默认）：四路画面按 2×2 拼成一张大图，只做**一次** YOLO 推理，
+#   再按检测框中心落在哪个分区反推所属相机，各自用该相机的内参/外参做 PnP。
+#   分区与相机序号一一对应：omni1 左上、omni2 右上、omni3 左下、omni4 右下。
+#   代价：每路有效分辨率降到单分区尺寸，远距离小目标召回会下降。
+# false：每路一个 YOLO 实例 + 一个线程（旧行为）。
+omni_fusion: true
+
+# 拼接布局（仅 omni_fusion=true 时生效，改完需同步确认 YOLO 输入尺寸）
+# 大图尺寸 = cell × (cols, rows)。2×2 + 320×240 -> 640×480，
+# 正好 1:1 填进 YOLO 的 640×640 letterbox，不产生额外缩放损失。
+omni_stitch_cols: 2
+omni_stitch_rows: 2
+omni_stitch_cell_width: 320
+omni_stitch_cell_height: 240
+
 # ----- 单主相机（omni_camera_count = 0）丢失目标时的云台行为 -----
 # true  = 自旋扫描：云台按固定步长持续转动，扩大搜索范围（缺省值，保持旧行为）
 # false = 原地保持：停在当前朝向，不转动

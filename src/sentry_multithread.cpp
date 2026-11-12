@@ -18,6 +18,8 @@
 // 【改动】load_omni_pnp_config（读取全向相机 PnP 标定参数）声明在这里
 #include "tasks/omniperception/omni_jobs.hpp"
 #include "tasks/omniperception/omni_pnp.hpp"
+// 四路全向 2×2 拼接 + 单次 YOLO 推理（omni_fusion: true）
+#include "tasks/omniperception/stitched_omni.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -90,6 +92,17 @@ int main(int argc, char * argv[])
 
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
+
+  // 全向检测后端：
+  //   true （默认）= 融合：四路拼成 2×2 大图，只做一次 YOLO 推理，再按框中心
+  //                  分区反推所属相机（tasks/omniperception/stitched_omni）。
+  //   false        = 每路一个 YOLO 实例 + 一个线程（YoloPipeline 的旧路径）。
+  const bool omni_fusion = yaml["omni_fusion"] ? yaml["omni_fusion"].as<bool>() : true;
+  if (omni_count > 0) {
+    tools::logger()->info(
+      "[Main] 全向相机 {} 路，检测后端：{}", omni_count,
+      omni_fusion ? "fusion（2×2 拼接 + 单次 YOLO）" : "per-camera（每路一个 YOLO）");
+  }
 
   // 单主相机（omni_count == 0）时，丢失目标后的云台行为开关：
   //   true  = 自旋扫描（旧行为，按固定步长持续转动）
@@ -196,6 +209,9 @@ int main(int argc, char * argv[])
   // 相机数据只喂给自己的实例，不再出现多路相机争抢同一个 OpenVINO InferRequest。
   // 结果进入统一队列，主相机结果始终优先。
   // camera_jobs 里面初始的架构就是这个相机对于yolo的特殊处理配置，像是recoder和yolo推理之后的如何处理之类的事情
+  //
+  // 融合模式下四路全向不再进入 YoloPipeline，而是由 StitchedOmni 一个线程统一处理，
+  // 因此这里的 jobs 只有主相机（YoloPipeline 要求有且只有一路主相机）。
   std::vector<auto_aim::multithread::CameraJob> camera_jobs;
   {
     auto_aim::multithread::CameraJob main_job;
@@ -206,10 +222,20 @@ int main(int argc, char * argv[])
     main_job.single_thread_cpu = false;
     camera_jobs.push_back(std::move(main_job));
 
-    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
-    for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
+    if (!(omni_fusion && omni_count > 0)) {
+      auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
+      for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
+    }
   }
   auto_aim::multithread::YoloPipeline pipeline(config_path, std::move(camera_jobs), false);
+
+  // 融合检测器：四路相机 -> 2×2 大图 -> 一次 YOLO -> 按框中心分区 -> 各路 PnP。
+  // 内部是一个独占线程，产出与旧路径完全相同的 DetectionResult。
+  std::unique_ptr<omniperception::StitchedOmni> stitched_omni;
+  if (omni_fusion && omni_count > 0) {
+    stitched_omni =
+      std::make_unique<omniperception::StitchedOmni>(config_path, omni_configs, false);
+  }
 
   // 主相机外参：tf 树里有 main_cam -> small_yaw 就用标定值，否则沿用 yaml 里的
   // R_camera2gimbal / t_camera2gimbal（语义同样是「相机 -> 小yaw 板」）。
@@ -249,6 +275,9 @@ int main(int argc, char * argv[])
         const auto enemy = own_red ? auto_aim::Color::blue : auto_aim::Color::red;
         tracker.set_enemy_color(enemy);
         decider.set_enemy_color(enemy);
+        // 融合检测线程有自己的 Decider 实例，颜色必须一起同步，
+        // 否则换色后全向仍按旧颜色过滤。
+        if (stitched_omni) stitched_omni->set_enemy_color(enemy);
         tools::logger()->info(
           "[Main] robot_id={} -> own={} enemy={}（覆盖配置 enemy_color）", id,
           own_red ? "red" : "blue", enemy == auto_aim::Color::red ? "red" : "blue");
@@ -260,6 +289,7 @@ int main(int argc, char * argv[])
     // 开赛前关闭推理：相机仍持续出图（主相机帧照常入队，供录像使用），
     // 避免赛前 5 路 YOLO 空转占满 CPU。
     pipeline.set_inference_enabled(serial_board.is_game_started());
+    if (stitched_omni) stitched_omni->set_inference_enabled(serial_board.is_game_started());
 
     // 限时等待主相机结果：统一结果队列里主相机的优先级最高。
     // 必须带超时，相机掉线时也能回到 while 条件响应 Ctrl+C / SIGTERM。
@@ -378,8 +408,11 @@ int main(int argc, char * argv[])
       // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级
       // decider.set_priority(armors);
 
-      //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
+      // 全向相机中拿出装甲板的候选（已按优先级排过序）。
+      // 融合模式下 pipeline 只跑主相机、drain_omni 恒为空，候选来自拼接检测器；
+      // 逐路模式下候选来自 YoloPipeline 的全向队列。两条路径产出的结构完全一致。
       auto detection_queue = omniperception::take_detection_results(pipeline);
+      if (stitched_omni) stitched_omni->drain(detection_queue);
 
       decider.sort(detection_queue);
 

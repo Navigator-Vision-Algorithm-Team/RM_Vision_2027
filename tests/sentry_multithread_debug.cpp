@@ -31,6 +31,8 @@
 // 【改动】load_omni_pnp_config（读取全向相机 PnP 标定参数）声明在这里
 #include "tasks/omniperception/omni_jobs.hpp"
 #include "tasks/omniperception/omni_pnp.hpp"
+// 四路全向 2×2 拼接 + 单次 YOLO 推理（omni_fusion: true）
+#include "tasks/omniperception/stitched_omni.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -94,6 +96,9 @@ int main(int argc, char * argv[])
 
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
+
+  // 全向检测后端：true = 2×2 拼接 + 单次 YOLO（默认），false = 每路一个 YOLO
+  const bool omni_fusion = yaml["omni_fusion"] ? yaml["omni_fusion"].as<bool>() : true;
 
   // 单主相机（omni_count == 0）时，丢失目标后的云台行为开关：
   //   true  = 自旋扫描（旧行为，按固定步长持续转动）
@@ -181,6 +186,7 @@ int main(int argc, char * argv[])
   omniperception::Decider decider(config_path);
 
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程
+  // 融合模式下四路全向由 StitchedOmni 统一处理，因此 jobs 里只有主相机
   std::vector<auto_aim::multithread::CameraJob> camera_jobs;
   {
     auto_aim::multithread::CameraJob main_job;
@@ -191,10 +197,18 @@ int main(int argc, char * argv[])
     main_job.single_thread_cpu = false;
     camera_jobs.push_back(std::move(main_job));
 
-    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
-    for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
+    if (!(omni_fusion && omni_count > 0)) {
+      auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
+      for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
+    }
   }
   auto_aim::multithread::YoloPipeline pipeline(config_path, std::move(camera_jobs), false);
+
+  std::unique_ptr<omniperception::StitchedOmni> stitched_omni;
+  if (omni_fusion && omni_count > 0) {
+    stitched_omni =
+      std::make_unique<omniperception::StitchedOmni>(config_path, omni_configs, false);
+  }
 
   // 【新增】ROS2 调试数据流（Foxglove 实时画面）：只读上面的业务数据，不参与控制。
   // 必须在 io::ROS2 之后构造，复用它已初始化的 rclcpp context。
@@ -225,6 +239,7 @@ int main(int argc, char * argv[])
   while (!exiter.exit() && rclcpp::ok()) {
     // 开赛前关闭推理，相机仍持续出图（主相机帧照常入队供录像）
     pipeline.set_inference_enabled(serial_board.is_game_started());
+    if (stitched_omni) stitched_omni->set_inference_enabled(serial_board.is_game_started());
 
     // 限时等待主相机结果（统一队列里主相机优先级最高），
     // 相机掉线时也不会把 Ctrl+C / SIGTERM 堵死
@@ -354,8 +369,9 @@ int main(int argc, char * argv[])
       // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级（与 sentry_multithread 保持一致）
       // decider.set_priority(armors);
 
-      //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
+      // 全向候选：融合模式下来自拼接检测器，逐路模式下来自 YoloPipeline 的全向队列
       auto detection_queue = omniperception::take_detection_results(pipeline);
+      if (stitched_omni) stitched_omni->drain(detection_queue);
 
       decider.sort(detection_queue);
 

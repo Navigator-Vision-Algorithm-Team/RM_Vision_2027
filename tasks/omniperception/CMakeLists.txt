@@ -9,5 +9,7 @@ add_library(omniperception OBJECT
     omni_jobs.cpp
     # 【改动】全向相机的 PnP 胶水层（复用 auto_aim 的公共 PnP 内核）
     omni_pnp.cpp
+    # 四路全向 2×2 拼接 + 单次 YOLO 推理 + 按框中心分区反推（omni_fusion=true 时启用）
+    stitched_omni.cpp
 )
 target_link_libraries(omniperception openvino::runtime)
