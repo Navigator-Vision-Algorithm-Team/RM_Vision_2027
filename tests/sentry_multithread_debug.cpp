@@ -240,6 +240,7 @@ int main(int argc, char * argv[])
 
   // 已应用的己方 ID：只在变化时更新颜色，避免每帧重复清目标
   uint8_t last_robot_id = 0;
+  auto last_id_report = std::chrono::steady_clock::now();
 
   // rclcpp 接管 SIGTERM 时只置 shutdown 标志，需要一并检查 rclcpp::ok()
   while (!exiter.exit() && rclcpp::ok()) {
@@ -261,6 +262,27 @@ int main(int argc, char * argv[])
         tools::logger()->warn(
           "[Main] robot_id={} 不在附录二编号表内（1~11 红 / 101~111 蓝），保持配置的 enemy_color",
           id);
+      }
+    }
+
+    // 低频诊断：ID 拿不到时区分「0x0502 帧没到」与「帧到了但 roboid=0」
+    if (serial_board.robot_id() == 0) {
+      const auto now = std::chrono::steady_clock::now();
+      if (std::chrono::duration<double>(now - last_id_report).count() >= 5.0) {
+        last_id_report = now;
+        const auto frames = serial_board.imu_frame_count();
+        if (frames == 0) {
+          tools::logger()->warn(
+            "[Main] 仍未收到 0x0502 帧，无法判定阵营；己方颜色按配置兜底 = {}。"
+            "检查下位机 0x0502 是否已带 roboid（包长 26 字节）",
+            auto_aim::COLORS[static_cast<int>(config_own_color)]);
+        } else {
+          tools::logger()->warn(
+            "[Main] 0x0502 已收 {} 帧，但 roboid={}（0 = 下位机未填）；"
+            "己方颜色按配置兜底 = {}。请确认固件把 robot_id 写进 0x0502 的 roboid",
+            frames, serial_board.last_raw_roboid(),
+            auto_aim::COLORS[static_cast<int>(config_own_color)]);
+        }
       }
     }
 
