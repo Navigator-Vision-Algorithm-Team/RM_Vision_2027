@@ -11,7 +11,7 @@ enemy_color: "red"
 # ----- 串口通信 (SerialBoard) -----
 com_port: '/dev/ttyACM0'            # 串口设备路径
 baud_rate: 921600                    # 波特率
-bullet_speed: 28.0                   # 默认弹速 (m/s), 会被下位机数据覆盖
+bullet_speed: 23.0                   # 默认弹速 (m/s), 会被下位机数据覆盖
 
 # ----- 主相机 (sursign="main") -----
 # camera_name 决定相机类型: "hikrobot" | "mindvision" | "Usbcamera"
@@ -227,8 +227,8 @@ outpost_max_temp_lost_count: 75     # 前哨站目标最大临时丢失帧数
 #         tasks/auto_aim/tracker.cpp 的 set_target()，max_dt 见 tracker.cpp）
 
 # ----- 瞄准器 (Aimer) -----
-yaw_offset: 0.0                    # yaw 整体偏移 (度)，单枪管只调这一个
-pitch_offset: 0.0                  # pitch 整体偏移 (度)
+yaw_offset: -1.5                    # yaw 整体偏移 (度)，单枪管只调这一个 向左正
+pitch_offset: 0.75                  # pitch 整体偏移 (度)向上正
 comming_angle: 60                   # 陀螺旋转 coming angle 阈值 (度)
 leaving_angle: 20                   # 陀螺旋转 leaving angle 阈值 (度)
 decision_speed: 10                  # 高速/低速判定阈值 (rad/s)
