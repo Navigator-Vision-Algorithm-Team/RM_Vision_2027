@@ -7,15 +7,12 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "io/command.hpp"
 #include "io/serial/gimbal/packet.hpp"
-#include "io/serial/protocol/link.hpp"
-#include "io/serial/protocol/referee.hpp"
 #include "io/sim/common.hpp"
 #include "io/sim/recorder.hpp"
 #include "io/sim/transport.hpp"
@@ -24,10 +21,11 @@
 namespace io
 {
 
-// 一帧姿态量（弧度），全部是「上电时车头朝向为 0」的世界系绝对角：
-//   大yaw(lower) 只有 yaw；pitch/roll 属于小yaw(upper)，即主相机所在的那块板。
-// 数据来源是 host 协议 0x0503（云台姿态 500Hz），双yaw 的关节角由 upper_yaw_angle
-// 与 yaw_angle 复合得到，详见 SerialBoard::handleGimbal。
+/*
+ * 0x502 一帧姿态量（弧度）。
+ *
+ * 大yaw(lower) 只有 yaw；pitch/roll 属于小yaw(upper)，即主相机所在的那块板。
+ */
 struct ImuState
 {
   double pitch = 0.0;      // 小yaw 板俯仰，低头为正
@@ -36,53 +34,65 @@ struct ImuState
   double lower_yaw = 0.0;  // 大yaw 世界系绝对 yaw，[0, 2π)
 };
 
+/*
+ * 与下位机（MCU）的串口通信封装。
+ *
+ * 上行：0xA5 帧头分帧，CRC8 校验帧头、CRC16 校验帧体。解析 0x502 IMU 姿态、
+ *       0x503 底盘速度、0x504 按键/拨杆、0x505 基础状态，以及裁判系统转发帧。
+ * 下行：0x0402 自瞄指令（pitch / yaw / shoot）、0x0405 导航速度指令。
+ *
+ * 数据源 real / fake / replay 统一走 sim::IByteTransport，分帧、校验、打包逻辑完全相同，
+ * 上层业务不需要区分当前是实车还是仿真。
+ *
+ * 线程模型：构造时启动接收线程，析构时置 quit_ 并 join。接收线程把 IMU 样本压入
+ * queue_，由 imu_state_at() 取用并插值；状态类 getter 均加锁，可在任意线程调用。
+ */
 class SerialBoard
 {
 public:
+  /* 弹速（m/s），构造时从配置读取，供弹道解算使用；不随 0x0402 下发 */
   double bullet_speed;
 
+  /* 读取配置、打开数据源并启动接收线程 */
   explicit SerialBoard(const std::string & config_path);
   ~SerialBoard();
 
-  // 一帧 IMU 姿态（按图像时间戳插值）。双yaw 平台的各坐标系由调用方用 tf 树复合。
+  /* 一帧 IMU 姿态（按图像时间戳插值）。双yaw 平台的各坐标系由调用方用 tf 树复合 */
   ImuState imu_state_at(std::chrono::steady_clock::time_point timestamp);
 
-  // 兼容接口（单yaw 兵种）：Rz(lower_yaw)·Ry(pitch)·Rx(roll)。
-  // 双yaw 平台请改用 imu_state_at()，因为大yaw 只有 yaw、pitch/roll 属于小yaw。
+  /*
+   * 兼容接口（单yaw 兵种）：Rz(lower_yaw)·Ry(pitch)·Rx(roll)。
+   * 双yaw 平台请改用 imu_state_at()，因为大yaw 只有 yaw、pitch/roll 属于小yaw。
+   */
   Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp);
 
+  /* 组 0x0402 帧下发自瞄指令；报文中的 shoot 位 = control && shoot */
   void send(Command command) const;
+
+  /* 组 0x0405 帧下发导航速度指令；vy 在写入报文前取反 */
   void send(NavCommand command) const;
 
-  // 云台关节反馈回调：收到一帧 CRC 正确的 0x0503 就回调一次（yaw_rad 为已转成
-  // (-π, π] 的关节角，pitch_rad 恒为 0，因为大yaw 轴没有俯仰自由度）。
-  // 回调发生在接收线程内，按真实帧率触发；不会把上一帧旧值重复喂给上层。
+  /*
+   * 云台关节反馈回调：收到一帧 CRC 正确的 0x502 就回调一次（yaw_rad 为已转成
+   * (-π, π] 的关节角，pitch_rad 恒为 0，因为大yaw 轴没有俯仰自由度）。
+   * 回调发生在接收线程内，按真实帧率触发；不会把上一帧旧值重复喂给上层。
+   */
   using GimbalJointCallback = std::function<void(double yaw_rad, double pitch_rad)>;
   void set_gimbal_joint_callback(GimbalJointCallback callback);
 
-  // Game / match state（来自下位机转发的裁判 0x0001 / 0x0201）
+  /* 最近一帧比赛状态（裁判系统转发帧） */
   GameStatus game_status() const;
+
+  /* 最近一帧机器人状态：血量、热量上限、底盘功率、三路供电 */
   RobotStatus robot_status() const;
+
+  /* 比赛是否已开始；未启用裁判系统时恒为 true */
   bool is_game_started() const;
 
-  // 自己的机器人 ID（裁判 0x0201 的 robot_id，uint8_t）。
-  // 红方 1~11，蓝方 101~111（蓝方 = 红方 + 100），2/102 保留位；0 表示还没收到。
-  uint8_t robot_id() const;
-
-  // 己方是否红方。红方 1~11、蓝方 101~111，ID 非法/未收到时返回 nullopt，
-  // 调用方应回退到配置里的 enemy_color。
-  std::optional<bool> own_team_red() const;
-
-  // 枪管热量：当前值来自裁判 0x0202 的 shooter_17mm_barrel_heat，
-  // 上限来自 0x0201 的 shooter_barrel_heat_limit。
-  uint16_t barrel_heat() const;
-  uint16_t heat_limit() const;
-
-  // 是否允许开火：热量接近上限时提前停火（提前量 heat_stop_margin），
-  // 回落到 limit - 2*margin 后自动恢复；没有裁判数据（limit 为 0）时恒为 true。
-  bool can_shoot() const;
-
-  // MCU 重启信号（0x0500 的 uptime_ms 回落，等价旧 0x505 的 reset 位）
+  /*
+   * 读取并清除「下位机请求复位」标志（由 0x505 的 reset 位置位）。
+   * 语义是读后清零，不要连续调用两次。
+   */
   bool reset_pending();
 
 private:
@@ -92,19 +102,10 @@ private:
     std::chrono::steady_clock::time_point timestamp;
   };
 
-  // 把队列里的新样本搬进 data_ahead_ / data_behind_
+  /* 把队列里的新样本搬进 data_ahead_ / data_behind_ */
   void update_imu_samples();
 
-  // 解码器每解出一帧回调一次（接收线程内），把载荷搬进本类的业务状态
-  void on_frame(uint16_t cmd_id);
-  void handle_gimbal(const host_comm::host_gimbal_status_t & pkt);
-  void handle_game_status(const referee_comm::v2027::game_status_t & pkt);
-  void handle_robot_status(const referee_comm::v2027::robot_status_t & pkt);
-  void handle_power_heat(const referee_comm::v2027::power_heat_data_t & pkt);
-  // 热量门限状态机：接近上限锁定开火，回落后解锁（仅在接收线程内调用）
-  void update_heat_gate();
-
-  // 数据源：真实串口 / 内置虚拟下位机 / 原始字节回放，由配置决定，解析逻辑完全一致
+  /* 数据源：真实串口 / 内置虚拟下位机 / 原始字节回放，由配置决定，解析逻辑完全一致 */
   sim::IByteTransport::Ptr transport_;
   sim::SourceMode source_mode_ = sim::SourceMode::Real;
   std::shared_ptr<sim::SerialRecorder> recorder_;
@@ -112,16 +113,12 @@ private:
   std::string device_name_;
   uint32_t baud_rate_ = 921600;
 
-  // 链路解包：分帧器 + 号段分派（0x05xx 上行 / 0x0001~0x0A06 裁判转发）
-  MinipcLink link_;
-  referee_comm::Receiver receiver_{link_};
-
   std::thread receive_thread_;
   std::atomic<bool> quit_ = false;
   mutable std::mutex send_mutex_;
   mutable std::mutex status_mutex_;
 
-  // 关节反馈订阅方（目前是 io::ROS2 的 JointState 发布节点）
+  /* 关节反馈订阅方（目前是 io::ROS2 的 JointState 发布节点） */
   mutable std::mutex joint_callback_mutex_;
   GimbalJointCallback joint_callback_;
 
@@ -129,7 +126,7 @@ private:
   IMUData data_ahead_;
   IMUData data_behind_;
 
-  // Robot state from MCU
+  /* 下位机上报的比赛与机器人状态，接收线程写入，getter 读取 */
   GameStatus game_status_{};
   RobotStatus robot_status_{};
   std::atomic<bool> game_started_{false};
@@ -137,24 +134,23 @@ private:
   bool use_referee_system_ = false;
   int game_start_progress_threshold_ = 4;
 
-  // 裁判 0x0201 / 0x0202 的机器人身份与枪管热量（接收线程写，业务线程读 status_mutex_）
-  uint8_t robot_id_ = 0;  // 红方 1~11，蓝方 101~111；0 = 未知
-  uint16_t barrel_heat_ = 0;
-  uint16_t heat_limit_ = 0;
-  int heat_stop_margin_ = 10;           // 停火提前量（热量单位），配置项 heat_stop_margin
-  std::atomic<bool> heat_blocked_{false};  // true = 热量过高，暂停开火
+  /* 从数据源读满 size 字节；超时或失败返回 false */
+  bool read(uint8_t * buffer, size_t size);
 
-  // 0x0503 的 yaw_angle 是 IMU（相机/枪管）世界系 yaw。双yaw 平台上 IMU 装在小yaw 板，
-  // 因此 小yaw 世界角 = yaw_angle，大yaw 世界角 = yaw_angle - upper_yaw_angle。
-  // 若实车把 IMU 装在大yaw 轴上，把 gimbal_imu_axis 配成 lower 即可互换。
-  bool imu_on_upper_axis_ = true;
-
-  uint32_t last_uptime_ms_ = 0;
-  bool config_logged_ = false;
-  bool first_imu_received_ = false;
-
+  /* 接收线程主循环：分帧 -> CRC 校验 -> 按 cmd_id 分发 */
   void receiveThread();
+
+  /* 数据源异常时重建连接 */
   void reconnect();
+
+  /* 0x0001 比赛状态 */
+  void handleGameStatus(const GameStatusPacket & pkt);
+
+  /* 0x0201 机器人状态 */
+  void handleGameRobotStatus(const GameRobotStatusPacket & pkt);
+
+  /* 0x505 基础状态，目前只取其中的复位位 */
+  void handleBass(const bassPacket & pkt);
 };
 
 }  // namespace io

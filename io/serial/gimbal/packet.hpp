@@ -1,28 +1,23 @@
 #ifndef IO__GIMBAL__PACKET_HPP
 #define IO__GIMBAL__PACKET_HPP
 
+#include <algorithm>
 #include <cstdint>
-
-// ============================================================================
-// 上位机 → 下位机 的下行结构体（0x0402 自瞄 / 0x0405 导航）。
-//
-// 接收方向（下位机 → 上位机）按下位机固件的协议分层解析，不再用
-// 「一个 cmd 一个整帧结构体」的写法：
-//   · 线格式与分帧    io/serial/protocol/referee.hpp
-//   · host 上行 0x05xx io/serial/protocol/host_protocol.hpp
-//   · 裁判转发 0x0xxx  io/serial/protocol/seasons/2027/protocol.hpp
-//   · 号段分派        io/serial/protocol/link.hpp
-//
-// 下行只发这两帧，字段以本文件为准（2026-11 精简后的定义）：
-//   0x0402  data 9 字节  = pitch(f32) yaw(f32) shoot(u8)
-//   0x0405  data 16 字节 = vx(f32) vy(f32) wz(f32) target_angle(f32)
-// ★ 固件按 sizeof 做严格长度校验，多一字节少一字节都会整帧丢弃，改动必须两边同步。
-// ============================================================================
+#include <vector>
 
 namespace io
 {
-
-// 裁判系统帧头（5 字节）
+/*
+ * 所有帧共用的 7 字节帧头。
+ *
+ * data_length 只统计数据段字节数，不含本帧头 7 字节与末尾 2 字节 CRC16，
+ * 所以打包时的算法统一是 sizeof(Packet) - sizeof(Header) - 2。
+ * CRC8 覆盖帧头前 5 字节（0xA5 + data_length + seq + crc8 占位），
+ * CRC16 覆盖整帧（crc16 字段按 0 参与计算），两者都是 RoboMaster 标准算法，
+ * 实现见 protocol_crc.hpp，不可替换为标准位运算版本。
+ *
+ * 字段依次为：固定帧头 0xA5、数据段长度、帧序号（当前恒 0）、帧头校验、命令字。
+ */
 struct Header
 {
   uint8_t header = 0xA5;
@@ -32,47 +27,99 @@ struct Header
   uint16_t cmd_id;
 } __attribute__((packed));
 
-// cmd_id 0x0402 — vision → MCU aim command（data 段 9 字节）
-struct SendPacket
+/*
+ * cmd_id 0x502 — 下位机上报的 IMU 姿态。
+ *
+ * 双yaw 结构（哨兵）：底盘 → 大yaw(lower) → 小yaw(upper，主相机与 IMU 所在板)。
+ *
+ *   · 大yaw 只有 yaw：lower_yaw 是「大yaw 旋转轴」的世界系绝对角，
+ *     四个全向相机刚性挂在这根轴所在的支架上 -> R_大yaw2world = Rz(lower_yaw)。
+ *   · 小yaw 板带 yaw + pitch + roll：upper_yaw 是其世界系绝对角，
+ *     pitch/roll 也是这块板的姿态 -> R_小yaw2world = Rz(upper)·Ry(pitch)·Rx(roll)。
+ *     主相机装在小yaw 上，所以这个姿态就是主相机的基座姿态。
+ *   · 两者都相对「上电时车头朝向」为 0，范围 [0, 2π)，逆时针（左转）为正。
+ *   · 只有哨兵是双yaw 平台；其他兵种把唯一的 yaw 填在 lower_yaw（upper_yaw 不使用）。
+ *
+ * 单位：弧度。pitch 低头为正、抬头为负，roll 绕 x 轴。
+ * 长度：header(7) + 4×float(16) + roboid(1) + crc16(2) = 26 字节，
+ *       Header.data_length 应为 17（= 26 - 7 - 2，与 SendPacket 的算法一致）。
+ */
+struct IMUPacket
 {
   Header header;
-  float pitch = 0.0f;  // 世界系绝对 pitch（rad）
-  float yaw = 0.0f;    // 世界系绝对 yaw（rad）
-  uint8_t shoot = 0;   // 1 = 允许发弹
+  float pitch;
+  float roll;
+  float upper_yaw;
+  float lower_yaw;
+  uint8_t roboid;
   uint16_t crc16 = 0;
 } __attribute__((packed));
 
-// cmd_id 0x0405 — vision → MCU navigation command（data 段 16 字节）
-struct NavigationPacket
+/* 下位机按固定长度组帧，结构体一旦被改动必须同步固件，这里锁住长度防止误改 */
+static_assert(sizeof(IMUPacket) == 26, "IMUPacket 必须是 26 字节，改动需同步下位机固件");
+
+/* cmd_id 0x0503 — 底盘速度反馈 */
+struct classisPacket
 {
   Header header;
-  float vx;            // 体坐标系前进速度，m/s
-  float vy;            // 体坐标系左移速度，m/s；★下发前取反（SerialBoard::send），符号约定已确认保留
-  float wz;            // 转向角速度，rad/s
-  float target_angle;  // 目标航向角，rad；★已确认暂时固定发 0，等导航侧提供航向后透传
-  uint16_t crc16;
-} __attribute__((packed, aligned(1)));
+  float vx;
+  float vy;
+  float vz;
+  uint8_t enable;  // 底盘是否使能
+  uint16_t crc16 = 0;
+} __attribute__((packed));
 
-// 下行帧长必须与固件结构体完全一致（固件按 sizeof 严格校验，不一致会整帧丢弃）
-static_assert(
-  sizeof(SendPacket) - sizeof(Header) - 2 == 9,
-  "0x0402 data 段必须是 9 字节（pitch/yaw/shoot），改动需同步下位机固件");
-static_assert(
-  sizeof(NavigationPacket) - sizeof(Header) - 2 == 16,
-  "0x0405 data 段必须是 16 字节（vx/vy/wz/target_angle），改动需同步下位机固件");
-
-// 解析后的比赛状态（裁判 0x0001，由 SerialBoard 从 v2027::game_status_t 搬运而来）
-struct GameStatus
+/* cmd_id 0x0504 — 按键 / 拨杆状态 */
+struct bottonPacket
 {
-  uint8_t game_type;          // 比赛类型
-  uint8_t game_progress;      // 比赛阶段 (4 = 比赛中)
-  uint16_t stage_remain_time; // 阶段剩余时间
-  uint64_t sync_timestamp;    // 同步时间戳
-};
+  Header header;
+  bool start;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
 
-// 解析后的机器人状态（裁判 0x0201，由 SerialBoard 从 v2027::robot_status_t 搬运而来）
-struct RobotStatus
+/*
+ * cmd_id 0x0505 — 机器人基础状态（复位、血量、模式等）。
+ *
+ * 业务侧目前只使用 reset（下位机请求视觉复位）；其余字段仅在测试工具里解包打印。
+ */
+struct bassPacket
 {
+  Header header;
+  uint8_t roboid;
+  bool reset;
+  uint8_t position[2];
+  uint8_t HP;
+  uint8_t robomode;
+  bool canshoot;
+  uint8_t shootmode;
+  bool superpower;
+  bool online;
+  bool two;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+/*
+ * cmd_id 0x0001 / 0x0100 — 比赛状态。
+ *
+ * game_info 的低 4 位是 game_type，高 4 位是 game_progress。
+ */
+struct GameStatusPacket
+{
+  Header header;
+  uint8_t game_info;
+  uint16_t stage_remain_time;
+  uint64_t sync_timestamp;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+/*
+ * cmd_id 0x0201 / 0x0102 — 机器人血量 / 射击 / 功率状态。
+ *
+ * mains_power_state 的 bit0/bit1/bit2 依次表示云台 / 底盘 / 发射机构输出。
+ */
+struct GameRobotStatusPacket
+{
+  Header header;
   uint8_t robot_id;
   uint8_t robot_level;
   uint16_t remain_hp;
@@ -80,11 +127,93 @@ struct RobotStatus
   uint16_t shooter_cooling_rate;
   uint16_t shooter_heat_limit;
   uint16_t chassis_power_limit;
-  float bullet_speed_limit;  // 2027 新增：射击初速度上限 m/s
-  bool mains_power_gimbal;   // 云台供电
-  bool mains_power_chassis;  // 底盘供电
-  bool mains_power_shooter;  // 发射机构供电
+  uint8_t mains_power_state;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+/*
+ * cmd_id 0x0402 — 视觉 → 下位机的自瞄指令。
+ *
+ * 实际生效的只有 pitch / yaw / shoot：pitch、yaw 为目标角（弧度），
+ * shoot 等于 control && shoot。id、robo_id、accuracy、timeseries 是协议保留位，
+ * 当前恒为默认值（0 / 0 / 50 / 0），下位机不读取。
+ *
+ * 结构体布局必须与固件严格一致，固件按固定长度校验，长度不符整帧丢弃。
+ */
+struct SendPacket
+{
+  Header header;
+  uint8_t id = 0;
+  uint8_t robo_id = 0;
+  float pitch = 0.0f;
+  float yaw = 0.0f;
+  uint8_t accuracy = 50;
+  uint8_t shoot = 0;
+  uint8_t timeseries = 0;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+/*
+ * cmd_id 0x0405 — 视觉 → 下位机的导航速度指令。
+ *
+ * vx 纵向速度、vy 横向速度（写入前已取反以适配下位机约定）、wz 角速度。
+ */
+struct NavigationPacket
+{
+  Header header;
+  float vx;
+  float vy;
+  float wz;
+  uint16_t crc16;
+} __attribute__((packed, aligned(1)));
+
+/* 从 GameStatusPacket 拆出来、业务侧实际使用的比赛状态 */
+struct GameStatus
+{
+  Header header;
+  uint8_t game_type;         // 比赛类型
+  uint8_t game_progress;     // 比赛阶段 (4 = 比赛中)
+  uint16_t stage_remain_time; // 阶段剩余时间
+  uint64_t sync_timestamp;   // 同步时间戳
 };
+
+/* 从 GameRobotStatusPacket 拆出来、业务侧实际使用的机器人状态 */
+struct RobotStatus
+{
+  Header header;
+  uint8_t robot_id;
+  uint8_t robot_level;
+  uint16_t remain_hp;
+  uint16_t max_hp;
+  uint16_t shooter_cooling_rate;
+  uint16_t shooter_heat_limit;
+  uint16_t chassis_power_limit;
+  bool mains_power_gimbal;    // 云台供电
+  bool mains_power_chassis;   // 底盘供电
+  bool mains_power_shooter;   // 发射机构供电
+};
+
+/*
+ * 按内存布局原样拷贝，依赖结构体的 packed 布局与下位机的小端字节序；
+ * 不做字节序转换，跨大端平台使用需要另行处理。
+ */
+template <typename T>
+inline T fromVector(const std::vector<uint8_t> & data)
+{
+  T packet;
+  std::copy(data.begin(), data.end(), reinterpret_cast<uint8_t *>(&packet));
+  return packet;
+}
+
+/* 同上，把下行包序列化成待发送字节流 */
+inline std::vector<uint8_t> toVector(const SendPacket & data)
+{
+  std::vector<uint8_t> packet(sizeof(SendPacket));
+  std::copy(
+    reinterpret_cast<const uint8_t *>(&data),
+    reinterpret_cast<const uint8_t *>(&data) + sizeof(SendPacket), packet.begin());
+  return packet;
+}
 
 }  // namespace io
 
