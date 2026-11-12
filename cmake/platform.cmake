@@ -24,9 +24,11 @@ string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _sp_proc)
 if(_sp_proc MATCHES "^(x86_64|amd64|x64)$")
   set(SP_PROCESSOR "x86_64")
   set(SP_ARCH "amd64")
+  set(SP_DMCAN_ARCH "x86_64")
 elseif(_sp_proc MATCHES "^(aarch64|arm64|armv8.*)$")
   set(SP_PROCESSOR "aarch64")
   set(SP_ARCH "arm64")
+  set(SP_DMCAN_ARCH "arm64")
 else()
   message(FATAL_ERROR
     "不支持的处理器架构：${CMAKE_SYSTEM_PROCESSOR}\n"

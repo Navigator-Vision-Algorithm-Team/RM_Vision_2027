@@ -40,6 +40,7 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 include_directories(${OpenCV_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR})
 
+option(SP_BUILD_SOLDIER "Build soldier with the Damiao USB-CAN SDK" ON)
 
 add_subdirectory(tools)
 add_subdirectory(io)
@@ -53,13 +54,16 @@ add_subdirectory(tasks/omniperception)
 ####################src###################
 # 多线程自瞄主程序（配置示例 configs/mtstandard.yaml）
 add_executable(mt_standard src/mt_standard.cpp)
-# 步兵主程序：YOLO 检测 + PnP 位姿定位，默认配置 configs/soldier.yaml
-add_executable(soldier src/soldier.cpp)
+# 步兵主程序使用达妙 USB-CAN SDK，默认配置 configs/soldier.yaml。
+if(TARGET io_soldier_can)
+    add_executable(soldier src/soldier_main.cpp src/soldier.cpp)
+    target_link_libraries(
+        soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
+endif()
 # 虚拟数据源运行器（无硬件可跑通 real / fake / replay）
 add_executable(virtual_run src/virtual_run.cpp)
 
 target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
-target_link_libraries(soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 
 ##################calibration################
@@ -95,8 +99,9 @@ endif()
 # add_subdirectory(benchmarks/ekf)
 
 ####################tests###################
-# 调试版入口（sentry_multithread_debug / soldier_debug）：业务逻辑与 src/ 完全一致，
-# 只额外通过 ROS2 向 Foxglove 推送图像与位姿，仅在找到 ROS2 时构建
+# 调试版入口（sentry_multithread_debug）：业务逻辑与 src/ 完全一致，
+# 只额外通过 ROS2 向 Foxglove 推送图像与位姿，仅在找到 ROS2 时构建。
+# 步兵调试入口由 tests/CMakeLists.txt 按 ROS2 和达妙 SDK 是否可用构建。
 add_subdirectory(tests)
 
 ################## install ##################

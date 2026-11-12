@@ -28,7 +28,7 @@ add_library(auto_aim OBJECT
     yolos/yolov5.cpp
     yolos/yolov8.cpp
     yolos/yolo11.cpp
-    multithread/commandgener.cpp
+    # commandgener.cpp 无启用的调用方，且依赖原 CBoard，不编入共享自瞄对象库。
     multithread/mt_detector.cpp
     # 多相机推理池：一路相机一个 YOLO 实例 + 固定核线程 + 主相机优先的结果队列
     multithread/yolo_pipeline.cpp

@@ -54,35 +54,67 @@ io::Command Aimer::aim(
 }
 
 io::Command Aimer::aim(
+  const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+  bool to_now)
+{
+  if (bullet_speed < 14) bullet_speed = 23;
+  return aim_ballistic(target, timestamp, bullet_speed, to_now);
+}
+
+io::Command Aimer::aim_geometric(const Target & target)
+{
+  debug_aim_point = choose_aim_point(target);
+  if (!debug_aim_point.valid) return {false, false, 0, 0};
+
+  const Eigen::Vector3d xyz = debug_aim_point.xyza.head<3>();
+  if (!xyz.allFinite() || xyz.head<2>().squaredNorm() <= 0.0) return {false, false, 0, 0};
+
+  const auto ypd = tools::xyz2ypd(xyz);
+  return {true, false, ypd[0] + yaw_offset_, -(ypd[1] + pitch_offset_)};
+}
+
+Aimer::PredictionTiming Aimer::latency_prediction(
+  std::chrono::steady_clock::time_point timestamp, double yaw_rate, bool to_now) const
+{
+  const double extra_delay =
+    std::abs(yaw_rate) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
+  const double processing_time =
+    to_now ? tools::delta_time(std::chrono::steady_clock::now(), timestamp) : 0.005;
+  const auto delay =
+    std::chrono::microseconds(static_cast<int>((processing_time + extra_delay) * 1e6));
+  return {timestamp + delay, extra_delay, 0.0};
+}
+
+io::Command Aimer::aim_geometric(
+  const Target & target, std::chrono::steady_clock::time_point timestamp, bool to_now)
+{
+  const auto x = target.ekf_x();
+  if (x.size() < 9) return {false, false, 0, 0};
+
+  // 复用弹道路径的延迟补偿。几何角无需估算飞行时间，且不修改 Tracker 状态。
+  const auto timing = latency_prediction(timestamp, x[7], to_now);
+  Target predicted = target;
+  predicted.predict(timing.target_time);
+  const auto command = aim_geometric(predicted);
+  if (command.control) debug_prediction_timing = timing;
+  return command;
+}
+
+io::Command Aimer::aim_ballistic(
   const Target & target_in, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   bool to_now)
 {
+  if (!std::isfinite(bullet_speed) || bullet_speed <= 0.0) return {false, false, 0, 0};
+
   const Eigen::VectorXd ekf_x_in = target_in.ekf_x();
   if (ekf_x_in.size() < 9) return {false, false, 0, 0};
 
   // 本地副本：下面要对它连续做 predict，EKF 状态必须可写
   Target target = target_in;
 
-  double delay_time =
-    std::abs(ekf_x_in[7]) > decision_speed_ ? high_speed_delay_time_ : low_speed_delay_time_;
-
-  if (bullet_speed < 14) bullet_speed = 23;
-
-  // 考虑detecor和tracker所消耗的时间，此外假设aimer的用时可忽略不计
-  auto future = timestamp;
-  if (to_now) {
-    double dt;
-    dt = tools::delta_time(std::chrono::steady_clock::now(), timestamp) + delay_time;
-    future += std::chrono::microseconds(int(dt * 1e6));
-    target.predict(future);
-  }
-
-  else {
-    auto dt = 0.005 + delay_time;  //detector-aimer耗时0.005+发弹延时0.1
-    // tools::logger()->info("dt is {:.4f} second", dt);
-    future += std::chrono::microseconds(int(dt * 1e6));
-    target.predict(future);
-  }
+  const auto timing = latency_prediction(timestamp, ekf_x_in[7], to_now);
+  const auto future = timing.target_time;
+  target.predict(future);
 
   auto aim_point0 = choose_aim_point(target);
   debug_aim_point = aim_point0;
@@ -107,10 +139,11 @@ io::Command Aimer::aim(
   // 只保留一份副本：每轮从 target 重置再预测到本次的飞行时刻。
   // 原实现一次构造 10 个 Target 副本（每个含 3 个 EKF），是每帧最大的一次堆分配。
   Target iteration_target = target;
+  auto predict_time = future;
 
   for (int iter = 0; iter < 10; ++iter) {
     // 预测目标在 future + prev_fly_time 时刻的位置
-    auto predict_time = future + std::chrono::microseconds(static_cast<int>(prev_fly_time * 1e6));
+    predict_time = future + std::chrono::microseconds(static_cast<int>(prev_fly_time * 1e6));
     iteration_target = target;
     iteration_target.predict(predict_time);
 
@@ -153,6 +186,7 @@ io::Command Aimer::aim(
     std::sqrt(final_xyz.x() * final_xyz.x() + final_xyz.y() * final_xyz.y()),
     std::atan2(final_xyz.y(), final_xyz.x()) * 57.3, yaw * 57.3);
 
+  debug_prediction_timing = {predict_time, timing.extra_delay_s, current_traj.fly_time};
   return {true, false, yaw, pitch};
 }
 
@@ -203,8 +237,10 @@ AimPoint Aimer::choose_aim_point(const Target & target)
     delta_angle_list.emplace_back(delta_angle);
   }
 
-  // 不考虑小陀螺（3V3 无前哨站，不再单独排除前哨站）
-  if (std::abs(ekf_x[8]) <= 2) {
+  // 慢转时选正对的板，高速旋转时按转向选即将进入视野的板。
+  // Target 的下标 7 是角速度，8 是半径。
+  const double yaw_rate = ekf_x[7];
+  if (std::abs(yaw_rate) <= 2.0) {
     // 选择在可射击范围内的装甲板
     std::vector<int> id_list;
     for (int i = 0; i < armor_num; i++) {
@@ -245,8 +281,8 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   // 在小陀螺时，一侧的装甲板不断出现，另一侧的装甲板不断消失，显然前者被打中的概率更高
   for (int i = 0; i < armor_num; i++) {
     if (std::abs(delta_angle_list[i]) > coming_angle) continue;
-    if (ekf_x[7] > 0 && delta_angle_list[i] < leaving_angle) return {true, armor_xyza_list[i]};
-    if (ekf_x[7] < 0 && delta_angle_list[i] > -leaving_angle) return {true, armor_xyza_list[i]};
+    if (yaw_rate > 0 && delta_angle_list[i] < leaving_angle) return {true, armor_xyza_list[i]};
+    if (yaw_rate < 0 && delta_angle_list[i] > -leaving_angle) return {true, armor_xyza_list[i]};
   }
 
   return {false, armor_xyza_list[0]};

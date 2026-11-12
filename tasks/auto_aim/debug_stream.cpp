@@ -17,6 +17,7 @@
 // PnP 一级校验：与 Solver 共用同一份解算内核（tasks/auto_aim/pnp.cpp），
 // 调试线程里重算一次位姿再投影回图像，不改变主链路任何行为。
 #include "pnp.hpp"
+#include "solver.hpp"
 
 // SP_WITH_ROS2 由 io 目标在找到 ROS2 时以 PUBLIC 方式定义（见 io/CMakeLists.txt）。
 // 没有该宏时本文件整体退化为空实现，业务代码无需任何 #ifdef。
@@ -45,11 +46,16 @@ struct Options
   bool publish_raw = false;
   bool publish_yolo_input = true;
   bool pnp_check = true;     // 在推流图像上叠加 PnP 一级校验（重投影点 + 板面三轴）
+  double reticle_distance_m = 0.0;  // >0 时绘制执行轴；无目标时的参考前向深度
 };
 
 Options load_options(const YAML::Node & yaml)
 {
   Options o;
+  if (yaml["reticle_distance_m"]) {
+    const double distance = yaml["reticle_distance_m"].as<double>();
+    if (std::isfinite(distance) && distance > 0.0) o.reticle_distance_m = distance;
+  }
   const auto y = yaml["debug_ros2"];
   if (!y || !y.IsMap()) return o;  // 没有这一段 = 不启用，其他入口的 yaml 不受影响
 
@@ -304,10 +310,23 @@ PnpStats draw_pnp_check(
 void annotate(
   cv::Mat & img, const std::list<Armor> & armors, const DebugStatus & status, double loop_fps,
   double yolo_fps, double yolo_ms, const std::string & tag, const PnpCfg & pnp_cfg,
-  bool pnp_check)
+  bool pnp_check, const std::optional<cv::Point2f> & reticle, double reticle_depth)
 {
   const double s = std::max(0.5, img.cols / 1280.0);
   const int thick = std::max(1, static_cast<int>(std::round(2 * s)));
+
+  const auto in_image = [&](const cv::Point2f & p) {
+    return std::isfinite(p.x) && std::isfinite(p.y) &&
+           p.x >= 0 && p.y >= 0 && p.x < img.cols && p.y < img.rows;
+  };
+  if (reticle && in_image(*reticle)) {
+    cv::drawMarker(
+      img, *reticle, cv::Scalar(0, 255, 0), cv::MARKER_CROSS,
+      std::max(16, static_cast<int>(28 * s)), thick, cv::LINE_AA);
+    cv::putText(
+      img, fmt::format("AXIS {:.2f}m", reticle_depth), *reticle + cv::Point2f(12, 20),
+      cv::FONT_HERSHEY_SIMPLEX, 0.5 * s, cv::Scalar(0, 255, 0), thick, cv::LINE_AA);
+  }
 
   for (const auto & armor : armors) {
     const int id = static_cast<int>(armor.name) + 1;  // 与裁判系统一致：one=1 ... base=8
@@ -504,6 +523,8 @@ struct DebugStream::Impl
   Options opt;
   RoiCfg roi;
   PnpCfg pnp_cfg;
+  // 仅配置了准星的入口创建；只使用云台系投影，不受工作线程姿态更新影响。
+  std::unique_ptr<Solver> reticle_solver;
   int input_size = 640;
   bool on = false;
   std::string tag;
@@ -529,6 +550,8 @@ struct DebugStream::Impl
     double loop_fps = 0.0;
     double yolo_fps = 0.0;
     double yolo_ms = 0.0;
+    std::optional<cv::Point2f> reticle;
+    double reticle_depth = 0.0;
   };
 
   std::mutex mutex;
@@ -576,6 +599,13 @@ DebugStream::Impl::Impl(
   pnp_cfg = load_pnp_cfg(yaml);
 
   if (!opt.enable) return;
+  if (opt.reticle_distance_m > 0.0) {
+    try {
+      reticle_solver = std::make_unique<Solver>(config_path);
+    } catch (const std::exception & e) {
+      std::fprintf(stderr, "[DebugStream] 执行轴准星配置无效：%s\n", e.what());
+    }
+  }
   while (!opt.ns.empty() && opt.ns.back() == '/') opt.ns.pop_back();
 
 #ifdef SP_WITH_ROS2
@@ -697,7 +727,7 @@ void DebugStream::Impl::emit(Job & job)
   // 3) 原图 + 检测框 + 数字编号 + FPS/位姿叠加
   annotate(
     job.raw, job.armors, job.status, job.loop_fps, job.yolo_fps, job.yolo_ms, tag, pnp_cfg,
-    opt.pnp_check);
+    opt.pnp_check, job.reticle, job.reticle_depth);
   publish_jpeg(pub_image, job.raw, stamp, frame_id, opt.jpeg_quality);
 
   // 4) 状态 JSON
@@ -729,6 +759,42 @@ void DebugStream::Impl::emit(Job & job)
       (job.status.target_ypr[1] - job.status.gimbal_ypr[1]) * kRad2Deg);
     msg.data.pop_back();
     msg.data += ekf_json;
+    if (job.status.frame_us) {
+      msg.data += fmt::format(",\"frame_us\":{}", *job.status.frame_us);
+    }
+    if (const auto & tx = job.status.can_tx) {
+      const auto read_u16 = [&](std::size_t offset) {
+        return int(tx->payload[offset]) | (int(tx->payload[offset + 1]) << 8);
+      };
+      const auto read_i16 = [&](std::size_t offset) {
+        const int value = read_u16(offset);
+        return value >= 0x8000 ? value - 0x10000 : value;
+      };
+      msg.data += fmt::format(
+        ",\"can_tx\":{{\"sequence\":{},\"tracking\":{},\"fire_advice\":{},"
+        "\"yaw_mrad\":{},\"pitch_raw_mrad\":{},\"reference_ms\":{},\"result\":{},"
+        "\"sdk_accepted\":{},\"frame_us\":{},\"attempt_us\":{},\"frame_to_attempt_ms\":{:.3f}}}",
+        int(tx->payload[0]), (tx->payload[1] & 0x01) != 0, (tx->payload[1] & 0x02) != 0,
+        read_i16(2), read_i16(4), read_u16(6), tx->result, tx->sdk_accepted,
+        tx->frame_us, tx->attempt_us, (tx->attempt_us - tx->frame_us) / 1000.0);
+    }
+    if (const auto & prediction = job.status.prediction) {
+      const auto & point = job.status.aim_prediction_world;
+      msg.data += fmt::format(
+        ",\"prediction\":{{\"target_us\":{},\"extra_delay_ms\":{:.3f},"
+        "\"flight_time_ms\":{:.3f},\"point_world_m\":[{:.4f},{:.4f},{:.4f}]}}",
+        prediction->target_us, prediction->extra_delay_s * 1000.0,
+        prediction->flight_time_s * 1000.0, point.x(), point.y(), point.z());
+    }
+    if (job.status.frame_us) {
+      msg.data += ",\"observed_armor_world_m\":[";
+      const char * separator = "";
+      for (const auto & point : job.status.observed_armor_world) {
+        msg.data += fmt::format("{}[{:.4f},{:.4f},{:.4f}]", separator, point.x(), point.y(), point.z());
+        separator = ",";
+      }
+      msg.data += "]";
+    }
     msg.data += fmt::format(
       ",\"ekf_convergence\":{{\"available\":{},\"converged\":{},\"score\":{:.1f},"
       "\"covariance_score\":{:.1f},\"consistency_score\":{:.1f},\"samples\":{},"
@@ -817,7 +883,8 @@ bool DebugStream::frame(const cv::Mat & raw_img)
   return true;
 }
 
-void DebugStream::publish(const std::list<Armor> & armors, const DebugStatus & status)
+void DebugStream::publish(
+  const std::list<Armor> & armors, const DebugStatus & status, const Solver * solver)
 {
   auto & d = *impl_;
   if (!d.on || !d.armed) return;
@@ -827,6 +894,19 @@ void DebugStream::publish(const std::list<Armor> & armors, const DebugStatus & s
     std::lock_guard<std::mutex> lock(d.mutex);
     d.staging.armors = armors;
     d.staging.status = status;
+    d.staging.reticle.reset();
+    d.staging.reticle_depth = d.opt.reticle_distance_m;
+    const Solver * camera_model = solver ? solver : d.reticle_solver.get();
+    if (camera_model && d.opt.reticle_distance_m > 0.0) {
+      // 在业务线程使用与 PnP/Aimer 相同的 Solver；队列中只保存投影结果，
+      // 避免重建欧拉角、重复外参配置，或工作线程读到下一帧的姿态。
+      if (solver && status.has_aim_prediction && status.aim_prediction_world.allFinite()) {
+        const double depth =
+          (solver->R_gimbal2world().transpose() * status.aim_prediction_world).x();
+        if (std::isfinite(depth) && depth > 0.0) d.staging.reticle_depth = depth;
+      }
+      d.staging.reticle = camera_model->gimbal_axis_pixel(d.staging.reticle_depth);
+    }
     d.staging.loop_fps = d.loop_fps;
     d.staging.yolo_fps = d.yolo_fps;
     d.staging.yolo_ms = d.yolo_ms;

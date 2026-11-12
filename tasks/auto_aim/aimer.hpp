@@ -22,6 +22,13 @@ class Aimer
 {
 public:
   AimPoint debug_aim_point;
+  struct PredictionTiming
+  {
+    std::chrono::steady_clock::time_point target_time;
+    double extra_delay_s;
+    double flight_time_s;
+  };
+  PredictionTiming debug_prediction_timing{};
   explicit Aimer(const std::string & config_path);
 
   // 单目标版本：只读引用，内部按需拷贝一份用于预测迭代。
@@ -29,6 +36,16 @@ public:
   io::Command aim(
     const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
     bool to_now = true);
+
+  // 使用传入的有效弹速做弹道预测。
+  io::Command aim_ballistic(
+    const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
+    bool to_now = true);
+
+  // 使用装甲板的视线角。带时间戳的版本会先补偿处理和执行延迟。
+  io::Command aim_geometric(const Target & target);
+  io::Command aim_geometric(
+    const Target & target, std::chrono::steady_clock::time_point timestamp, bool to_now = true);
 
   io::Command aim(
     const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
@@ -63,6 +80,8 @@ private:
   double low_speed_delay_time_;
   double decision_speed_;
 
+  PredictionTiming latency_prediction(
+    std::chrono::steady_clock::time_point timestamp, double yaw_rate, bool to_now) const;
   AimPoint choose_aim_point(const Target & target);
 };
 

@@ -4,6 +4,7 @@
 #include <Eigen/Dense>  // 必须在opencv2/core/eigen.hpp上面
 #include <Eigen/Geometry>
 #include <opencv2/core/eigen.hpp>
+#include <optional>
 
 #include "armor.hpp"
 
@@ -17,6 +18,8 @@ public:
   Eigen::Matrix3d R_gimbal2world() const;
 
   void set_R_gimbal2world(const Eigen::Quaterniond & q);
+  // CAN 云台协议直接提供云台在世界系中的 yaw/pitch，不应再套用 IMU 安装外参。
+  void set_R_gimbal2world(const Eigen::Matrix3d & R_gimbal2world);
 
   // 覆盖「相机 -> gimbal（主相机所在板）」外参，用于从 tf 树注入标定值
   void set_extrinsic(const Eigen::Matrix3d & R_camera2gimbal, const Eigen::Vector3d & t_camera2gimbal);
@@ -27,6 +30,8 @@ public:
   //   大yaw（全向相机所在轴，纯 yaw）不经过本类，见 io::tf::Tree 与哨兵入口。
   // 解算成功返回 true；失败时不写入位姿字段。
   bool solve(Armor & armor) const;
+  // 像素中心的世界系视线方向，用于没有深度的直接跟随。
+  Eigen::Vector3d world_ray(const cv::Point2f & pixel) const;
 
   std::vector<cv::Point2f> reproject_armor(
     const Eigen::Vector3d & xyz_in_world, double yaw, ArmorType type, ArmorName name) const;
@@ -34,6 +39,10 @@ public:
   double oupost_reprojection_error(Armor armor, const double & picth);
 
   std::vector<cv::Point2f> world2pixel(const std::vector<cv::Point3f> & worldPoints);
+
+  // 当前执行轴上 [forward_distance_m, 0, 0] 的像素投影（含外参和畸变）。
+  // 距离是云台系前向深度，非斜距；非有限/非正距离、相机后方点返回空。
+  std::optional<cv::Point2f> gimbal_axis_pixel(double forward_distance_m) const;
 
 private:
   cv::Mat camera_matrix_;

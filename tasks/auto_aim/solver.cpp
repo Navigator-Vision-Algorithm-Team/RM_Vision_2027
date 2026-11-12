@@ -1,5 +1,6 @@
 #include "solver.hpp"
 
+#include <opencv2/calib3d.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <cmath>
@@ -8,7 +9,6 @@
 // 【改动】装甲板尺寸常量与 4 点模型点已移到 pnp.hpp / pnp.cpp，
 //        由主相机和全向相机共用；这里只需要引入公共内核。
 #include "pnp.hpp"
-#include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 
 namespace auto_aim
@@ -41,11 +41,24 @@ void Solver::set_R_gimbal2world(const Eigen::Quaterniond & q)
   R_gimbal2world_ = R_gimbal2imubody_.transpose() * R_imubody2imuabs * R_gimbal2imubody_;
 }
 
+void Solver::set_R_gimbal2world(const Eigen::Matrix3d & R_gimbal2world)
+{
+  R_gimbal2world_ = R_gimbal2world;
+}
+
 void Solver::set_extrinsic(
   const Eigen::Matrix3d & R_camera2gimbal, const Eigen::Vector3d & t_camera2gimbal)
 {
   R_camera2gimbal_ = R_camera2gimbal;
   t_camera2gimbal_ = t_camera2gimbal;
+}
+
+Eigen::Vector3d Solver::world_ray(const cv::Point2f & pixel) const
+{
+  std::vector<cv::Point2f> normalized;
+  cv::undistortPoints(std::vector<cv::Point2f>{pixel}, normalized, camera_matrix_, distort_coeffs_);
+  return R_gimbal2world_ * R_camera2gimbal_ *
+         Eigen::Vector3d{normalized.front().x, normalized.front().y, 1.0};
 }
 
 //solvePnP（获得姿态）
@@ -63,7 +76,7 @@ bool Solver::solve(Armor & armor) const
   if (!pnp.success) return false;
 
   const Eigen::Vector3d & xyz_in_camera = pnp.xyz_in_camera;
-  // 【改动】使用带小yaw修正的外参（offset 默认 0 时与原来完全等价）
+  // 先将目标转换到执行机构原点；Tracker/Aimer 后续直接使用此坐标，勿重复加安装偏移。
   armor.xyz_in_gimbal = R_camera2gimbal_ * xyz_in_camera + t_camera2gimbal_;
 
   // // IPPE 可能选到后方解（x<0），翻转以保证目标在云台前方
@@ -310,6 +323,25 @@ double Solver::armor_reprojection_error(
   // auto error = SJTU_cost(image_points, armor.points, inclined);
 
   return error;
+}
+
+std::optional<cv::Point2f> Solver::gimbal_axis_pixel(double forward_distance_m) const
+{
+  if (!std::isfinite(forward_distance_m) || forward_distance_m <= 0.0) return std::nullopt;
+
+  const Eigen::Vector3d point_in_camera = R_camera2gimbal_.transpose() *
+    (Eigen::Vector3d(forward_distance_m, 0.0, 0.0) - t_camera2gimbal_);
+  if (!point_in_camera.allFinite() || point_in_camera.z() <= 0.0) return std::nullopt;
+
+  std::vector<cv::Point2d> pixels;
+  cv::projectPoints(
+    std::vector<cv::Point3d>{{point_in_camera.x(), point_in_camera.y(), point_in_camera.z()}},
+    cv::Vec3d(0, 0, 0), cv::Vec3d(0, 0, 0), camera_matrix_, distort_coeffs_, pixels);
+  if (pixels.empty() || !std::isfinite(pixels.front().x) || !std::isfinite(pixels.front().y))
+    return std::nullopt;
+  const cv::Point2f pixel(pixels.front());
+  if (!std::isfinite(pixel.x) || !std::isfinite(pixel.y)) return std::nullopt;
+  return pixel;
 }
 
 // 世界坐标到像素坐标的转换

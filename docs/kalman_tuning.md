@@ -5,7 +5,7 @@
 >
 > 调试前提：`debug_ros2` 已启用（`enable: true`），能看到 `/sp_debug/<tag>/ekf` 与 `/sp_debug/<tag>/image`。
 > 遥测字段与实现见 `tasks/auto_aim/debug_stream.hpp`（`struct DebugStatus::Ekf`）与 `tasks/auto_aim/debug_stream.cpp`（`emit()` 第 6 段）。
-> 注意：当前仓库里只有 `configs/soldier.yaml` 带 `debug_ros2` 段，跑哨兵调试入口（`sentry_multithread_debug`）时需要在你实际使用的 yaml 里补上这一段；哨兵的 `ekf` 话题前缀是 `/sp_debug/sentry`。
+> 步兵使用 `configs/soldier_debug.yaml` 启用调试流。哨兵使用 `sentry_multithread_debug` 时，在实际配置中启用 `debug_ros2`，话题前缀为 `/sp_debug/sentry`。
 
 ---
 
