@@ -330,9 +330,9 @@ void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
 
 void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
 {
-  // 裁判帧里的 robot_id 与 0x502 / 0x505 的 roboid 是同一个编号，三路谁先到用谁。
-  // 统一走严格校验：0 不覆盖，表外值忽略并告警。
-  update_robot_id(pkt.robot_id, "0x0201");
+  // 阵营 ID 的唯一数据源是 0x0502 的 roboid（见 update_robot_id 的说明）。
+  // 这里的 robot_id 只写进 RobotStatus 快照供日志/测试使用，不参与敌我判定，
+  // 避免与下位机转发值不一致时来回打架。
 
   RobotStatus rs;
   rs.robot_id = pkt.robot_id;
@@ -361,10 +361,8 @@ void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
 
 void SerialBoard::handleBass(const bassPacket & pkt)
 {
-  // 之前这里只取了 reset 位，0x505 的 roboid 被整帧忽略：只发 0x505 的固件
-  // 永远拿不到 ID，敌我颜色判定因此失效（同时也是全向感知失效的上游原因之一）。
-  update_robot_id(pkt.roboid, "0x505");
-
+  // 这里的 roboid 与 0x0502 的 roboid 是下位机的同一个数据（通信层复制而来），
+  // 按约定 ID 只认 0x0502，本帧只取复位位，不参与阵营判定。
   if (pkt.reset) {
     reset_pending_.store(true);
     tools::logger()->info("[SerialBoard] Reset signal received from MCU");
@@ -373,18 +371,21 @@ void SerialBoard::handleBass(const bassPacket & pkt)
 
 void SerialBoard::update_robot_id(uint8_t id, const char * source)
 {
-  if (id == 0) return;  // 0 = 固件没填，不能覆盖其它帧已给的有效值
+  // 约定：阵营 ID 只认 0x0502 的 roboid。0x0505 的 roboid 与它是下位机侧的同一份
+  // 数据（通信层复制），0x0201 的 robot_id 是转发来的裁判字段，两者都不参与判定，
+  // 避免多源不一致时颜色来回跳。
+  if (id == 0) return;  // 0 = 固件没填，保持上一次的有效值
 
   if (!is_valid_robot_id(id)) {
     tools::logger()->warn(
-      "[SerialBoard] {} 上报的 robot_id={} 不在附录二编号表内（1~11 红 / 101~111 蓝），忽略",
+      "[SerialBoard] {} 上报的 roboid={} 不在附录二编号表内（1~11 红 / 101~111 蓝），忽略",
       source, id);
     return;
   }
 
   if (robot_id_.exchange(id) == id) return;  // 值没变，不刷日志
   tools::logger()->info(
-    "[SerialBoard] robot_id <- {} = {}（{} / {}）", source, id,
+    "[SerialBoard] robot_id <- {} = {}（己方 {} / {}）", source, id,
     is_red_robot_id(id) ? "red" : "blue", robot_role_name(id));
 }
 
@@ -478,9 +479,10 @@ void SerialBoard::receiveThread()
         const float roll = imu_packet.roll;
         const double lower = imu_packet.lower_yaw;
         const double upper = imu_packet.upper_yaw;
-        // roboid 用于运行时判定敌我颜色（1~11 红方、101~111 蓝方），
-        // 与 0x505 / 0x0201 共用同一套严格校验：0 不覆盖、表外值忽略
-        update_robot_id(imu_packet.roboid, "0x502");
+        // roboid 是**唯一**的阵营 ID 来源（1~11 红方、101~111 蓝方）。
+        // 0x0505 的 roboid 与它是下位机侧的同一份数据，0x0201 是转发字段，
+        // 两者都不参与判定，所以这里写入后主链路只需更新一次颜色。
+        update_robot_id(imu_packet.roboid, "0x0502");
         // psi 取最短弧，避免 0/2π 边界（如 lower=350°、upper=10°）被算成 -340°
         const double psi = tools::limit_rad(upper - lower);
 
