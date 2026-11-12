@@ -25,6 +25,23 @@ SerialBoard::SerialBoard(const std::string & config_path)
   use_referee_system_ = yaml["use_referee_system"].as<bool>(false);
   game_start_progress_threshold_ = yaml["game_start_progress_threshold"].as<int>(4);
 
+  // test_nav 测试开关：置 true 后对外发布的裁判状态被固定成「比赛已开始 + 默认血量」，
+  // 不管下位机发来什么（甚至一条裁判帧都不发），用于没有裁判系统时联调导航决策。
+  test_nav_ = yaml["test_nav"].as<bool>(false);
+  if (test_nav_) {
+    const uint16_t max_hp = yaml["test_nav_max_hp"].as<uint16_t>(400);
+    const uint16_t hp = yaml["test_nav_hp"].as<uint16_t>(max_hp);
+    test_nav_state_.game_progress = 4;  // 4 = 比赛中，即导航侧的「比赛开始」信号
+    test_nav_state_.maximum_hp = static_cast<int32_t>(max_hp);
+    test_nav_state_.current_hp = static_cast<int32_t>(hp > max_hp ? max_hp : hp);
+    test_nav_state_.game_status_valid = true;
+    test_nav_state_.robot_status_valid = true;
+    tools::logger()->warn(
+      "[SerialBoard] test_nav enabled: referee state forced to game_progress={} hp={}/{} "
+      "(incoming 0x0001/0x0201 ignored)",
+      test_nav_state_.game_progress, test_nav_state_.current_hp, test_nav_state_.maximum_hp);
+  }
+
   // 数据源选择：real / fake / replay，由配置决定（业务代码无感知）
   auto sim_config = sim::SimConfig::load(yaml);
   source_mode_ = sim_config.serial.mode;
@@ -235,6 +252,9 @@ RobotStatus SerialBoard::robot_status() const
 
 RefereeState SerialBoard::referee_state() const
 {
+  // 测试开关优先：忽略下位机上报，直接给出「比赛已开始 + 默认血量」
+  if (test_nav_) return test_nav_state_;
+
   RefereeState state;
   {
     std::lock_guard<std::mutex> lock(status_mutex_);

@@ -394,6 +394,25 @@ ros2 topic echo /red_standard_robot1/referee/current_hp
 ros2 topic hz   /red_standard_robot1/referee/game_progress    # 应约 5 Hz
 ```
 
+**test_nav 测试开关（无裁判系统时联调导航）**
+
+配置 `test_nav: true` 后，`SerialBoard::referee_state()` 不再返回解析结果，而是固定返回：
+
+| 项 | 值 | 配置项 |
+| --- | --- | --- |
+| `game_progress` | `4`（比赛中，即导航侧的"比赛开始"信号） | 固定，无配置项 |
+| `maximum_hp` | `400` | `test_nav_max_hp` |
+| `current_hp` | 默认等于 `test_nav_max_hp` | `test_nav_hp` |
+| `game_status_valid` / `robot_status_valid` | 恒为 `true`（一帧没收到也照发） | — |
+
+- 作用范围**仅限 `referee_state()`**（即 referee/* 三个话题）。`is_game_started()` 仍按
+  `use_referee_system` + `0x0001` 判定，**自瞄门控不受影响**；若要让自瞄也视为开赛，
+  用 `use_referee_system: false`（启动即视为已开始）。
+- 打开时启动日志会打一条 WARN：
+  `test_nav enabled: referee state forced to game_progress=4 hp=400/400 (incoming 0x0001/0x0201 ignored)`。
+- 验证：`./build/tests/referee_forward_test configs/virtual_referee_test_nav.yaml`
+  —— 该配置让虚拟下位机上报 `50/400` 的低血量，测试断言对外仍是 `400/400`（即开关确实覆盖了真实帧）。
+
 #### 5.3.7 对接前提（需与固件一致）
 
 - 帧长必须与结构体一致：`0x0001` 的 `data_length = 11`（整帧 20 B）、`0x0201` 的

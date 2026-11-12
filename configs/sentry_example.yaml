@@ -343,7 +343,16 @@ t_camera2gimbal: [0.03084, 0.0, 0.08898]
 # 游戏控制相关
 # 在日常调试的时候这个地方就是这个地方是false
 use_referee_system: false
-game_state_progress_threshold: 4
+game_start_progress_threshold: 4
+
+# test_nav：导航联调开关（只影响对外发布的 referee/* 话题，不影响自瞄的 is_game_started()）
+#   置 true 后不管下位机发来什么（甚至一条裁判帧都不发），都发布
+#     game_progress = 4（比赛开始）、current_hp = test_nav_hp、maximum_hp = test_nav_max_hp
+#   用于没有裁判系统时让导航决策节点（pb_nav_goal_decision）跑起来。
+#   把 test_nav_hp 压到 test_nav_max_hp 的 30% 以下，即可联调「血量过低返航」。
+test_nav: false
+test_nav_max_hp: 400
+test_nav_hp: 400
 
 ## ros 调试相关
 debug_ros2:
