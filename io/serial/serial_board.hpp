@@ -96,6 +96,15 @@ public:
   uint8_t robot_id() const;
 
   /*
+   * 诊断用：已收到的 0x0502 帧数，以及最近一帧原始 roboid（含 0，不做校验）。
+   * 用途是把「ID 拿不到」拆成两种可区分的情况：
+   *   frame_count == 0        -> 0x0502 帧根本没到（固件版本 / CRC / 包长）
+   *   frame_count > 0 且 raw == 0 -> 帧到了但下位机没填 roboid
+   */
+  uint64_t imu_frame_count() const { return imu_frame_count_.load(); }
+  uint8_t last_raw_roboid() const { return last_raw_roboid_.load(); }
+
+  /*
    * 导航转发用的裁判状态快照：一次加锁取出 0x0001 / 0x0201 中导航需要的三个量，
    * 附带「是否收到过对应帧」的有效位（用于避免把未初始化值当成真实数据发布）。
    *
@@ -164,8 +173,11 @@ private:
   /* 下位机上报的比赛与机器人状态，接收线程写入，getter 读取 */
   GameStatus game_status_{};
   RobotStatus robot_status_{};
-  /* 0x502 的 roboid / 0x0201 的 robot_id，0 = 还没收到 */
+  /* 0x0502 的 roboid（唯一 ID 来源），0 = 还没收到 */
   std::atomic<uint8_t> robot_id_{0};
+  /* 诊断用：0x0502 帧计数与最近一次原始 roboid（含 0） */
+  std::atomic<uint64_t> imu_frame_count_{0};
+  std::atomic<uint8_t> last_raw_roboid_{0};
   /* 「是否收到过对应帧」：只置位不清零，供裁判状态转发侧判断数据是否可用 */
   std::atomic<bool> game_status_received_{false};
   std::atomic<bool> robot_status_received_{false};

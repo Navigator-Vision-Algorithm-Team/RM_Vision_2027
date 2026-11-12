@@ -242,10 +242,11 @@ int main(int argc, char * argv[])
 
   bool game_started_logged = false;
 
-  // 敌我颜色动态识别：串口 0x502 的 roboid（或裁判 0x0201 的 robot_id）给出己方 ID，
+  // 敌我颜色动态识别：串口 0x0502 的 roboid（唯一来源）给出己方 ID，
   // 按附录二编号表（1~11 红方、101~111 蓝方）判定己方颜色，敌方恒为反色。
   // 配置里的 enemy_color 只在还没收到 ID 时兜底，收到后按实际对阵覆盖。
   uint8_t last_robot_id = 0;
+  auto last_id_report = std::chrono::steady_clock::now();
 
     // 全向感知缓存：全向发现目标后的 yaw/pitch，主相机锁定前反复播报
   bool has_omni_cache = false;
@@ -279,6 +280,30 @@ int main(int argc, char * argv[])
         tools::logger()->warn(
           "[Main] robot_id={} 不在附录二编号表内（1~11 红 / 101~111 蓝），保持配置的 enemy_color",
           id);
+      }
+    }
+
+    // 低频诊断：还没拿到有效 ID 时，把「0x0502 帧没到」和「帧到了但 roboid=0」
+    // 区分开。两种情况都会让颜色停在配置兜底值上，但修法完全不同：
+    //   frames == 0  -> 固件包长/CRC 问题，或根本没发 0x0502
+    //   raw == 0     -> 帧正常，固件没把 robot_id 填进 roboid
+    if (serial_board.robot_id() == 0) {
+      const auto now = std::chrono::steady_clock::now();
+      if (std::chrono::duration<double>(now - last_id_report).count() >= 5.0) {
+        last_id_report = now;
+        const auto frames = serial_board.imu_frame_count();
+        if (frames == 0) {
+          tools::logger()->warn(
+            "[Main] 仍未收到 0x0502 帧，无法判定阵营；己方颜色按配置兜底 = {}。"
+            "检查下位机 0x0502 是否已带 roboid（包长 26 字节）",
+            auto_aim::COLORS[static_cast<int>(config_own_color)]);
+        } else {
+          tools::logger()->warn(
+            "[Main] 0x0502 已收 {} 帧，但 roboid={}（0 = 下位机未填）；"
+            "己方颜色按配置兜底 = {}。请确认固件把 robot_id 写进 0x0502 的 roboid",
+            frames, serial_board.last_raw_roboid(),
+            auto_aim::COLORS[static_cast<int>(config_own_color)]);
+        }
       }
     }
 

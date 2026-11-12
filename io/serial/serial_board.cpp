@@ -482,6 +482,9 @@ void SerialBoard::receiveThread()
         // roboid 是**唯一**的阵营 ID 来源（1~11 红方、101~111 蓝方）。
         // 0x0505 的 roboid 与它是下位机侧的同一份数据，0x0201 是转发字段，
         // 两者都不参与判定，所以这里写入后主链路只需更新一次颜色。
+        // 计数与原始值存下来，供主链路区分「帧没到」和「帧到了但 roboid=0」。
+        imu_frame_count_.fetch_add(1, std::memory_order_relaxed);
+        last_raw_roboid_.store(imu_packet.roboid);
         update_robot_id(imu_packet.roboid, "0x0502");
         // psi 取最短弧，避免 0/2π 边界（如 lower=350°、upper=10°）被算成 -340°
         const double psi = tools::limit_rad(upper - lower);
