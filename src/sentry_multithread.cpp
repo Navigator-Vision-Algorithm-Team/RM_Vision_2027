@@ -74,8 +74,9 @@ int main(int argc, char * argv[])
 
   // 裁判状态转发：导航决策节点（pb_nav_goal_decision）在 red_standard_robot1 命名空间下
   // 订阅 referee/{game_progress,current_hp,maximum_hp}，数据源是串口 0x0001 / 0x0201 帧。
-  // 未接裁判系统（use_referee_system=false）时收不到 0x0001，这里不会发布任何东西，
-  // 导航侧停在 WAIT_GAME_START 不动作 —— 这是刻意保留的行为，避免无裁判数据时自走。
+  // 未接裁判系统（use_referee_system=false）且下位机不转发 0x0001 时收不到数据，这里什么都
+  // 不发布，导航侧停在 WAIT_GAME_START 不动作 —— 刻意保留，避免无裁判数据时自走。
+  // 配置 test_nav: true 时 referee_state() 直接返回「比赛已开始 + 默认血量」，与下位机无关。
   ros2.set_referee_source([&serial_board]() { return serial_board.referee_state(); });
 
   // Exiter 必须在 io::ROS2 之后构造：rclcpp::init 会用自己的 handler 接管 SIGINT，

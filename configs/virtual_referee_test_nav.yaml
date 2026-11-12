@@ -1,0 +1,35 @@
+# =============================================================================
+#  test_nav 开关自测配置（不接任何硬件）
+#
+#  用途：./build/tests/referee_forward_test configs/virtual_referee_test_nav.yaml
+#
+#  验证点：虚拟下位机上报的是 fake_hp = 50 / fake_max_hp = 400（低于 30% 返航阈值），
+#          但 test_nav: true 会把它整个替换成「比赛开始 + 默认血量」，因此对上发布的
+#          应为 game_progress = 4、current_hp = 400、maximum_hp = 400。
+# =============================================================================
+
+source_mode: "fake"
+serial_mode: "fake"
+fake_serial_external: false
+com_port: "/dev/ttyACM0"
+baud_rate: 921600
+bullet_speed: 28.0
+
+use_referee_system: true
+game_start_progress_threshold: 4
+
+fake_status_hz: 5.0
+fake_imu_hz: 100.0
+fake_chassis_hz: 20.0
+
+# 下位机上报的低血量（用来证明 test_nav 确实覆盖了真实帧）
+fake_max_hp: 400
+fake_hp: 50
+
+# 导航联调开关：不管下位机发什么，都对外发布「比赛已开始 + 默认血量」
+test_nav: true
+test_nav_max_hp: 400
+test_nav_hp: 400
+
+record:
+  enable: false

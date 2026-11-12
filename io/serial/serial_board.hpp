@@ -89,6 +89,9 @@ public:
   /*
    * 导航转发用的裁判状态快照：一次加锁取出 0x0001 / 0x0201 中导航需要的三个量，
    * 附带「是否收到过对应帧」的有效位（用于避免把未初始化值当成真实数据发布）。
+   *
+   * 配置 `test_nav: true` 时不做解析，直接返回固定的「比赛已开始 + 默认血量」，
+   * 用于没有裁判系统时联调导航决策（只影响本函数，不影响 is_game_started()）。
    */
   RefereeState referee_state() const;
 
@@ -131,6 +134,13 @@ private:
   tools::ThreadSafeQueue<IMUData> queue_{1000};
   IMUData data_ahead_;
   IMUData data_behind_;
+
+  /*
+   * test_nav 测试开关：为 true 时 referee_state() 直接返回 test_nav_state_，
+   * 完全忽略下位机上报（没接裁判系统也能让导航决策节点跑起来）。
+   */
+  bool test_nav_ = false;
+  RefereeState test_nav_state_{};
 
   /* 下位机上报的比赛与机器人状态，接收线程写入，getter 读取 */
   GameStatus game_status_{};

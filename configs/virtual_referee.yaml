@@ -26,5 +26,8 @@ fake_chassis_hz: 20.0
 fake_max_hp: 400
 fake_hp: 120
 
+# 导航联调用 false：走真实解析路径（要验证「强制开赛」用 virtual_referee_test_nav.yaml）
+test_nav: false
+
 record:
   enable: false
