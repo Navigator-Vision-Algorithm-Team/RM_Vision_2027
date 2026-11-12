@@ -19,7 +19,10 @@ add_library(io STATIC
     tf/tf_tree.cpp
     # ---- 串口通信（io/serial/）----
     serial/serial_board.cpp
-    serial/gimbal/gimbal.cpp
+    # 旧版云台类 io::Gimbal 已废弃：只被 tasks/auto_buff 引用，而 auto_buff 不参与构建。
+    # 源码保留备查、不参与编译；若将来恢复打符功能，需同时放开这一行与顶层
+    # CMakeLists.txt 里的 add_subdirectory(tasks/auto_buff)。
+    # serial/gimbal/gimbal.cpp
     serial/gimbal/protocol_crc.cpp
     # ---- 虚拟数据源 (real / fake / replay) ----
     sim/transport.cpp
