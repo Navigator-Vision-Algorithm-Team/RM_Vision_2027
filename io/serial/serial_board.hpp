@@ -134,6 +134,16 @@ private:
   mutable std::mutex send_mutex_;
   mutable std::mutex status_mutex_;
 
+  /*
+   * 0x0402 报文里没有 control 位（见 gimbal/packet.hpp 的 SendPacket），
+   * 下位机对 pitch / yaw 无条件执行。control=false 时必须沿用上一次的有效目标角，
+   * 否则会把 io::Command 默认构造的 0 当作目标发下去，云台会突然归零。
+   */
+  mutable std::mutex last_command_mutex_;
+  mutable double last_yaw_ = 0.0;
+  mutable double last_pitch_ = 0.0;
+  mutable bool has_last_command_ = false;
+
   /* 关节反馈订阅方（目前是 io::ROS2 的 JointState 发布节点） */
   mutable std::mutex joint_callback_mutex_;
   GimbalJointCallback joint_callback_;
@@ -177,16 +187,103 @@ private:
   /* 0x0201 机器人状态 */
   void handleGameRobotStatus(const GameRobotStatusPacket & pkt);
 
-  /* 0x505 基础状态，目前只取其中的复位位 */
+  /* 0x505 基础状态：复位位 + roboid */
   void handleBass(const bassPacket & pkt);
+
+  /*
+   * 三路上行帧（0x505 roboid / 0x502 roboid / 0x0201 robot_id）共用的 ID 更新，
+   * 三者是同一编号，谁先到用谁。严格按附录二编号表校验：0 表示固件没填（不覆盖），
+   * 表外值直接忽略并告警，避免把非法编码当成敌方阵营。
+   */
+  void update_robot_id(uint8_t id, const char * source);
 };
 
 /*
- * 附录二 兵种 ID 编号表：1~11 红方，101~111 蓝方（蓝方 = 红方 + 100）。
- * 两个函数都返回 false 表示 ID 不在表内（含 0 = 还没收到）。
+ * 附录二 兵种 ID 编号表（红方 1~11，蓝方 101~111，蓝方 = 红方 + 100）：
+ *
+ *     1 英雄    2 工程    3/4/5 步兵    6 空中    7 哨兵
+ *     8 飞镖    9 雷达    10 基地       11 前哨站
+ *
+ * is_red_robot_id / is_blue_robot_id 只判阵营，返回 false 表示 ID 不在表内
+ * （含 0 = 还没收到）；具体兵种用 robot_role() 查。
  */
 inline bool is_red_robot_id(uint8_t id) { return id >= 1 && id <= 11; }
 inline bool is_blue_robot_id(uint8_t id) { return id >= 101 && id <= 111; }
+
+/* 是否是编号表里的合法 ID（红 1~11 / 蓝 101~111）；0 与其它值都不算 */
+inline bool is_valid_robot_id(uint8_t id) { return is_red_robot_id(id) || is_blue_robot_id(id); }
+
+enum class RobotRole
+{
+  hero,      // 1 / 101
+  engineer,  // 2 / 102
+  infantry,  // 3~5 / 103~105
+  aerial,    // 6 / 106
+  sentry,    // 7 / 107
+  dart,      // 8 / 108
+  radar,     // 9 / 109
+  base,      // 10 / 110
+  outpost,   // 11 / 111
+  unknown
+};
+
+/* 去掉队伍位（蓝方 -100）后查表；非法 ID 返回 RobotRole::unknown */
+inline RobotRole robot_role(uint8_t id)
+{
+  const int base = is_blue_robot_id(id) ? static_cast<int>(id) - 100 : static_cast<int>(id);
+  switch (base) {
+    case 1:
+      return RobotRole::hero;
+    case 2:
+      return RobotRole::engineer;
+    case 3:
+    case 4:
+    case 5:
+      return RobotRole::infantry;
+    case 6:
+      return RobotRole::aerial;
+    case 7:
+      return RobotRole::sentry;
+    case 8:
+      return RobotRole::dart;
+    case 9:
+      return RobotRole::radar;
+    case 10:
+      return RobotRole::base;
+    case 11:
+      return RobotRole::outpost;
+    default:
+      return RobotRole::unknown;
+  }
+}
+
+/* 日志用：兵种名；非法 ID 返回 "unknown" */
+inline const char * robot_role_name(uint8_t id)
+{
+  switch (robot_role(id)) {
+    case RobotRole::hero:
+      return "hero";
+    case RobotRole::engineer:
+      return "engineer";
+    case RobotRole::infantry:
+      return "infantry";
+    case RobotRole::aerial:
+      return "aerial";
+    case RobotRole::sentry:
+      return "sentry";
+    case RobotRole::dart:
+      return "dart";
+    case RobotRole::radar:
+      return "radar";
+    case RobotRole::base:
+      return "base";
+    case RobotRole::outpost:
+      return "outpost";
+    case RobotRole::unknown:
+      break;
+  }
+  return "unknown";
+}
 
 }  // namespace io
 
