@@ -51,8 +51,8 @@ max_rectangular_error: 25 # degree
 #       vid_pid 仅在 mindvision 下生效；换 mindvision 时注释下面三行并启用下方注释块
 camera_name: "hikrobot"
 serial_number: "DA8419516"
-frame_rate: 165.0
-exposure_ms: 2
+frame_rate: 110.0
+exposure_ms: 9
 gain: 8
 # camera_name: "mindvision"
 # exposure_ms: 8
@@ -89,7 +89,7 @@ outpost_max_temp_lost_count: 75     # 前哨站短暂丢失容忍帧数
 
 #####-----预测瞄准（Aimer）-----#####
 # 偏置先设为 0；确认预测链路和坐标方向后，再用实车标定调整。
-yaw_offset: -3                     # yaw 静态补偿 (degree)
+yaw_offset: -2.5                     # yaw 静态补偿 (degree)//正值向左
 pitch_offset: -1                   # pitch 静态补偿 (degree)
 comming_angle: 60                   # Aimer 必需参数 (degree)
 leaving_angle: 20                   # Aimer 必需参数 (degree)
