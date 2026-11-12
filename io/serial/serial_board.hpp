@@ -88,8 +88,10 @@ public:
   RobotStatus robot_status() const;
 
   /*
-   * 下位机上报的机器人 ID：0x502 的 roboid，收到裁判 0x0201 时也会用其 robot_id 覆盖。
-   * 0 表示还没收到。编号表见下面的 is_red_robot_id / is_blue_robot_id。
+   * 下位机上报的机器人 ID，**唯一来源是 0x0502 的 roboid**。
+   * 0x0505 的 roboid 与它是下位机侧的同一份数据，0x0201 的 robot_id 是裁判转发字段，
+   * 两者都不参与阵营判定。0 表示还没收到。
+   * 编号表见下面的 is_red_robot_id / is_blue_robot_id。
    */
   uint8_t robot_id() const;
 
@@ -187,12 +189,12 @@ private:
   /* 0x0201 机器人状态 */
   void handleGameRobotStatus(const GameRobotStatusPacket & pkt);
 
-  /* 0x505 基础状态：复位位 + roboid */
+  /* 0x505 基础状态：只取复位位（roboid 与 0x0502 同源，不参与阵营判定） */
   void handleBass(const bassPacket & pkt);
 
   /*
-   * 三路上行帧（0x505 roboid / 0x502 roboid / 0x0201 robot_id）共用的 ID 更新，
-   * 三者是同一编号，谁先到用谁。严格按附录二编号表校验：0 表示固件没填（不覆盖），
+   * 阵营 ID 更新，**只由 0x0502 的 roboid 调用**。
+   * 严格按附录二编号表校验：0 表示固件没填（保持上一次有效值），
    * 表外值直接忽略并告警，避免把非法编码当成敌方阵营。
    */
   void update_robot_id(uint8_t id, const char * source);

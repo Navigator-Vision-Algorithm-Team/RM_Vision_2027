@@ -192,14 +192,24 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
+  // 配置里的 enemy_color 只是「还没收到 0x0502 roboid」时的兜底。启动时先把它
+  // 推断出的己方/敌方颜色打出来，现场一眼就能确认视觉认为自己是哪一方。
+  const auto config_enemy_color =
+    yaml["enemy_color"].as<std::string>() == "red" ? auto_aim::Color::red
+                                                  : auto_aim::Color::blue;
+  const auto config_own_color =
+    config_enemy_color == auto_aim::Color::red ? auto_aim::Color::blue : auto_aim::Color::red;
+  tools::logger()->info(
+    "[Main] 己方颜色（配置兜底）= {}，敌方 = {}；收到 0x0502 roboid 后按编号表覆盖",
+    auto_aim::COLORS[static_cast<int>(config_own_color)],
+    auto_aim::COLORS[static_cast<int>(config_enemy_color)]);
+
   // 全向推理线程与主线程共享的运行时状态（目前只有敌方颜色）。
   // make_omni_jobs 给每路全向建一个独立 Decider，主线程的
   // Decider::set_enemy_color 传不进推理线程；不同步的后果是全向检测到的装甲板
   // 被 armor_filter 按旧颜色全部剔除，表现为「全向感知完全失效」。
   auto omni_state = std::make_shared<omniperception::OmniSharedState>();
-  omni_state->set_enemy_color(
-    yaml["enemy_color"].as<std::string>() == "red" ? auto_aim::Color::red
-                                                  : auto_aim::Color::blue);
+  omni_state->set_enemy_color(config_enemy_color);
 
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程，
   // 相机数据只喂给自己的实例，不再出现多路相机争抢同一个 OpenVINO InferRequest。
@@ -262,7 +272,7 @@ int main(int argc, char * argv[])
         // 否则换色后全向仍按旧颜色过滤，检测结果会被全部剔除。
         omni_state->set_enemy_color(enemy);
         tools::logger()->info(
-          "[Main] robot_id={}（{} / {}）-> own={} enemy={}（覆盖配置 enemy_color）", id,
+          "[Main] robot_id={}（{} / {}）-> 己方颜色 = {}，敌方 = {}（覆盖配置 enemy_color）", id,
           own_red ? "red" : "blue", io::robot_role_name(id), own_red ? "red" : "blue",
           enemy == auto_aim::Color::red ? "red" : "blue");
       } else {

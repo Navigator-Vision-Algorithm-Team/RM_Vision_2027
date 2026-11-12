@@ -180,12 +180,22 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
+  // 配置里的 enemy_color 只是「还没收到 0x0502 roboid」时的兜底，启动时先打印
+  // 由它推断出的己方/敌方颜色。
+  const auto config_enemy_color =
+    yaml["enemy_color"].as<std::string>() == "red" ? auto_aim::Color::red
+                                                  : auto_aim::Color::blue;
+  const auto config_own_color =
+    config_enemy_color == auto_aim::Color::red ? auto_aim::Color::blue : auto_aim::Color::red;
+  tools::logger()->info(
+    "[Main] 己方颜色（配置兜底）= {}，敌方 = {}；收到 0x0502 roboid 后按编号表覆盖",
+    auto_aim::COLORS[static_cast<int>(config_own_color)],
+    auto_aim::COLORS[static_cast<int>(config_enemy_color)]);
+
   // 全向推理线程与主线程共享的运行时状态：四路 Decider 各在独立线程里，
   // 敌方颜色必须经这里同步，否则换色后全向检测结果会被旧颜色全部剔除。
   auto omni_state = std::make_shared<omniperception::OmniSharedState>();
-  omni_state->set_enemy_color(
-    yaml["enemy_color"].as<std::string>() == "red" ? auto_aim::Color::red
-                                                  : auto_aim::Color::blue);
+  omni_state->set_enemy_color(config_enemy_color);
 
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程
   std::vector<auto_aim::multithread::CameraJob> camera_jobs;
@@ -228,8 +238,32 @@ int main(int argc, char * argv[])
   auto last_main_frame = std::chrono::steady_clock::now();
   auto last_stall_log = last_main_frame;
 
+  // 已应用的己方 ID：只在变化时更新颜色，避免每帧重复清目标
+  uint8_t last_robot_id = 0;
+
   // rclcpp 接管 SIGTERM 时只置 shutdown 标志，需要一并检查 rclcpp::ok()
   while (!exiter.exit() && rclcpp::ok()) {
+    // 阵营 ID 唯一来源是 0x0502 的 roboid：更新主相机（tracker/decider）与
+    // 四路全向（omni_state -> 各推理线程的 Decider），保证两边同时换色。
+    if (const uint8_t id = serial_board.robot_id(); id != 0 && id != last_robot_id) {
+      last_robot_id = id;
+      if (io::is_red_robot_id(id) || io::is_blue_robot_id(id)) {
+        const bool own_red = io::is_red_robot_id(id);
+        const auto enemy = own_red ? auto_aim::Color::blue : auto_aim::Color::red;
+        tracker.set_enemy_color(enemy);
+        decider.set_enemy_color(enemy);
+        omni_state->set_enemy_color(enemy);
+        tools::logger()->info(
+          "[Main] robot_id={}（{} / {}）-> 己方颜色 = {}，敌方 = {}（覆盖配置 enemy_color）", id,
+          own_red ? "red" : "blue", io::robot_role_name(id), own_red ? "red" : "blue",
+          enemy == auto_aim::Color::red ? "red" : "blue");
+      } else {
+        tools::logger()->warn(
+          "[Main] robot_id={} 不在附录二编号表内（1~11 红 / 101~111 蓝），保持配置的 enemy_color",
+          id);
+      }
+    }
+
     // 开赛前关闭推理，相机仍持续出图（主相机帧照常入队供录像）
     pipeline.set_inference_enabled(serial_board.is_game_started());
 
