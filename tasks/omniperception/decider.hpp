@@ -44,6 +44,9 @@ public:
   // 值没变化时直接返回，不会刷日志。
   void set_enemy_color(auto_aim::Color color);
 
+  /* 运行时切换敌方颜色（与 Tracker 同步，由串口上报的 robot_id 决定） */
+  void set_enemy_color(auto_aim::Color color);
+
   // 【已停用】后续无法可靠判断兵种(ArmorName)，暂停按兵种设置优先级
   // void set_priority(std::list<auto_aim::Armor> & armors);
   //对队列中的每一个DetectionResult进行过滤，同时将DetectionResult排序

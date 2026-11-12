@@ -32,6 +32,14 @@ void Decider::set_enemy_color(auto_aim::Color color)
     auto_aim::COLORS[static_cast<int>(color)]);
 }
 
+void Decider::set_enemy_color(auto_aim::Color color)
+{
+  if (color == enemy_color_) return;
+  enemy_color_ = color;
+  tools::logger()->info("[Decider] enemy color -> {}",
+    color == auto_aim::Color::red ? "red" : "blue");
+}
+
 io::Command Decider::decide(
   auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos,
   const std::vector<OmniCameraConfig> & omni_configs)

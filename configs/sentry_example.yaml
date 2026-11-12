@@ -6,27 +6,18 @@
 
 # ----- 敌方颜色 -----
 # 可选值: "red" 或 "blue"
-# 仅在还没收到裁判 0x0201（robot_id）时生效：拿到 robot_id 后由 SerialBoard 自动判定己方颜色
-# 并取反作为敌人颜色（红方 1~11，蓝方 101~111；3/103 步兵，7/107 哨兵）覆盖本项。
+# 注意：这里只是兜底。串口上报 robot_id 后（0x502 roboid / 0x0201 robot_id），
+# 程序会按附录二编号表（1~11 红方、101~111 蓝方）判定己方颜色并自动取反覆盖本值。
 enemy_color: "red"
 
 # ----- 串口通信 (SerialBoard) -----
 com_port: '/dev/ttyACM0'            # 串口设备路径
 baud_rate: 921600                    # 波特率
 bullet_speed: 23.0                   # 默认弹速 (m/s), 会被下位机数据覆盖
-# 0x0503 的 yaw_angle 是 IMU 世界系 yaw：哨兵双yaw 平台的 IMU 装在小yaw（主相机）板上，
-# 因此默认按 upper 解释，大yaw = yaw_angle - upper_yaw_angle（小yaw 关节角）。
-# 若实车把 IMU 装在大yaw 轴上，改成 lower：小yaw = yaw_angle + upper_yaw_angle。
-# gimbal_imu_axis: upper
-# 热量保护：枪管热量（裁判 0x0202）到达 上限(0x0201) - heat_stop_margin 时停止开火，
-# 回落到 上限 - 2*heat_stop_margin 后自动恢复。17mm 单发约 10 热量，默认 10 = 再打一发就顶线。
-# heat_stop_margin: 10
 
 # ----- 主相机 (sursign="main") -----
 # camera_name 决定相机类型: "hikrobot" | "mindvision" | "Usbcamera"
 camera_name_main: "hikrobot"
-exposure_ms_main: 10.0               # 曝光时间 (ms)
-gain_main: 8.0                     # 增益 (HikRobot 用, MindVision 用 gamma_main)
 # 【调试改动 2026-10-31】40ms 曝光时手持快速移动拖影严重，检测置信度掉到 0.8 以下导致丢帧。
 # 曝光 40→12ms（拖影降为 1/3.3），增益 8→18 补偿亮度（约 +10dB）。
 exposure_ms_main: 5.0               # 曝光时间 (ms)
@@ -248,8 +239,8 @@ low_speed_delay_time: 0.010         # 低速状态下弹道延迟时间 (s)
 
 # ----- 射手 (Shooter) -----
 auto_fire: true                     # 是否由自瞄自动控制开火
-first_tolerance: 2                  # 近距离射击容差 (度)
-second_tolerance: 1                 # 远距离射击容差 (度)
+first_tolerance: 1                # 近距离射击容差 (度)
+second_tolerance: 5                 # 远距离射击容差 (度)
 judge_distance: 3                   # 近/远距离判断阈值 (m)
 
 # ----- 决策器 (Decider) -----
@@ -268,7 +259,7 @@ mode: 1                             # 决策模式 (影响全向感知的搜索�
 #      └── small_yaw     小yaw 板（yaw + pitch + roll）——主相机挂在这上面
 #          └── main_cam
 #
-#  · yaw_axis / small_yaw 是**动态关节**，每帧由 0x0503 刷新，不要填数值：
+#  · yaw_axis / small_yaw 是**动态关节**，每帧由 0x502 刷新，不要填数值：
 #        yaw_axis  = Rz(lower_yaw)
 #        small_yaw = Rz(upper_yaw)·Ry(pitch)·Rx(roll)
 #  · omni_cam_i / main_cam 是**静态边**，填标定结果：
@@ -314,7 +305,7 @@ tf:
       xyz: [-0.147449, -0.092459, 0.003]
       mount_deg: [-135.0, 0.0, 0.0]
 
-    # ---- 主相机：相机 -> 小yaw 板（板子的参考系即 0x0503 的 pitch/roll/yaw）----
+    # ---- 主相机：相机 -> 小yaw 板（板子的参考系即 0x502 的 pitch/roll/upper_yaw）----
     #  比枪管根部高 88.98 mm、靠前 30.84 mm；光轴与枪管完全平行（pitch 跟随云台）
     main_cam:
       parent: small_yaw
@@ -323,7 +314,7 @@ tf:
 
 # ----- 相机标定 -----
 # 云台旋转矩阵 → IMU 本体坐标系 (3x3 行优先)
-# 单位阵 = IMU 的三个轴与 small_yaw 板（0x0503 的 IMU 参考系）重合；
+# 单位阵 = IMU 的三个轴与 small_yaw 板（板子的 0x502 参考系）重合；
 # 若 IMU 是歪装（绕板子轴有固定旋转），要填实际的安装旋转。
 R_gimbal2imubody: [
                     1, 0, 0,

@@ -29,8 +29,7 @@ public:
   std::string state() const;
   void reset();
 
-  // 敌我颜色：默认取配置 enemy_color，运行期由裁判 0x0201 的 robot_id 覆盖
-  // （己方颜色取反）。值没变化时直接返回，不会刷日志。
+  /* 运行时切换敌方颜色：串口上报 robot_id 后按实际对阵覆盖配置里的 enemy_color */
   void set_enemy_color(Color color);
 
   // 返回内部跟踪目标的只读指针，nullptr 表示当前没有可用目标。

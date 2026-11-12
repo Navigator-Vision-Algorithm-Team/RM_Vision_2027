@@ -4,6 +4,7 @@
 #include <Eigen/Geometry>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -87,6 +88,12 @@ public:
   RobotStatus robot_status() const;
 
   /*
+   * 下位机上报的机器人 ID：0x502 的 roboid，收到裁判 0x0201 时也会用其 robot_id 覆盖。
+   * 0 表示还没收到。编号表见下面的 is_red_robot_id / is_blue_robot_id。
+   */
+  uint8_t robot_id() const;
+
+  /*
    * 导航转发用的裁判状态快照：一次加锁取出 0x0001 / 0x0201 中导航需要的三个量，
    * 附带「是否收到过对应帧」的有效位（用于避免把未初始化值当成真实数据发布）。
    *
@@ -145,6 +152,8 @@ private:
   /* 下位机上报的比赛与机器人状态，接收线程写入，getter 读取 */
   GameStatus game_status_{};
   RobotStatus robot_status_{};
+  /* 0x502 的 roboid / 0x0201 的 robot_id，0 = 还没收到 */
+  std::atomic<uint8_t> robot_id_{0};
   /* 「是否收到过对应帧」：只置位不清零，供裁判状态转发侧判断数据是否可用 */
   std::atomic<bool> game_status_received_{false};
   std::atomic<bool> robot_status_received_{false};
@@ -171,6 +180,13 @@ private:
   /* 0x505 基础状态，目前只取其中的复位位 */
   void handleBass(const bassPacket & pkt);
 };
+
+/*
+ * 附录二 兵种 ID 编号表：1~11 红方，101~111 蓝方（蓝方 = 红方 + 100）。
+ * 两个函数都返回 false 表示 ID 不在表内（含 0 = 还没收到）。
+ */
+inline bool is_red_robot_id(uint8_t id) { return id >= 1 && id <= 11; }
+inline bool is_blue_robot_id(uint8_t id) { return id >= 101 && id <= 111; }
 
 }  // namespace io
 
