@@ -1,7 +1,7 @@
 #ifndef IO__SIM__VIRTUAL_MCU_HPP
 #define IO__SIM__VIRTUAL_MCU_HPP
 
-// 虚拟下位机：按真实协议（0xA5 帧头 + CRC8/CRC16 + 0x502/0x503/0x505/0x0001）
+// 虚拟下位机：按真实协议（0xA5 帧头 + CRC8/CRC16 + 0x502/0x503/0x505/0x0001/0x0201）
 // 与真实频率打包四元数等数据，可注入丢包/延迟/跳变/校验错误；
 // 以及原始字节回放器，用于复现 bug。
 
@@ -32,6 +32,7 @@ private:
   void emit_imu(const Sink & sink);
   void emit_chassis(const Sink & sink);
   void emit_status(const Sink & sink);
+  void emit_robot_status(const Sink & sink);
   void emit_bass(const Sink & sink, bool reset);
   void maybe_log();
 

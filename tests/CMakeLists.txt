@@ -63,4 +63,13 @@ target_link_libraries(
 add_executable(yolodebug yolodebug.cpp)
 target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 
-install(TARGETS soldier_debug sentry_multithread_debug yolodebug RUNTIME DESTINATION bin)
+# ============================================================================
+#  裁判状态转发自测：虚拟下位机 0x0001/0x0201 -> SerialBoard -> ROS 话题
+#    ./referee_forward_test [config] [timeout_s]
+#  校验导航决策节点订阅的三个 referee 话题的名字、类型与字段值。
+# ============================================================================
+add_executable(referee_forward_test referee_forward_test.cpp)
+target_link_libraries(referee_forward_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
+
+install(TARGETS soldier_debug sentry_multithread_debug yolodebug referee_forward_test
+        RUNTIME DESTINATION bin)

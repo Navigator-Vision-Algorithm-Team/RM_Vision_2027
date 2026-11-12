@@ -86,6 +86,12 @@ public:
   /* 最近一帧机器人状态：血量、热量上限、底盘功率、三路供电 */
   RobotStatus robot_status() const;
 
+  /*
+   * 导航转发用的裁判状态快照：一次加锁取出 0x0001 / 0x0201 中导航需要的三个量，
+   * 附带「是否收到过对应帧」的有效位（用于避免把未初始化值当成真实数据发布）。
+   */
+  RefereeState referee_state() const;
+
   /* 比赛是否已开始；未启用裁判系统时恒为 true */
   bool is_game_started() const;
 
@@ -129,6 +135,9 @@ private:
   /* 下位机上报的比赛与机器人状态，接收线程写入，getter 读取 */
   GameStatus game_status_{};
   RobotStatus robot_status_{};
+  /* 「是否收到过对应帧」：只置位不清零，供裁判状态转发侧判断数据是否可用 */
+  std::atomic<bool> game_status_received_{false};
+  std::atomic<bool> robot_status_received_{false};
   std::atomic<bool> game_started_{false};
   std::atomic<bool> reset_pending_{false};
   bool use_referee_system_ = false;

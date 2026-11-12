@@ -3,7 +3,8 @@
 > 适用入口：`src/sentry_multithread.cpp`
 > 数据来源：下位机（MCU / 串口）+ 导航模块（ROS2）
 
-本文件描述 `sentry_multithread` 入口从下位机**接收**的数据，以及为完成闭环**发送**给下位机的数据。
+本文件描述 `sentry_multithread` 入口从下位机**接收**的数据、为完成闭环**发送**给下位机的数据，
+以及经 ROS2 **转发给导航模块**（导航速度输入、云台关节反馈、裁判状态）的数据。
 
 ---
 
@@ -13,6 +14,7 @@
 | --- | --- | --- | --- |
 | 串口 | `io::SerialBoard` | 与 MCU（云台/底盘主控）互发数据帧 | `io/serial/serial_board.cpp` |
 | ROS2 | `io::ROS2` | 订阅导航速度指令 | `io/ros2/subscribe2nav.cpp` |
+| ROS2 | `io::ROS2` | 发布裁判状态（导航决策节点的输入） | `io/ros2/publish2nav.cpp` |
 
 串口参数（`configs/sentry.yaml` + `io/serial/serial_board.cpp`）：
 
@@ -178,6 +180,10 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 - `game_progress = (game_info >> 4) & 0x0F`
 - 当 `use_referee_system = true` 时，`game_progress >= 4` 判定为比赛开始；否则（无人裁判系统）启动即视为已开始。
 
+> 该帧同时是导航决策节点 `referee/game_progress` 的数据源（转发细节见 **5.3**）。
+> 注意 `is_game_started()` 只受 `use_referee_system` 门控，而 ROS 转发不受该开关影响：
+> 只要下位机发本帧，`game_progress` 就会被转发出去。
+
 ### 3.6 `0x0201` / `0x0102` 机器人状态（GameRobotStatusPacket）
 
 | 偏移 | 字段 | 类型 | 说明 |
@@ -202,6 +208,10 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 | 0 | 云台供电 `mains_power_gimbal` |
 | 1 | 底盘供电 `mains_power_chassis` |
 | 2 | 发射机构供电 `mains_power_shooter` |
+
+> 该帧的 `remain_hp` / `max_hp` 是导航决策节点 `referee/current_hp`、`referee/maximum_hp`
+> 的数据源（转发细节见 **5.3**）。fake 模式下虚拟下位机会按 `fake_status_hz` 发送本帧，
+> 血量由 `fake_hp` / `fake_max_hp` 指定（默认 400 / 400）。
 
 ### 3.7 未识别包
 
@@ -287,6 +297,113 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 > 若要满足导航侧 TF 的关节语义，需下位机补充 `chassis_yaw`（底盘世界系 yaw）或直接补 `relative_yaw`，
 > 视觉侧再改为 `limit_rad(lower_yaw - chassis_yaw)`（改动点见 `SerialBoard::receiveThread` 的注释）。
 
+### 5.3 输出：裁判状态（导航决策节点的输入）
+
+这是视觉侧**唯一**为导航决策节点（`pb_nav_goal_decision`）提供的输入：把串口收到的裁判帧
+翻译成三个标准标量话题。完整链路：
+
+```
+下位机 0x0001 / 0x0201
+   │  0xA5 分帧 + CRC8/CRC16（见 3.5 / 3.6）
+   ▼
+SerialBoard::receiveThread -> handleGameStatus / handleGameRobotStatus
+   │  game_status_ / robot_status_ + game_status_received_ / robot_status_received_
+   │  SerialBoard::referee_state()：一次加锁取得快照（含两个有效位）
+   ▼
+io::Publish2Nav（复用既有发布节点与 spin 线程，5 Hz 定时拉取）
+   │  绝对话题名发布
+   ▼
+pb_nav_goal_decision（namespace = red_standard_robot1，相对名 referee/xxx 订阅）
+   → game_started_ / hp_low_ → Nav2 navigate_to_pose
+```
+
+#### 5.3.1 话题清单
+
+| 话题（绝对名） | 类型 | 方向 | 频率 | QoS | 发布节点 | 订阅节点 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `/red_standard_robot1/referee/game_progress` | `std_msgs/msg/UInt8` | 视觉 → 导航 | 5 Hz（源 1~5 Hz） | depth 10 / reliable / volatile | `auto_aim_target_pos_publisher` | `goal_decision_node` |
+| `/red_standard_robot1/referee/current_hp` | `std_msgs/msg/Int32` | 视觉 → 导航 | 5 Hz | 同上 | 同上 | 同上 |
+| `/red_standard_robot1/referee/maximum_hp` | `std_msgs/msg/Int32` | 视觉 → 导航 | 5 Hz | 同上 | 同上 | 同上 |
+
+> 话题名是**带命名空间的绝对名**，写死在 `io/ros2/publish2nav.cpp` 的
+> `kGameProgressTopic` / `kCurrentHpTopic` / `kMaximumHpTopic` 常量里。
+> 导航侧用相对名 `referee/xxx`，两边因此共同依赖 `red_standard_robot1` 这个命名空间。
+> 导航栈换 namespace 时必须同步改这两处，否则话题静默不匹配（无任何报错）。
+
+#### 5.3.2 字段映射（串口 → ROS → 导航）
+
+| 串口帧 | 偏移 | 帧字段 | 类型 | `RefereeState` | 话题字段 | 导航侧变量 | 语义 / 阈值 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `0x0001` | 7（高 4 位） | `game_info[7:4]` | uint8（0~15） | `game_progress` | `game_progress.data` | `game_started_` | `>= 4` 视为开赛（配置 `game_start_progress_threshold`） |
+| `0x0201` | 9 | `remain_hp` | uint16 | `current_hp` | `current_hp.data` | `current_hp_` | 原始血量，不做百分比换算 |
+| `0x0201` | 11 | `max_hp` | uint16 | `maximum_hp` | `maximum_hp.data` | `maximum_hp_` | 低血判定的分母：`current_hp <= max_hp * 30%` |
+
+语义要点：
+
+- `uint16 -> int32`、`uint8 -> uint8` 均无损，**视觉侧不做任何缩放/百分比化**，阈值由导航侧配置；
+- 低血判据**含等号**：`max_hp = 400` 时 `remain_hp = 120` 即判为低血并触发返航（T2 转移）；
+- `game_progress` 是"赛制阶段"而不是布尔：`0 未开始 / 4 比赛中 / 5 比赛结束`。导航侧用 `>= 4`
+  判"已开赛"，因此**进入 5（赛后）后仍会被视为进行中**；若要让赛后停跑，需双方另议约定
+  （例如赛后改发 0，或导航侧改为 `== 4`），当前实现按原始值透传。
+
+#### 5.3.3 发布策略与门控
+
+| 规则 | 行为 | 原因 |
+| --- | --- | --- |
+| 有效位门控 | 未收到 `0x0001` 不发 `game_progress`；未收到 `0x0201` 不发两条血量 | 导航侧把 `maximum_hp == 0` 解释为"满血值未知"并**永久关闭**低血返航，绝不能发 0 占位 |
+| 周期发布 | 每 200 ms 全量重发，不等值变化 | 裁判帧仅 1~5 Hz，迟加入/重启的订阅方也能立即拿到当前状态；重复同值对导航侧无副作用 |
+| 变化才打日志 | 三个值任一变化时打一条 INFO | 避免 5 Hz 刷屏 |
+| 无数据告警 | 连续 5 s（25 拍）收不到任何有效帧 → WARN 一次 | 区分"没接裁判系统"与"话题名/命名空间不匹配"，提示导航会停在 `WAIT_GAME_START` |
+| 异常值告警 | `robot_status_valid` 为真但 `max_hp <= 0` → WARN 一次 | 帧校验通过却数据异常，导航侧会因此关闭低血判定 |
+| 无数据不伪造 | 未接裁判系统时一条都不发 | 安全优先：无裁判数据时不允许机器人自行跑点 |
+
+#### 5.3.4 线程与生命周期约束
+
+- 定时器跑在 `Publish2Nav` 既有的 spin 线程里（`io::ROS2` 构造时启动），**串口接收线程不进入 ROS**；
+- 数据源由 `std::mutex` 保护：主线程 `set_referee_source()` 写入，spin 线程定时器读取；
+- `set_referee_source()` 只生效一次，重复调用告警并保留第一个；
+- 回调开头判 `rclcpp::ok()`，析构阶段定时器被调度一次时直接返回，不发布、不抛异常；
+- 依赖顺序：`io::ROS2`（内含 `Publish2Nav`）比 `SerialBoard` 先析构，数据源引用不会悬空。
+
+#### 5.3.5 接入方式
+
+```cpp
+// src/sentry_multithread.cpp
+io::ROS2 ros2([&serial_board](const io::NavCommand & c) { serial_board.send(c); });
+ros2.set_referee_source([&serial_board]() { return serial_board.referee_state(); });
+```
+
+未调用 `set_referee_source()` 时定时器空转，裁判话题上不出现任何消息，其余发布（自瞄目标位置、
+云台关节反馈）不受影响。
+
+#### 5.3.6 联调与自测
+
+- fake 模式下虚拟下位机按 `fake_status_hz` 同时发 `0x0001` 与 `0x0201`，血量取
+  `fake_hp` / `fake_max_hp`（把 `fake_hp` 压到 `fake_max_hp` 的 30% 以下即可联调返航）；
+- 自测程序校验解析结果、三个话题的名字/类型/字段值以及"是否周期发布"：
+
+```bash
+./build/tests/referee_forward_test configs/virtual_referee.yaml 5
+```
+
+- 现场核对：
+
+```bash
+ros2 topic list | grep referee
+ros2 topic echo /red_standard_robot1/referee/current_hp
+ros2 topic hz   /red_standard_robot1/referee/game_progress    # 应约 5 Hz
+```
+
+#### 5.3.7 对接前提（需与固件一致）
+
+- 帧长必须与结构体一致：`0x0001` 的 `data_length = 11`（整帧 20 B）、`0x0201` 的
+  `data_length = 13`（整帧 22 B）。长度不符会被 `receiveThread` 丢弃或错帧，表现为"血量一直不变"；
+- cmd_id 只认 `0x0001`/`0x0100` 与 `0x0201`/`0x0102`。若固件改发官方 `0x0003`（或按官方全字段
+  长度转发），本链路会**静默失效**（`max_hp` 恒为 0 → 导航永不返航），需同步修改
+  `serial_board.cpp` 的分发分支与 `packet.hpp` 的结构体；
+- 当前只转发上述三个量。`stage_remain_time`、`robot_level`、`chassis_power_limit`、
+  `mains_power_state` 已解析缓存但未发布，导航侧后续需要时可直接加话题，无需改串口层。
+
 ---
 
 ## 6. 接收数据在入口中的用途速查
@@ -299,6 +416,7 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 | 弹速 | `bullet_speed`（yaml） | `aimer.aim(..., bullet_speed)` |
 | 导航速度 | ROS2 `cmd_vel` | 下发 `0x0405` |
 | 云台关节反馈 | `0x502` -> ROS2 `gimbal_joint_state` | 供导航侧构建 JointState TF（见 5.2） |
+| 裁判状态 | `0x0001`/`0x0201` -> ROS2 `referee/*` | 供导航决策节点判「开赛 / 血量过低返航」（见 5.3） |
 
 ---
 
@@ -307,8 +425,8 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 | 结构体 | 文件 |
 | --- | --- |
 | `Header` / 所有 Packet | `io/serial/gimbal/packet.hpp` |
-| `Command` / `NavCommand` | `io/command.hpp` |
+| `Command` / `NavCommand` / `RefereeState` | `io/command.hpp` |
 | CRC 算法 | `io/serial/gimbal/protocol_crc.cpp` / `protocol_crc.hpp` |
 | 串口收发与解析 | `io/serial/serial_board.cpp` / `serial_board.hpp` |
 | ROS2 订阅 | `io/ros2/subscribe2nav.cpp` |
-| ROS2 发布（目标位置 / 关节反馈） | `io/ros2/publish2nav.cpp` |
+| ROS2 发布（目标位置 / 关节反馈 / 裁判状态） | `io/ros2/publish2nav.cpp` |

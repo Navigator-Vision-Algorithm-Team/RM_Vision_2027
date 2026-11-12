@@ -233,6 +233,21 @@ RobotStatus SerialBoard::robot_status() const
   return robot_status_;
 }
 
+RefereeState SerialBoard::referee_state() const
+{
+  RefereeState state;
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    state.game_progress = game_status_.game_progress;
+    state.current_hp = static_cast<int32_t>(robot_status_.remain_hp);
+    state.maximum_hp = static_cast<int32_t>(robot_status_.max_hp);
+  }
+  // 有效位在锁外读：它只表示「收到过」，不要求与上面三个量严格来自同一帧
+  state.game_status_valid = game_status_received_.load();
+  state.robot_status_valid = robot_status_received_.load();
+  return state;
+}
+
 bool SerialBoard::is_game_started() const
 {
   return game_started_.load();
@@ -255,6 +270,7 @@ void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
     std::lock_guard<std::mutex> lock(status_mutex_);
     game_status_ = gs;
   }
+  game_status_received_.store(true);
 
   // Update game-started state based on progress
   if (use_referee_system_) {
@@ -291,6 +307,7 @@ void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
     std::lock_guard<std::mutex> lock(status_mutex_);
     robot_status_ = rs;
   }
+  robot_status_received_.store(true);
 
   // tools::logger()->debug(
   //   "[SerialBoard] RobotStatus: id={} lv={} hp={}/{} cool={} heat={} power={} mains=g{}c{}s{}",

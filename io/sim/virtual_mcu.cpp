@@ -89,6 +89,7 @@ void VirtualMcu::run(const Sink & sink)
     }
     if (rel >= next_status) {
       emit_status(sink);
+      emit_robot_status(sink);
       next_status += status_period;
       if (next_status < rel) next_status = rel + status_period;
     }
@@ -222,6 +223,30 @@ void VirtualMcu::emit_status(const Sink & sink)
   pkt.game_info = static_cast<uint8_t>((4 << 4) | 1);
   pkt.stage_remain_time = 300;
   pkt.sync_timestamp = SessionClock::now_rel_ns();
+  crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
+
+  sink(reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt));
+}
+
+void VirtualMcu::emit_robot_status(const Sink & sink)
+{
+  GameRobotStatusPacket pkt{};
+  pkt.header.header = 0xA5;
+  pkt.header.data_length =
+    static_cast<uint16_t>(sizeof(GameRobotStatusPacket) - sizeof(Header) - 2);
+  pkt.header.seq = 0;
+  pkt.header.cmd_id = 0x0201;
+  crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&pkt.header), sizeof(Header) - 2);
+
+  pkt.robot_id = robot_id_;
+  pkt.robot_level = 1;
+  // 血量取 fake_hp / fake_max_hp：把 fake_hp 调到 fake_max_hp 的 30% 以下即可联调返航逻辑
+  pkt.max_hp = cfg_.fake_max_hp;
+  pkt.remain_hp = cfg_.fake_hp > cfg_.fake_max_hp ? cfg_.fake_max_hp : cfg_.fake_hp;
+  pkt.shooter_cooling_rate = 40;
+  pkt.shooter_heat_limit = 200;
+  pkt.chassis_power_limit = 80;
+  pkt.mains_power_state = 0x07;  // 云台 / 底盘 / 发射机构三路供电正常
   crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
 
   sink(reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt));

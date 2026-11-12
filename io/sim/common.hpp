@@ -205,8 +205,11 @@ struct SerialSourceConfig
   bool external = false;
   double imu_hz = 500.0;        // 四元数(0x502)发送频率
   double chassis_hz = 50.0;     // 底盘速度(0x503)频率
-  double status_hz = 1.0;       // 比赛状态(0x0001)频率
+  double status_hz = 1.0;       // 比赛状态(0x0001) + 机器人状态(0x0201)频率
   double reset_period_s = 0.0;  // 复位信号周期(0=不注入)
+  // fake 模式下 0x0201 上报的血量（用于联调导航返航阈值，例如把 fake_hp 调到 20% 以下）
+  uint16_t fake_hp = 400;
+  uint16_t fake_max_hp = 400;
   std::string replay_file;      // replay 模式：串口原始字节记录文件
 
   static SerialSourceConfig load(const YAML::Node & yaml, SourceMode fallback)
@@ -220,6 +223,8 @@ struct SerialSourceConfig
     c.chassis_hz = node_as<double>(yaml, "fake_chassis_hz", c.chassis_hz);
     c.status_hz = node_as<double>(yaml, "fake_status_hz", c.status_hz);
     c.reset_period_s = node_as<double>(yaml, "fake_reset_period_s", c.reset_period_s);
+    c.fake_hp = node_as<uint16_t>(yaml, "fake_hp", c.fake_hp);
+    c.fake_max_hp = node_as<uint16_t>(yaml, "fake_max_hp", c.fake_max_hp);
     c.replay_file = node_as<std::string>(
       yaml, "serial_replay_file", std::string("logs/virtual_session/serial.bin"));
     return c;
