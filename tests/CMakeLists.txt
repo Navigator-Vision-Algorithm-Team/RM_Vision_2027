@@ -7,10 +7,7 @@ cmake_minimum_required(VERSION 3.16.3)
 # ============================================================================
 add_executable(serial_communication_test
     serial_communication_test.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/protocol/referee.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/protocol/host_protocol.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/protocol/seasons/2027/protocol.cpp)
+    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
 target_link_libraries(serial_communication_test serial)
 
 # ============================================================================
@@ -23,19 +20,6 @@ add_executable(time_delay_test
     time_delay_test.cpp
     ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
 target_link_libraries(time_delay_test serial)
-
-# ============================================================================
-#  CAN 运动指令例程（不依赖 ROS2 / 相机，只链接协议栈 + 达妙 USB-CAN）
-#    ./can_com_debug [config.yaml] [发送频率Hz] [--sweep] [--sweep-rate=deg/s]
-#  交互输入绝对 yaw/pitch（度）下发 0x510 跟踪指令；--sweep 恒速旋转例程；
-#  周期打印 0x511~0x514 遥测与发送结果，详见 can_com_debug.cpp 文件头
-# ============================================================================
-if(TARGET io_soldier_can)
-    add_executable(can_com_debug can_com_debug.cpp)
-    # tools 是 OBJECT 库且 recorder.cpp 用到 OpenCV，链接 tools 的可执行文件必须带上 ${OpenCV_LIBS}
-    target_link_libraries(can_com_debug ${OpenCV_LIBS} fmt::fmt tools io_soldier_can)
-    install(TARGETS can_com_debug RUNTIME DESTINATION bin)
-endif()
 
 # 交互式云台响应测试：输入绝对 yaw/pitch（度），每行发送一条 0x0402 指令。
 add_executable(testgimbalspeed testgimbalspeed.cpp)
@@ -65,14 +49,9 @@ if(NOT (ament_cmake_FOUND AND rclcpp_FOUND AND sensor_msgs_FOUND))
     return()
 endif()
 
-# 步兵调试入口默认读取 configs/soldier_debug.yaml，使用达妙 USB-CAN SDK。
-if(TARGET io_soldier_can)
-    add_executable(soldier_debug soldier_debug.cpp "${PROJECT_SOURCE_DIR}/src/soldier.cpp")
-    target_link_libraries(
-        soldier_debug
-        ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
-    install(TARGETS soldier_debug RUNTIME DESTINATION bin)
-endif()
+# 步兵调试入口：YOLO 检测 + PnP 位姿定位，默认配置 configs/soldier.yaml
+add_executable(soldier_debug soldier_debug.cpp)
+target_link_libraries(soldier_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 
 # 哨兵调试入口：多线程自瞄（主相机 + 全向），默认配置 configs/sentry.yaml
 add_executable(sentry_multithread_debug sentry_multithread_debug.cpp)
@@ -84,4 +63,13 @@ target_link_libraries(
 add_executable(yolodebug yolodebug.cpp)
 target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 
-install(TARGETS sentry_multithread_debug yolodebug RUNTIME DESTINATION bin)
+# ============================================================================
+#  裁判状态转发自测：虚拟下位机 0x0001/0x0201 -> SerialBoard -> ROS 话题
+#    ./referee_forward_test [config] [timeout_s]
+#  校验导航决策节点订阅的三个 referee 话题的名字、类型与字段值。
+# ============================================================================
+add_executable(referee_forward_test referee_forward_test.cpp)
+target_link_libraries(referee_forward_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
+
+install(TARGETS soldier_debug sentry_multithread_debug yolodebug referee_forward_test
+        RUNTIME DESTINATION bin)

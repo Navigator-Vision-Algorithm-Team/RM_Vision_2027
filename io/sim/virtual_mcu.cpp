@@ -2,11 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 
-#include "io/serial/protocol/host_protocol.hpp"
-#include "io/serial/protocol/referee.hpp"
-#include "io/serial/protocol/seasons/2027/protocol.hpp"
+#include "io/serial/gimbal/packet.hpp"
+#include "io/serial/gimbal/protocol_crc.hpp"
 #include "tools/logger.hpp"
 
 namespace io::sim
@@ -54,18 +52,17 @@ void VirtualMcu::stop()
 void VirtualMcu::run(const Sink & sink)
 {
   tools::logger()->info(
-    "[FAKE] VirtualMcu started: gimbal={}Hz chassis={}Hz status={}Hz reset={}s robot_id={} "
-    "faults={}",
+    "[FAKE] VirtualMcu started: imu={}Hz chassis={}Hz status={}Hz reset={}s robot_id={} faults={}",
     cfg_.imu_hz, cfg_.chassis_hz, cfg_.status_hz, cfg_.reset_period_s, robot_id_,
     fault_.enabled() ? "on" : "off");
 
-  const double gimbal_period = 1.0 / cfg_.imu_hz;
+  const double imu_period = 1.0 / cfg_.imu_hz;
   const double chassis_period = 1.0 / cfg_.chassis_hz;
   const double status_period = 1.0 / cfg_.status_hz;
-  const double slow_period = 1.0;  // 0x0500 / 0x0501 都是 1Hz
+  const double bass_period = 0.1;
 
   const auto t0 = SteadyClock::now();
-  double next_gimbal = 0.0, next_chassis = 0.0, next_status = 0.0, next_slow = 0.0;
+  double next_imu = 0.0, next_chassis = 0.0, next_status = 0.0, next_bass = 0.0;
   double next_reset = cfg_.reset_period_s > 0 ? cfg_.reset_period_s : 1e18;
   auto last_log = t0;
 
@@ -74,34 +71,31 @@ void VirtualMcu::run(const Sink & sink)
   while (!quit_) {
     const double rel = rel_now();
     t_now_ = rel;
-    uptime_ms_ = static_cast<uint32_t>(rel * 1000.0);
 
-    if (rel >= next_gimbal) {
-      emit_gimbal(sink);
-      next_gimbal += gimbal_period;
-      if (next_gimbal < rel) next_gimbal = rel + gimbal_period;
+    if (rel >= next_imu) {
+      emit_imu(sink);
+      next_imu += imu_period;
+      if (next_imu < rel) next_imu = rel + imu_period;
     }
     if (rel >= next_chassis) {
       emit_chassis(sink);
       next_chassis += chassis_period;
       if (next_chassis < rel) next_chassis = rel + chassis_period;
     }
+    if (rel >= next_bass) {
+      emit_bass(sink, false);
+      next_bass += bass_period;
+      if (next_bass < rel) next_bass = rel + bass_period;
+    }
     if (rel >= next_status) {
-      emit_referee(sink);
+      emit_status(sink);
+      emit_robot_status(sink);
       next_status += status_period;
       if (next_status < rel) next_status = rel + status_period;
     }
-    if (rel >= next_slow) {
-      emit_host_version(sink);
-      emit_host_robot(sink);
-      next_slow += slow_period;
-      if (next_slow < rel) next_slow = rel + slow_period;
-    }
     if (rel >= next_reset) {
-      // 新协议没有 reset 位：MCU 重启（uptime_ms 回落）就是视觉侧的复位信号
-      uptime_ms_ = 0;
-      emit_host_version(sink);
-      tools::logger()->info("[FAKE] Inject MCU restart (0x0500.uptime_ms -> 0)");
+      emit_bass(sink, true);
+      tools::logger()->info("[FAKE] Inject reset signal (0x505.reset=1)");
       next_reset += cfg_.reset_period_s;
     }
 
@@ -110,7 +104,7 @@ void VirtualMcu::run(const Sink & sink)
       last_log = SteadyClock::now();
     }
 
-    const double next = std::min({next_gimbal, next_chassis, next_status, next_slow});
+    const double next = std::min({next_imu, next_chassis, next_bass, next_status});
     const double wait = next - rel_now();
     if (wait > 0)
       std::this_thread::sleep_for(capped(
@@ -122,63 +116,15 @@ void VirtualMcu::run(const Sink & sink)
   tools::logger()->info("[FAKE] VirtualMcu stopped.");
 }
 
-void VirtualMcu::emit_host_version(const Sink & sink)
-{
-  host_comm::host_version_t pkt{};
-  pkt.host_version = host_comm::HOST_PROTOCOL_VERSION;
-  pkt.referee_season = 2027;
-  pkt.robot_type = 7;       // 哨兵
-  pkt.chassis_type = 2;     // omni
-  pkt.gimbal_type = 2;      // gimbal_DoubleYaw
-  pkt.uptime_ms = uptime_ms_;
-
-  uint8_t frame[referee_comm::MAX_PACKET];
-  const size_t n = referee_comm::Receiver::Encode(
-    frame, sizeof(frame), seq_++, host_comm::HOST_VERSION, &pkt, sizeof(pkt));
-  if (n > 0) sink(frame, n);
-}
-
-void VirtualMcu::emit_host_robot(const Sink & sink)
-{
-  host_comm::host_robot_status_t pkt{};
-  pkt.enable = 0x0F;              // 底盘/云台/发射/超电全开
-  pkt.controller_online = 1;
-  pkt.robot_mode = 3;             // 全自动哨兵
-  pkt.fric_mode = 2;              // 就绪
-  pkt.shoot_mode = 0;
-  pkt.module_online = 0x3F;
-
-  uint8_t frame[referee_comm::MAX_PACKET];
-  const size_t n = referee_comm::Receiver::Encode(
-    frame, sizeof(frame), seq_++, host_comm::ROBOT_STATUS, &pkt, sizeof(pkt));
-  if (n > 0) sink(frame, n);
-}
-
-void VirtualMcu::emit_chassis(const Sink & sink)
-{
-  host_comm::host_chassis_status_t pkt{};
-  pkt.chassis_enabled = 1;
-  pkt.speed_x = static_cast<float>(1.0 * std::sin(2.0 * M_PI * 0.2 * t_now_));
-  pkt.speed_y = static_cast<float>(0.3 * std::cos(2.0 * M_PI * 0.2 * t_now_));
-  pkt.speed_turn = static_cast<float>(0.5 * std::sin(2.0 * M_PI * 0.05 * t_now_));
-  pkt.feedback_angle = static_cast<float>(M_PI * std::sin(2.0 * M_PI * 0.02 * t_now_));
-
-  uint8_t frame[referee_comm::MAX_PACKET];
-  const size_t n = referee_comm::Receiver::Encode(
-    frame, sizeof(frame), seq_++, host_comm::CHASSIS_STATUS, &pkt, sizeof(pkt));
-  if (n > 0) sink(frame, n);
-}
-
-void VirtualMcu::emit_gimbal(const Sink & sink)
+void VirtualMcu::emit_imu(const Sink & sink)
 {
   const long long idx = imu_index_++;
 
-  // 双yaw：大yaw 慢速摆动，小yaw 相对大yaw 有自己的小幅快摆。
-  // 0x0503 只发「IMU 世界角 + 小yaw 关节角」，两轴由上位机自己复合，
-  // 因此这里按关节角给，便于验证上位机的 lower = yaw - joint 是否正确。
+  // 双yaw：大yaw 慢速摆动，小yaw 在大yaw 基础上有自己的小幅快摆。
+  // 对外按协议发两个绝对角（[0, 2π)），其差即 psi，便于验证视觉侧的解算。
   double lower = M_PI * std::sin(2.0 * M_PI * 0.1 * t_now_);
-  // 加一个相位偏移，让 joint 在启动时就不为 0，避免"joint 恒 0"掩盖接线错误
-  const double joint = 0.35 * std::sin(2.0 * M_PI * 0.45 * t_now_ + 0.6);
+  // 加一个相位偏移，让 psi 在启动时就不为 0，避免"psi 恒 0"掩盖接线错误
+  const double psi_rel = 0.35 * std::sin(2.0 * M_PI * 0.45 * t_now_ + 0.6);
   double pitch = 0.15 * std::sin(2.0 * M_PI * 0.5 * t_now_);
   double roll = 0.05 * std::sin(2.0 * M_PI * 0.3 * t_now_);
 
@@ -195,20 +141,21 @@ void VirtualMcu::emit_gimbal(const Sink & sink)
     log_fault("spike", "imu jump injected", idx);
   }
 
-  // 噪声/跳变只加在大yaw 上，关节角保持干净：上位机应当能精确还原出 lower/upper
-  double yaw = lower + joint;
+  // 噪声/跳变只加在大yaw 上，小yaw 相对角保持干净：psi 应当能被视觉侧精确还原
+  double upper = lower + psi_rel;
 
-  // INS 实际给 (-π, π]，故意按这个区间发，顺带验证上位机的 2π 归一化
-  auto wrap_pi = [](double a) {
-    while (a > M_PI) a -= 2.0 * M_PI;
-    while (a <= -M_PI) a += 2.0 * M_PI;
+  // 归一化到 [0, 2π)，与下位机的上报约定一致
+  auto wrap_2pi = [](double a) {
+    while (a < 0.0) a += 2.0 * M_PI;
+    while (a >= 2.0 * M_PI) a -= 2.0 * M_PI;
     return a;
   };
-  yaw = wrap_pi(yaw);
+  lower = wrap_2pi(lower);
+  upper = wrap_2pi(upper);
 
   if (injector_.chance(fault_.imu_drop_rate)) {
     dropped_++;
-    log_fault("drop", "gimbal packet dropped", dropped_);
+    log_fault("drop", "imu packet dropped", dropped_);
     return;
   }
 
@@ -216,74 +163,118 @@ void VirtualMcu::emit_gimbal(const Sink & sink)
     std::this_thread::sleep_for(
       std::chrono::duration<double, std::milli>(fault_.imu_delay_ms));
     delayed_++;
-    if (idx % 500 == 0) log_fault("delay", "gimbal packet delayed", delayed_);
+    if (idx % 500 == 0) log_fault("delay", "imu packet delayed", delayed_);
   }
 
-  host_comm::host_gimbal_status_t pkt{};
-  pkt.gimbal_enable = 1;
-  pkt.autoaim_enabled = 1;
-  pkt.pitch_angle = static_cast<float>(pitch);
-  pkt.yaw_angle = static_cast<float>(yaw);
-  pkt.roll_angle = static_cast<float>(roll);
-  pkt.upper_yaw_angle = static_cast<float>(joint);
-  pkt.fold_yaw_angle = 0.0f;
+  IMUPacket pkt{};
+  pkt.header.header = 0xA5;
+  pkt.header.data_length = static_cast<uint16_t>(sizeof(IMUPacket) - sizeof(Header) - 2);
+  pkt.header.seq = static_cast<uint8_t>(idx & 0xFF);
+  pkt.header.cmd_id = 0x502;
+  crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&pkt.header), sizeof(Header) - 2);
 
-  uint8_t frame[referee_comm::MAX_PACKET];
-  size_t n = referee_comm::Receiver::Encode(
-    frame, sizeof(frame), seq_++, host_comm::GIMBAL_STATUS, &pkt, sizeof(pkt));
-  if (n == 0) return;
+  pkt.pitch = static_cast<float>(pitch);
+  pkt.roll = static_cast<float>(roll);
+  pkt.upper_yaw = static_cast<float>(upper);
+  pkt.lower_yaw = static_cast<float>(lower);
+  pkt.roboid = robot_id_;
+  crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
 
   if (injector_.chance(fault_.imu_corrupt_crc_rate)) {
-    frame[n - 1] ^= 0xFF;  // 破坏 CRC16 高字节
+    pkt.crc16 ^= 0xFFFF;
     corrupt_++;
     injected = true;
-    log_fault("crc", "gimbal crc corrupted", corrupt_);
+    log_fault("crc", "imu crc corrupted", corrupt_);
   }
 
-  sink(frame, n);
+  sink(reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt));
   emitted_++;
   if (injected) injected_++;
 }
 
-void VirtualMcu::emit_referee(const Sink & sink)
+void VirtualMcu::emit_chassis(const Sink & sink)
 {
-  uint8_t frame[referee_comm::MAX_PACKET];
+  classisPacket pkt{};
+  pkt.header.header = 0xA5;
+  pkt.header.data_length = static_cast<uint16_t>(sizeof(classisPacket) - sizeof(Header) - 2);
+  pkt.header.seq = 0;
+  pkt.header.cmd_id = 0x503;
+  crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&pkt.header), sizeof(Header) - 2);
 
-  // 0x0001 比赛状态：game_type=1, game_progress=4（比赛中）
-  referee_comm::v2027::game_status_t game{};
-  game.game_type = 1;
-  game.game_progress = 4;
-  game.stage_remain_time = 300;
-  game.SyncTimeStamp = SessionClock::now_rel_ns();
-  size_t n = referee_comm::Receiver::Encode(
-    frame, sizeof(frame), seq_++, referee_comm::v2027::GAME_STATUS, &game, sizeof(game));
-  if (n > 0) sink(frame, n);
+  pkt.vx = static_cast<float>(1.0 * std::sin(2.0 * M_PI * 0.2 * t_now_));
+  pkt.vy = static_cast<float>(0.3 * std::cos(2.0 * M_PI * 0.2 * t_now_));
+  pkt.vz = static_cast<float>(0.5 * std::sin(2.0 * M_PI * 0.05 * t_now_));
+  pkt.enable = 1;
+  crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
 
-  // 0x0201 机器人状态：哨兵 400 血，17mm 热量相关字段给个常数
-  referee_comm::v2027::robot_status_t robot{};
-  robot.robot_id = robot_id_;
-  robot.robot_level = 3;
-  robot.current_HP = 400;
-  robot.maximum_HP = 400;
-  robot.shooter_barrel_cooling_value = 40;
-  robot.shooter_barrel_heat_limit = 120;
-  robot.chassis_power_limit = 40;
-  robot.bullet_speed_limit = 30.0f;
-  robot.power_management_gimbal_output = 1;
-  robot.power_management_chassis_output = 1;
-  robot.power_management_shooter_output = 1;
-  n = referee_comm::Receiver::Encode(
-    frame, sizeof(frame), seq_++, referee_comm::v2027::ROBOT_STATUS, &robot, sizeof(robot));
-  if (n > 0) sink(frame, n);
+  sink(reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt));
+}
 
-  // 0x0202 热量/缓冲能量：heat 可配，用来验证上位机的热量保护
-  referee_comm::v2027::power_heat_data_t heat{};
-  heat.buffer_energy = 60;
-  heat.shooter_17mm_barrel_heat = cfg_.heat;
-  heat.shooter_42mm_barrel_heat = 0;
-  n = referee_comm::Receiver::Encode(
-    frame, sizeof(frame), seq_++, referee_comm::v2027::POWER_HEAT_DATA, &heat, sizeof(heat));
-  if (n > 0) sink(frame, n);
+void VirtualMcu::emit_status(const Sink & sink)
+{
+  GameStatusPacket pkt{};
+  pkt.header.header = 0xA5;
+  pkt.header.data_length = static_cast<uint16_t>(sizeof(GameStatusPacket) - sizeof(Header) - 2);
+  pkt.header.seq = 0;
+  pkt.header.cmd_id = 0x0001;
+  crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&pkt.header), sizeof(Header) - 2);
+
+  // game_type=1, game_progress=4(比赛中)
+  pkt.game_info = static_cast<uint8_t>((4 << 4) | 1);
+  pkt.stage_remain_time = 300;
+  pkt.sync_timestamp = SessionClock::now_rel_ns();
+  crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
+
+  sink(reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt));
+}
+
+void VirtualMcu::emit_robot_status(const Sink & sink)
+{
+  GameRobotStatusPacket pkt{};
+  pkt.header.header = 0xA5;
+  pkt.header.data_length =
+    static_cast<uint16_t>(sizeof(GameRobotStatusPacket) - sizeof(Header) - 2);
+  pkt.header.seq = 0;
+  pkt.header.cmd_id = 0x0201;
+  crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&pkt.header), sizeof(Header) - 2);
+
+  pkt.robot_id = robot_id_;
+  pkt.robot_level = 1;
+  // 血量取 fake_hp / fake_max_hp：把 fake_hp 调到 fake_max_hp 的 30% 以下即可联调返航逻辑
+  pkt.max_hp = cfg_.fake_max_hp;
+  pkt.remain_hp = cfg_.fake_hp > cfg_.fake_max_hp ? cfg_.fake_max_hp : cfg_.fake_hp;
+  pkt.shooter_cooling_rate = 40;
+  pkt.shooter_heat_limit = 200;
+  pkt.chassis_power_limit = 80;
+  pkt.mains_power_state = 0x07;  // 云台 / 底盘 / 发射机构三路供电正常
+  crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
+
+  sink(reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt));
+}
+
+void VirtualMcu::emit_bass(const Sink & sink, bool reset)
+{
+  bassPacket pkt{};
+  pkt.header.header = 0xA5;
+  pkt.header.data_length = static_cast<uint16_t>(sizeof(bassPacket) - sizeof(Header) - 2);
+  pkt.header.seq = 0;
+  pkt.header.cmd_id = 0x505;
+  crc8::Append_CRC8_Check_Sum(reinterpret_cast<uint8_t *>(&pkt.header), sizeof(Header) - 2);
+
+  pkt.roboid = robot_id_;
+  pkt.reset = reset;
+  pkt.position[0] = 0;
+  pkt.position[1] = 0;
+  pkt.HP = 400;
+  pkt.robomode = 1;
+  pkt.canshoot = 1;
+  pkt.shootmode = 0;
+  pkt.superpower = 0;
+  pkt.online = 1;
+  pkt.two = 0;
+  crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
+
+  sink(reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt));
 }
 
 void VirtualMcu::maybe_log()
@@ -375,9 +366,9 @@ IByteTransport::Ptr make_transport(const SimConfig & config)
         return std::make_unique<RealSerialTransport>(s.port, s.baud, 50);
       }
       tools::logger()->info(
-        "[SOURCE] Serial transport = FAKE/INTERNAL VirtualMcu (gimbal={}Hz)", s.imu_hz);
+        "[SOURCE] Serial transport = FAKE/INTERNAL VirtualMcu (imu={}Hz)", s.imu_hz);
       return std::make_unique<VirtualSerialTransport>(
-        std::make_unique<VirtualMcu>(s, config.fault, config.seed, s.robot_id));
+        std::make_unique<VirtualMcu>(s, config.fault, config.seed));
 
     case SourceMode::Replay:
       tools::logger()->info("[SOURCE] Serial transport = REPLAY ({})", s.replay_file);

@@ -1,0 +1,30 @@
+# =============================================================================
+#  裁判状态转发自测用的最小配置（不接任何硬件）
+#
+#  用途：./build/tests/referee_forward_test configs/virtual_referee.yaml
+#  链路：内置虚拟下位机 fake 发 0x0001 / 0x0201 -> SerialBoard 解析
+#        -> Publish2Nav 发布 /red_standard_robot1/referee/*
+#  只读 SerialBoard 需要的键，不需要相机 / YOLO / 地图等配置。
+# =============================================================================
+
+source_mode: "fake"
+serial_mode: "fake"          # 使用 C++ 内置虚拟下位机生成真实协议字节
+fake_serial_external: false
+com_port: "/dev/ttyACM0"     # fake + external=false 时不打开真实串口
+baud_rate: 921600
+bullet_speed: 28.0
+
+use_referee_system: true     # 让 0x0001 的 game_progress 决定 is_game_started()
+game_start_progress_threshold: 4
+
+# 0x0001 / 0x0201 的上报频率与 IMU 频率（自测不需要高频率 IMU）
+fake_status_hz: 5.0
+fake_imu_hz: 100.0
+fake_chassis_hz: 20.0
+
+# 0x0201 上报的血量：120 / 400 正好落在导航侧 30% 返航阈值边界上
+fake_max_hp: 400
+fake_hp: 120
+
+record:
+  enable: false
