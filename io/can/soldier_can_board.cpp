@@ -213,7 +213,10 @@ SoldierCanBoard::SendResult SoldierCanBoard::send(
   std::lock_guard state_lock(state_mutex_);
   const auto now = now_();
   auto result = SendResult::sent;
-  if (aim_mode_ != AimMode::ballistic) command.fire_advice = false;
+  if (aim_mode_ != AimMode::ballistic) {
+    command.fire_advice = command.fire_advice && aim_mode_ == AimMode::tracking_with_fire_advice &&
+                          pose_ && fresh(pose_->received_at, now) && pose_->value.autoaim_active;
+  }
   if (command.tracking && (!reference || !reference_valid(*reference, now))) {
     command.tracking = false;
     result = SendResult::stale_reference;

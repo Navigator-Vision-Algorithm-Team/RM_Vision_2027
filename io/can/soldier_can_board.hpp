@@ -56,7 +56,7 @@ public:
     control_unavailable  // CAN 控制条件在发送前失效，已改发空闲帧。
   };
 
-  enum class AimMode { ballistic, geometric, direct };
+  enum class AimMode { ballistic, geometric, direct, tracking_with_fire_advice };
 
   struct SendAttempt
   {

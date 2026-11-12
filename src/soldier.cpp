@@ -44,7 +44,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   const std::string keys =
     "{help h usage ? |       | 输出命令行参数说明}"
     "{can-rx-only | false | 只接收 CAN 并统计 0x511 到达间隔}"
-    "{can-geometry-only | false | 强制使用几何瞄准，供不发射的实车联调}"
+    "{can-geometry-only | false | 强制使用几何瞄准}"
     "{@config-path | " + default_config + " | 位置参数，YAML 配置文件路径}";
   cv::CommandLineParser cli(argc, argv, keys);
   const auto config_path = cli.get<std::string>(0);
@@ -59,8 +59,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     return 1;
   }
 
-  // 此模式允许无实测弹速时发送几何角，发送前仍检查请求、使能、展开和姿态新鲜度。
-  io::SoldierCanBoard can_board(config_path, io::SoldierCanBoard::AimMode::geometric);
+  io::SoldierCanBoard can_board(config_path, io::SoldierCanBoard::AimMode::tracking_with_fire_advice);
   if (can_rx_only) {
     tools::Exiter exiter;
     tools::logger()->info("[soldier] CAN receive-only diagnostics");
@@ -102,7 +101,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   main_job.pin_cpu = false;           // 解除步兵 YOLO 工作线程的绑核
   main_job.single_thread_cpu = false; // 解除 OpenVINO 的单线程限制
   auto_aim::multithread::YoloPipeline pipeline(config_path, {main_job}, false);
-  tools::logger()->info("[soldier] Tracker + IMM/EKF + Aimer，fire_advice=0");
+  tools::logger()->info("[soldier] Tracker + IMM/EKF + Aimer，视觉开火建议已启用");
 
   auto last_session = can_board.session();
   std::optional<auto_aim::Color> last_enemy_color;
@@ -139,6 +138,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const auto status = can_board.snapshot();
     const auto autoaim_active =
       status ? std::optional{status->pose.value.autoaim_active} : std::nullopt;
+    if (!autoaim_active.value_or(false)) command.fire_advice = false;
     const char * mode = !autoaim_active ? "未知（无新鲜 0x511）" :
       *autoaim_active ? "自瞄模式（C 板已接管）" : "自瞄未接管";
     if (last_autoaim_active != autoaim_active) {
@@ -206,6 +206,12 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
           note = ballistic_aim ? "ballistic" : "geometric";
           if (aim.control && std::isfinite(aim.yaw) && std::isfinite(aim.pitch)) {
             command.tracking = true;
+            command.fire_advice = autoaim_active.value_or(false) && state == "tracking" &&
+              std::any_of(armors.begin(), armors.end(), [&](const auto & armor) {
+                return armor.name == target->name && armor.type == target->armor_type &&
+                       armor.xyz_in_world.allFinite() && armor.xyz_in_world.squaredNorm() > 0.0 &&
+                       armor.ypd_in_world.allFinite() && armor.ypr_in_world.allFinite();
+              });
             command.yaw_rad = tools::limit_rad(aim.yaw);
             // Aimer 的 pitch 向上为负，和 Solver 姿态的 Ry 方向相同。
             command.pitch_raw_rad = std::clamp(
