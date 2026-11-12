@@ -29,6 +29,9 @@ public:
   std::string state() const;
   void reset();
 
+  /* 运行时切换敌方颜色：串口上报 robot_id 后按实际对阵覆盖配置里的 enemy_color */
+  void set_enemy_color(Color color);
+
   // 返回内部跟踪目标的只读指针，nullptr 表示当前没有可用目标。
   // 用指针而不是 std::list<Target> 返回值：Target 内含 3 个 EKF（矩阵 + NIS 历史窗口），
   // 按值返回会让主循环每帧深拷贝一次。

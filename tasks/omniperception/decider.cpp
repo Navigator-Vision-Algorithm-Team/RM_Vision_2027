@@ -23,6 +23,14 @@ Decider::Decider(const std::string & config_path) : count_(0)
   mode_ = yaml["mode"].as<double>();
 }
 
+void Decider::set_enemy_color(auto_aim::Color color)
+{
+  if (color == enemy_color_) return;
+  enemy_color_ = color;
+  tools::logger()->info("[Decider] enemy color -> {}",
+    color == auto_aim::Color::red ? "red" : "blue");
+}
+
 io::Command Decider::decide(
   auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos,
   const std::vector<OmniCameraConfig> & omni_configs)

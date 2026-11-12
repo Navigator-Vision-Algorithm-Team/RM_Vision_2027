@@ -250,6 +250,8 @@ RobotStatus SerialBoard::robot_status() const
   return robot_status_;
 }
 
+uint8_t SerialBoard::robot_id() const { return robot_id_.load(); }
+
 RefereeState SerialBoard::referee_state() const
 {
   // 测试开关优先：忽略下位机上报，直接给出「比赛已开始 + 默认血量」
@@ -311,6 +313,9 @@ void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
 
 void SerialBoard::handleGameRobotStatus(const GameRobotStatusPacket & pkt)
 {
+  // 裁判帧里的 robot_id 与 0x502 的 roboid 是同一个编号，谁到得晚就用谁
+  if (pkt.robot_id != 0) robot_id_.store(pkt.robot_id);
+
   RobotStatus rs;
   rs.robot_id = pkt.robot_id;
   rs.robot_level = pkt.robot_level;
@@ -434,6 +439,9 @@ void SerialBoard::receiveThread()
         const float roll = imu_packet.roll;
         const double lower = imu_packet.lower_yaw;
         const double upper = imu_packet.upper_yaw;
+        // roboid 用于运行时判定敌我颜色（1~11 红方、101~111 蓝方），
+        // 0 表示固件没填，不要让 0 覆盖掉 0x0201 已给的有效值
+        if (imu_packet.roboid != 0) robot_id_.store(imu_packet.roboid);
         // psi 取最短弧，避免 0/2π 边界（如 lower=350°、upper=10°）被算成 -340°
         const double psi = tools::limit_rad(upper - lower);
 

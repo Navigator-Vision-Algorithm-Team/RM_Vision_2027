@@ -231,6 +231,9 @@ fault_seed: 20261015
 serial_mode: "fake"           # 内置虚拟下位机，按真实协议发 0x502/0x503/0x505/0x0001/0x0201
 fake_serial_external: false
 fake_imu_hz: 500.0
+# 虚拟下位机上报的 robot_id（0=不上报，敌我颜色按 enemy_color）。
+# 联调动态换色：7=红方哨兵（敌方变蓝）、107=蓝方哨兵（敌方变红）
+fake_robot_id: 0
 camera_mode: "fake"
 fake_camera_source: "synth"   # synth | sequence | video
 camera_width: 1440

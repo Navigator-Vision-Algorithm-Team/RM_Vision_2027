@@ -223,6 +223,11 @@ int main(int argc, char * argv[])
 
   bool game_started_logged = false;
 
+  // 敌我颜色动态识别：串口 0x502 的 roboid（或裁判 0x0201 的 robot_id）给出己方 ID，
+  // 按附录二编号表（1~11 红方、101~111 蓝方）判定己方颜色，敌方恒为反色。
+  // 配置里的 enemy_color 只在还没收到 ID 时兜底，收到后按实际对阵覆盖。
+  uint8_t last_robot_id = 0;
+
     // 全向感知缓存：全向发现目标后的 yaw/pitch，主相机锁定前反复播报
   bool has_omni_cache = false;
   double cached_omni_yaw = 0;
@@ -235,6 +240,23 @@ int main(int argc, char * argv[])
   // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
   // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
   while (!exiter.exit() && rclcpp::ok()) {
+    // 每帧检查一次己方 ID：一旦下位机上报（比赛开始前后都可能），立刻把敌方颜色
+    // 换成实际对阵的反色；ID 不变时什么都不做，不会反复清目标。
+    if (const uint8_t id = serial_board.robot_id(); id != 0 && id != last_robot_id) {
+      last_robot_id = id;
+      if (io::is_red_robot_id(id) || io::is_blue_robot_id(id)) {
+        const bool own_red = io::is_red_robot_id(id);
+        const auto enemy = own_red ? auto_aim::Color::blue : auto_aim::Color::red;
+        tracker.set_enemy_color(enemy);
+        decider.set_enemy_color(enemy);
+        tools::logger()->info(
+          "[Main] robot_id={} -> own={} enemy={}（覆盖配置 enemy_color）", id,
+          own_red ? "red" : "blue", enemy == auto_aim::Color::red ? "red" : "blue");
+      } else {
+        tools::logger()->warn("[Main] robot_id={} 不在编号表内，保持配置的 enemy_color", id);
+      }
+    }
+
     // 开赛前关闭推理：相机仍持续出图（主相机帧照常入队，供录像使用），
     // 避免赛前 5 路 YOLO 空转占满 CPU。
     pipeline.set_inference_enabled(serial_board.is_game_started());

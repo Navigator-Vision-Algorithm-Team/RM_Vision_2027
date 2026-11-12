@@ -59,6 +59,15 @@ void Tracker::reset()
   tools::logger()->info("[Tracker] Reset by MCU signal.");
 }
 
+void Tracker::set_enemy_color(Color color)
+{
+  // 颜色没变就不动，避免每帧收到同一 ID 时反复清目标
+  if (color == enemy_color_) return;
+  enemy_color_ = color;
+  reset();  // 换色后旧目标属于另一方，清掉重跟
+  tools::logger()->info("[Tracker] enemy color -> {}", color == Color::red ? "red" : "blue");
+}
+
 const Target * Tracker::track(
   std::list<Armor> & armors, std::chrono::steady_clock::time_point t, bool use_enemy_color,
   cv::Size image_size)

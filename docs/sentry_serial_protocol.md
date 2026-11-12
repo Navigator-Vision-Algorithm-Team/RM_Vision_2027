@@ -73,7 +73,7 @@ CRC 表与算法见 `io/serial/gimbal/protocol_crc.cpp`。接收端解析流程�
 | 11 | `roll` | float | 横滚角（rad） |
 | 15 | `upper_yaw` | float | **小yaw**（顶端轴，主相机所在）的世界系绝对角（rad，`[0, 2π)`） |
 | 19 | `lower_yaw` | float | **大yaw**（中间轴，IMU 与四个全向相机所在）的世界系绝对角（rad，`[0, 2π)`） |
-| 23 | `roboid` | uint8 | 机器人 ID |
+| 23 | `roboid` | uint8 | 机器人 ID（1~11 红方 / 101~111 蓝方，用于运行时判定敌我颜色；0 = 固件未填） |
 | 24 | `crc16` | uint16 | CRC16 |
 
 总长 **26 字节**（`static_assert` 锁在 `io/serial/gimbal/packet.hpp`）。

@@ -368,7 +368,7 @@ IByteTransport::Ptr make_transport(const SimConfig & config)
       tools::logger()->info(
         "[SOURCE] Serial transport = FAKE/INTERNAL VirtualMcu (imu={}Hz)", s.imu_hz);
       return std::make_unique<VirtualSerialTransport>(
-        std::make_unique<VirtualMcu>(s, config.fault, config.seed));
+        std::make_unique<VirtualMcu>(s, config.fault, config.seed, s.fake_robot_id));
 
     case SourceMode::Replay:
       tools::logger()->info("[SOURCE] Serial transport = REPLAY ({})", s.replay_file);
