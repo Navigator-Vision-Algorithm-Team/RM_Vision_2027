@@ -109,6 +109,9 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   auto last_log = io::SoldierCanBoard::Clock::now();
   std::optional<bool> last_autoaim_active;
   std::optional<auto_aim::DebugCanTx> last_debug_tx;
+  // 火控保持窗口：仅有效的敌方检测续期，空帧和重复发送均不续期。
+  constexpr auto kFireAdviceHold = 200ms;
+  std::optional<io::SoldierCanBoard::TimePoint> last_fire_advice_detection;
   io::soldier_can::Command command;
   std::optional<io::SoldierCanBoard::PoseSample> reference;
   auto command_frame_time = io::SoldierCanBoard::Clock::now();
@@ -120,13 +123,16 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     if (last_send != io::SoldierCanBoard::TimePoint::min() &&
         now - last_send < io::soldier_can::config::kMinimumSendPeriod) return;
     last_send = now;
+    if (!command.tracking || geometry_only ||
+        (last_fire_advice_detection &&
+         (now < *last_fire_advice_detection ||
+          now - *last_fire_advice_detection >= kFireAdviceHold))) {
+      last_fire_advice_detection.reset();
+    }
+    command.fire_advice = last_fire_advice_detection.has_value();
     io::SoldierCanBoard::SendAttempt attempt{};
     // 发送间隔与图像帧间隔不同。复用最新解算时保留原参考，过期由 CAN 层改发空闲帧。
     const auto result = can_board.send(command, reference, &attempt);
-    if (result != io::SoldierCanBoard::SendResult::sent ||
-        (command.fire_advice && (attempt.payload[1] & 0x02) == 0)) {
-      command.fire_advice = false;
-    }
     last_debug_tx = auto_aim::DebugCanTx{
       attempt.payload, monotonic_us(command_frame_time), monotonic_us(attempt.started_at),
       static_cast<int>(result), result != io::SoldierCanBoard::SendResult::transport_error};
@@ -142,7 +148,6 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const auto status = can_board.snapshot();
     const auto autoaim_active =
       status ? std::optional{status->pose.value.autoaim_active} : std::nullopt;
-    if (!autoaim_active.value_or(false)) command.fire_advice = false;
     const char * mode = !autoaim_active ? "未知（无新鲜 0x511）" :
       *autoaim_active ? "自瞄模式（C 板已接管）" : "自瞄未接管";
     if (last_autoaim_active != autoaim_active) {
@@ -153,7 +158,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     }
 
     if (frame_status == WaitStatus::Timeout || frame.img.empty()) {
-      command.fire_advice = false;
+      // 暂无新图像时继续发送，建议位由最近一次检测的保持窗口决定。
       send_latest();
       continue;
     }
@@ -169,6 +174,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const auto session = frame_pose ? frame_pose->reference.session : can_board.session();
     if (session != last_session || enemy_color != last_enemy_color) {
       tracker.reset();
+      last_fire_advice_detection.reset();
       last_session = session;
       last_enemy_color = enemy_color;
     }
@@ -194,8 +200,10 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
       state = "waiting_enemy_color";
       if (enemy_color) {
         decider.armor_filter(armors, *enemy_color);
-        // 建议位只看当帧的敌方检测结果，瞄准角度仍由跟踪链路计算。
-        command.fire_advice = !geometry_only && autoaim_active.value_or(false) && !armors.empty();
+        // 检出敌方目标才续期；短暂漏检仍可保持建议位，瞄准角度仍由跟踪链路计算。
+        if (!geometry_only && !armors.empty()) {
+          last_fire_advice_detection = io::SoldierCanBoard::Clock::now();
+        }
         // 复用哨兵的主相机跟踪入口。步兵只有主相机，全向队列为空。
         target = std::get<1>(tracker.track({}, armors, t, false, frame.img.size()));
         state = tracker.state();
