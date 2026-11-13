@@ -122,7 +122,6 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   std::optional<io::SoldierCanBoard::PoseSample> reference;
   auto command_frame_time = io::SoldierCanBoard::Clock::now();
   constexpr auto fire_advice_hold_time = 40ms;
-  constexpr auto fire_advice_hold_time = 40ms;
   constexpr auto fire_advice_prediction_window = 50ms;
   std::optional<io::SoldierCanBoard::TimePoint> last_fire_observation;
   std::optional<io::SoldierCanBoard::TimePoint> fire_advice_deadline;
@@ -134,6 +133,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   std::optional<io::SoldierCanBoard::TimePoint> tracking_hold_deadline;
   const auto clear_fire_advice = [&] {
     command.fire_advice = false;
+    last_fire_observation.reset();
     fire_advice_deadline.reset();
     fire_advice_hold_available = false;
     // 新增的 tracking 容错窗口跟随原有清位逻辑一起失效。
@@ -208,6 +208,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     command = {};
     reference.reset();
     command_frame_time = t;
+    bool prediction_window_open = false;
     Eigen::Vector3d gimbal_pos = Eigen::Vector3d::Zero();
     Eigen::Vector3d target_pos = Eigen::Vector3d::Zero();
     const auto_aim::Target * target = nullptr;
@@ -259,6 +260,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
             command.fire_advice = confirmed_this_frame || hold_for_one_frame || tracking_hold_open;
             fire_advice_hold_available = confirmed_this_frame;
             if (confirmed_this_frame) {
+              last_fire_observation = t;
               fire_advice_deadline = now + fire_advice_hold_time;
               tracking_hold_deadline = now + fire_advice_tracking_hold_time;
             }
@@ -290,7 +292,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
       }
     }
 
-    if (!command.fire_advice) clear_fire_advice();
+    if (!command.fire_advice && !prediction_window_open) clear_fire_advice();
     send_latest();
 
     const bool tx_tracking = last_debug_tx && (last_debug_tx->payload[1] & 0x01) != 0;
