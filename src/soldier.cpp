@@ -112,7 +112,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   io::soldier_can::Command command;
   std::optional<io::SoldierCanBoard::PoseSample> reference;
   auto command_frame_time = io::SoldierCanBoard::Clock::now();
-  constexpr auto fire_advice_hold_time = 20ms;
+  constexpr auto fire_advice_hold_time = 40ms;
   constexpr auto fire_advice_prediction_window = 50ms;
   std::optional<io::SoldierCanBoard::TimePoint> last_fire_observation;
   std::optional<io::SoldierCanBoard::TimePoint> fire_advice_deadline;
@@ -255,7 +255,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
                 // xyza[3] 沿板中心指向车体中心，正对我方时与视线方向一致。
                 const double bearing = std::atan2(point.xyza.y(), point.xyza.x());
                 const double facing_error = std::abs(tools::limit_rad(point.xyza[3] - bearing));
-                if (facing_error <= std::numbers::pi / 3.0) {
+                if (facing_error <= std::numbers::pi / 4.0) {
                   command.fire_advice = true;
                   fire_advice_deadline = std::min(prediction_deadline, now + fire_advice_hold_time);
                 }
