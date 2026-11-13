@@ -34,12 +34,38 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug, bool single_thread_c
   save_path_ = "imgs";
   std::filesystem::create_directory(save_path_);
   auto model = core_.read_model(model_path_);
+
+  // 输入尺寸以 IR 的静态 shape 为准（NCHW）。以前这里和 detect() 的 letterbox
+  // 各写死一份 640：模型换成 1280×960（全向 2×2 拼接用）时，两处就会和模型实际
+  // shape 对不上，OpenVINO 在 ppp.build() 抛一个很难读的异常。
+  {
+    const auto shape = model->input().get_partial_shape();
+    const bool valid = !shape.rank().is_dynamic() && shape.rank().get_length() == 4 &&
+                       !shape.is_dynamic() && shape[1].get_length() == 3;
+    if (!valid) {
+      throw std::runtime_error(fmt::format(
+        "[yolov5] 模型输入必须是静态 NCHW 1x3xHxW（rank=4、通道=3），实际不是：{}。"
+        "请用固定 imgsz 重新导出（例如全向 2×2 拼接用 imgsz=960,1280）",
+        model_path_));
+    }
+    input_h_ = static_cast<int>(shape[2].get_length());
+    input_w_ = static_cast<int>(shape[3].get_length());
+    tools::logger()->info(
+      "[yolov5] 模型输入 {}×{}（来自 {}），letterbox 目标同步为该尺寸", input_w_, input_h_,
+      model_path_);
+  }
+
+  // PrePostProcessor 的 tensor shape 是 NHWC（业务侧直接喂 BGR 的 cv::Mat），
+  // 与模型自身的 NCHW 通过下面两行 layout 声明自动转换。
+  const ov::Shape nhwc_shape{
+    1, static_cast<size_t>(input_h_), static_cast<size_t>(input_w_), 3};
+
   ov::preprocess::PrePostProcessor ppp(model);
   auto & input = ppp.input();
 
   input.tensor()
     .set_element_type(ov::element::u8)
-    .set_shape({1, 640, 640, 3})
+    .set_shape(nhwc_shape)
     .set_layout("NHWC")
     .set_color_format(ov::preprocess::ColorFormat::BGR);
 
@@ -88,20 +114,23 @@ std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
     bgr_img = raw_img;
   }
 
-  auto x_scale = static_cast<double>(640) / bgr_img.rows;
-  auto y_scale = static_cast<double>(640) / bgr_img.cols;
+  // letterbox 目标 = 模型真实输入尺寸（input_w_ × input_h_），不再写死 640
+  auto x_scale = static_cast<double>(input_h_) / bgr_img.rows;
+  auto y_scale = static_cast<double>(input_w_) / bgr_img.cols;
   auto scale = std::min(x_scale, y_scale);
   auto h = static_cast<int>(bgr_img.rows * scale);
   auto w = static_cast<int>(bgr_img.cols * scale);
 
   // preproces：复用输入缓冲，只覆盖 ROI，其余保持黑色（letterbox 填充）
-  if (input_.rows != 640 || input_.cols != 640 || input_.type() != CV_8UC3) {
-    input_ = cv::Mat(640, 640, CV_8UC3);
+  if (input_.rows != input_h_ || input_.cols != input_w_ || input_.type() != CV_8UC3) {
+    input_ = cv::Mat(input_h_, input_w_, CV_8UC3);
   }
   input_.setTo(cv::Scalar(0, 0, 0));
   auto roi = cv::Rect(0, 0, w, h);
   cv::resize(bgr_img, input_(roi), {w, h});
-  ov::Tensor input_tensor(ov::element::u8, {1, 640, 640, 3}, input_.data);
+  ov::Tensor input_tensor(
+    ov::element::u8,
+    {1, static_cast<size_t>(input_h_), static_cast<size_t>(input_w_), 3}, input_.data);
 
   // infer
   infer_request_.set_input_tensor(input_tensor);

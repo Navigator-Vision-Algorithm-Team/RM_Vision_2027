@@ -46,4 +46,6 @@ std::list<Armor> YOLO::postprocess(
   return yolo_->postprocess(scale, output, bgr_img, frame_count);
 }
 
+cv::Size YOLO::input_size() const { return yolo_->input_size(); }
+
 }  // namespace auto_aim

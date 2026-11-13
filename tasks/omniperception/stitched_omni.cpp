@@ -31,11 +31,39 @@ StitchLayout load_layout(const YAML::Node & yaml)
   if (yaml["omni_stitch_cell_height"]) {
     layout.cell.height = yaml["omni_stitch_cell_height"].as<int>();
   }
+  if (yaml["omni_stitch_boundary_margin"]) {
+    layout.boundary_margin = yaml["omni_stitch_boundary_margin"].as<float>();
+  }
   layout.cols = std::max(1, layout.cols);
   layout.rows = std::max(1, layout.rows);
   layout.cell.width = std::max(1, layout.cell.width);
   layout.cell.height = std::max(1, layout.cell.height);
+  layout.boundary_margin = std::max(0.0f, layout.boundary_margin);
   return layout;
+}
+
+// 检测框是否跨越了拼接分界线。
+// 拼接时每个分区都是从原图硬裁剪出来的，跨线的目标只有一部分像素落在本分区内，
+// 模型补出来的另外半块必然越界；此时角点、灯条长度、中心点全部失真，PnP 解出的
+// 角度会明显偏离真实方向，宁可这一帧不报也不能报一个错的角度。
+// 判定方式：四个角点必须全部落在「分区边界内缩 margin」的矩形里。
+bool crosses_seam(const auto_aim::Armor & armor, const cv::Rect & cell, float margin)
+{
+  // 没有角点（非 YOLO 路径的装甲板）无法判断归属边界，按跨线处理，直接丢弃。
+  if (armor.points.empty()) return true;
+
+  const float x0 = static_cast<float>(cell.x) + margin;
+  const float y0 = static_cast<float>(cell.y) + margin;
+  const float x1 = static_cast<float>(cell.x + cell.width) - margin;
+  const float y1 = static_cast<float>(cell.y + cell.height) - margin;
+
+  // 分区尺寸被 margin 吃到没有有效区域时，任何检测都不可能通过
+  if (x1 <= x0 || y1 <= y0) return true;
+
+  for (const auto & point : armor.points) {
+    if (point.x < x0 || point.x > x1 || point.y < y0 || point.y > y1) return true;
+  }
+  return false;
 }
 
 // 灯条几何量随坐标一起映射。ratio/angle_error 由 length/width 与方向算出，
@@ -100,6 +128,33 @@ StitchedOmni::StitchedOmni(
       (layout_.row_of(static_cast<int>(i)) + 1) * layout_.cell.height);
   }
 
+  // 大图尺寸 vs 模型输入尺寸：两者不一致时 letterbox 会整体缩放，
+  // 每路在模型里的有效分辨率恒为「(cell × min(输入/大图))」，把 cell 调大也没用。
+  // 这里把结论一次性打印清楚，避免现场调 omni_stitch_cell_* 却看不出效果。
+  {
+    const cv::Size model_input = yolo_.input_size();
+    const cv::Size canvas_size = layout_.canvas_size();
+    const double fit = std::min(
+      static_cast<double>(model_input.width) / canvas_size.width,
+      static_cast<double>(model_input.height) / canvas_size.height);
+    const int eff_w = static_cast<int>(std::lround(layout_.cell.width * fit));
+    const int eff_h = static_cast<int>(std::lround(layout_.cell.height * fit));
+
+    if (fit < 1.0) {
+      tools::logger()->warn(
+        "[StitchedOmni] 大图 {}×{} 超过 YOLO 输入 {}×{}，letterbox 会整体缩小 {:.3f} 倍，"
+        "每路在模型里只剩 {}×{} —— 调大 omni_stitch_cell_* 不会提升精度。"
+        "要用满拼接分辨率，请把模型重新导出为 {}×{}（32 的倍数，正好 1:1 无黑边）"
+        "并替换 yolov5_model_path",
+        canvas_size.width, canvas_size.height, model_input.width, model_input.height, fit, eff_w,
+        eff_h, canvas_size.width, canvas_size.height);
+    } else {
+      tools::logger()->info(
+        "[StitchedOmni] 每路在模型里占 {}×{}（大图 {}×{} / 输入 {}×{}，缩放 {:.3f}）", eff_w,
+        eff_h, canvas_size.width, canvas_size.height, model_input.width, model_input.height, fit);
+    }
+  }
+
   thread_ = std::thread(&StitchedOmni::run, this);
 }
 
@@ -154,7 +209,13 @@ void StitchedOmni::run()
       cv::Mat img;
       std::chrono::steady_clock::time_point timestamp;
       configs_[i].camera->read(img, timestamp);
-      if (img.empty()) continue;
+      if (img.empty()) {
+        // 该路本帧没有画面（掉线 / 数据源结束）：清空缓存，让对应分区真正变黑。
+        // 不清空的话上一帧会被一直重新拼进大图，YOLO 会在冻结画面上反复检出同一个
+        // 目标，而 dispatch 又拿不到「这帧是旧的」这个信息，云台会被它一直拽着走。
+        frames[i].release();
+        continue;
+      }
 
       frames[i] = img;
       timestamps[i] = timestamp;
@@ -176,25 +237,41 @@ void StitchedOmni::run()
       size_logged = false;
       for (std::size_t i = 0; i < n; i++) {
         if (source_sizes_[i].width <= 0) continue;
+        const double sx = static_cast<double>(source_sizes_[i].width) / layout_.cell.width;
+        const double sy = static_cast<double>(source_sizes_[i].height) / layout_.cell.height;
         tools::logger()->info(
           "[StitchedOmni] omni{} 原始 {}×{} -> 分区 {}×{}（scale_x={:.3f} scale_y={:.3f}）",
           i + 1, source_sizes_[i].width, source_sizes_[i].height, layout_.cell.width,
-          layout_.cell.height,
-          static_cast<double>(source_sizes_[i].width) / layout_.cell.width,
-          static_cast<double>(source_sizes_[i].height) / layout_.cell.height);
+          layout_.cell.height, sx, sy);
+
+        // 分区与原始画面长宽比不一致时 cv::resize 会直接拉伸，装甲板被压扁/拉长，
+        // ratio/side_ratio/rectangular_error 跟着失真（那几个量只在等比缩放下不变），
+        // 传统的角点二次矫正也会失配。这里只告警，不改变布局。
+        if (std::abs(sx - sy) > 0.05 * std::max(sx, sy)) {
+          tools::logger()->warn(
+            "[StitchedOmni] omni{} 分区 {}×{} 与原始 {}×{} 长宽比不一致（scale_x={:.3f} "
+            "scale_y={:.3f}），画面会被拉伸；请把 omni_stitch_cell_* 改成与相机同长宽比",
+            i + 1, layout_.cell.width, layout_.cell.height, source_sizes_[i].width,
+            source_sizes_[i].height, sx, sy);
+        }
       }
     }
 
     // 赛前不做拼接与推理：仍读帧保持队列新鲜，恢复比赛时不会吃到陈旧画面。
     if (!inference_enabled_.load(std::memory_order_relaxed)) continue;
 
-    // 2) 拼接：每路 resize 到分区尺寸，写入 2×2 大图的对应区域。
-    //    没有出新帧的分区保持全黑，YOLO 不会在那里输出目标。
+    // 2) 拼接：每路缩放到分区尺寸，写入 2×2 大图的对应区域。
+    //    空相机通道（frames[i] 已空）所在分区保持纯黑：先整幅清 0，再只覆盖有帧的分区。
     canvas_.setTo(cv::Scalar(0, 0, 0));
     for (std::size_t i = 0; i < n; i++) {
       if (frames[i].empty()) continue;
       cv::Mat cell = canvas_(layout_.cell_rect(static_cast<int>(i)));
-      cv::resize(frames[i], cell, layout_.cell, 0, 0, cv::INTER_LINEAR);
+      if (frames[i].size() == layout_.cell) {
+        // 分区尺寸 = 原始分辨率（cell 设成 640×480 时）：1:1 直拷，省掉一次无效重采样
+        frames[i].copyTo(cell);
+      } else {
+        cv::resize(frames[i], cell, layout_.cell, 0, 0, cv::INTER_LINEAR);
+      }
     }
 
     // 3) 一次推理：输入是整张大图，输出框坐标已经是「大图坐标」。
@@ -263,6 +340,8 @@ void StitchedOmni::dispatch(
   }
 
   std::vector<std::list<auto_aim::Armor>> buckets(n);
+  int dropped_blank = 0;  // 落在黑格（空相机通道）里的检测
+  int dropped_seam = 0;   // 跨越拼接分界线的检测
 
   for (const auto & armor : armors) {
     // 分区反推：只看检测框中心落在哪个 cell（跨边界的框归属不可靠，这里以中心为准）。
@@ -276,17 +355,36 @@ void StitchedOmni::dispatch(
     const int index = layout_.index_of(col, row);
     if (index < 0 || static_cast<std::size_t>(index) >= n) continue;
 
+    // 空相机通道：这一格本帧是纯黑填充，任何检测都是误检，直接丢弃。
+    // 不能用 source_sizes_ 判断——那是「这一路曾经出过图」，不等于「本帧有画面」。
+    if (frames[index].empty()) {
+      dropped_blank++;
+      continue;
+    }
+
+    // 跨拼接分界线：目标在拼接时被硬裁剪，几何量不可信，整条丢弃，不参与后续处理。
+    if (crosses_seam(armor, layout_.cell_rect(index), layout_.boundary_margin)) {
+      dropped_seam++;
+      continue;
+    }
+
     // 映射回该相机原始图像坐标；分辨率未知（该路从未出图）时丢弃。
-    cv::Size source_size = source_sizes_[index];
-    if (source_size.width <= 0 && !frames[index].empty()) source_size = frames[index].size();
-    if (source_size.width <= 0) continue;
+    const cv::Size source_size =
+      source_sizes_[index].width > 0 ? source_sizes_[index] : frames[index].size();
 
     auto mapped = armor;
     if (!map_to_camera(mapped, index, source_size)) continue;
     buckets[index].push_back(std::move(mapped));
   }
 
-  // 录像：与旧的全向路径一致，每路都把「原图 + 未过滤的检测框」录一份。
+  if (dropped_blank > 0 || dropped_seam > 0) {
+    tools::logger()->debug(
+      "[StitchedOmni] 丢弃：跨分界线 {} 条、黑格误检 {} 条（margin={:.1f}px）", dropped_seam,
+      dropped_blank, static_cast<double>(layout_.boundary_margin));
+  }
+
+  // 录像：与旧的全向路径一致，每路都把「原图 + 未做敌方颜色过滤的检测框」录一份。
+  // 空相机通道没有原图可录；黑格误检与跨分界线的框已在上面剔除，不会出现在录像里。
   for (std::size_t i = 0; i < n; i++) {
     if (!configs_[i].recorder || frames[i].empty()) continue;
 

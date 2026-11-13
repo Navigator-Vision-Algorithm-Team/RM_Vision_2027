@@ -16,6 +16,11 @@ public:
 
   virtual std::list<Armor> postprocess(
     double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count) = 0;
+
+  // 模型的真实输入尺寸（宽, 高）。letterbox 的目标尺寸必须以它为准：该尺寸由导出的
+  // IR 静态 shape 决定，改配置改不动它，只能重新导出模型。全向拼接用它校验
+  // 「大图 vs 输入」，避免在拼接侧再写死一份 640 而与模型对不上。
+  virtual cv::Size input_size() const = 0;
 };
 
 class YOLO
@@ -29,6 +34,9 @@ public:
 
   std::list<Armor> postprocess(
     double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count);
+
+  // 底层模型的输入尺寸，转发给各 YOLO 实现（见 YOLOBase::input_size）。
+  cv::Size input_size() const;
 
 private:
   std::unique_ptr<YOLOBase> yolo_;

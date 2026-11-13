@@ -41,13 +41,26 @@ omni_camera_count: 0
 # false：每路一个 YOLO 实例 + 一个线程（旧行为）。
 omni_fusion: true
 
-# 拼接布局（仅 omni_fusion=true 时生效，改完需同步确认 YOLO 输入尺寸）
+# 拼接布局（仅 omni_fusion=true 时生效）
 # 大图尺寸 = cell × (cols, rows)。2×2 + 320×240 -> 640×480，
 # 正好 1:1 填进 YOLO 的 640×640 letterbox，不产生额外缩放损失。
+#
+# 【用满原生分辨率（1280×960 大图）】把下面两行改成 640 / 480，并且**必须**
+# 把模型重新导出为 1280×960（32 的倍数，与大图 1:1，没有 letterbox 黑边）后
+# 替换 yolov5_model_path：
+#   yolov5 导出: imgsz=(960, 1280) 或等价参数
+# 只改 cell 不改模型是无效的：letterbox 会把 1280×960 缩回 640×640，每路在模型里
+# 仍然只有 320×240，只是多花一次重采样（启动日志会 warn 说明这一点）。
+# 模型输入尺寸始终以 IR 的静态 shape 为准（代码从 .xml 读取，不读配置）。
 omni_stitch_cols: 2
 omni_stitch_rows: 2
 omni_stitch_cell_width: 320
 omni_stitch_cell_height: 240
+
+# 跨拼接分界线的检测直接丢弃：四个角点只要有一个落在「分区边界内缩 N 像素」之外，
+# 就认为该目标在拼接时被硬裁剪，几何量不可信，整条结果不进入后续过滤/排序/PnP。
+# 0 = 贴边即丢弃；调大 = 更保守（分界线附近更难出目标）。
+omni_stitch_boundary_margin: 2.0
 
 # ----- 单主相机（omni_camera_count = 0）丢失目标时的云台行为 -----
 # true  = 自旋扫描：云台按固定步长持续转动，扩大搜索范围（缺省值，保持旧行为）

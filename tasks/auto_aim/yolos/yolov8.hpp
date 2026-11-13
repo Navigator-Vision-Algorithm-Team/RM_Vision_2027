@@ -25,6 +25,9 @@ public:
   std::list<Armor> postprocess(
     double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count) override;
 
+  // 416×416 写死在 detect() 的 letterbox 与 PrePostProcessor 里，与本文件的字面量保持一致。
+  cv::Size input_size() const override { return {416, 416}; }
+
 private:
   Classifier classifier_;
   Detector detector_;

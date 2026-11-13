@@ -23,11 +23,19 @@ public:
   std::list<Armor> postprocess(
     double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count) override;
 
+  cv::Size input_size() const override { return {input_w_, input_h_}; }
+
 private:
   std::string device_, model_path_;
   std::string save_path_, debug_path_;
   bool debug_, use_roi_, use_traditional_;
   bool single_thread_cpu_ = false;
+
+  // 模型输入尺寸（宽, 高）：构造时从 IR 的静态 shape 读出，不再硬编码 640。
+  // letterbox 目标、输入缓冲、ov::Tensor 的 shape 都以这两个值为准，
+  // 因此换成 1280×960 的模型只需替换 assets/yolov5.xml，代码无需改动。
+  int input_w_ = 640;
+  int input_h_ = 640;
 
   const int class_num_ = 13;
   const float nms_threshold_ = 0.3;

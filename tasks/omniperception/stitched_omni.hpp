@@ -45,12 +45,22 @@ namespace omniperception
 //
 //  ratio / side_ratio / rectangular_error 都是无量纲比值和夹角，缩放不变，
 //  映射后无需重算；points / center / box / center_norm 必须逐项映射。
+//
+//  两条与「拼接」强绑定的边界规则：
+//    · 空相机通道：该路本帧没有画面时对应分区保持纯黑，并且这一格里的任何检测
+//      都判为误检直接丢弃（不拿上一帧的残影当结果）。
+//    · 跨拼接分界线：分区边界是硬裁剪，跨线目标只有一部分像素，角点/灯条几何
+//      全部失真，PnP 会解出明显偏掉的角度，因此整条检测直接丢弃。
 // =============================================================================
 struct StitchLayout
 {
   int cols = 2;
   int rows = 2;
   cv::Size cell{320, 240};  // 单个分区尺寸 = 每路画面 resize 后的尺寸
+
+  // 跨分界线的判定容差 (px)：角点必须落在分区边界【内缩 margin】以内才算安全。
+  // 0 表示贴边即算跨线；边界同时也是每路画面的边缘，贴边目标一律视为被裁断。
+  float boundary_margin = 2.0f;
 
   int index_of(int col, int row) const { return row * cols + col; }
   int col_of(int index) const { return index % cols; }
@@ -96,7 +106,8 @@ public:
 private:
   void run();
 
-  // 把一次大图推理的结果按分区拆开：坐标映射 -> 敌方过滤 -> 排序 -> PnP。
+  // 把一次大图推理的结果按分区拆开：分区反推 -> 黑格/跨线剔除 -> 坐标映射
+  // -> 敌方过滤 -> 排序 -> PnP。
   void dispatch(
     const std::list<auto_aim::Armor> & armors, const std::vector<cv::Mat> & frames,
     const std::vector<std::chrono::steady_clock::time_point> & timestamps,
