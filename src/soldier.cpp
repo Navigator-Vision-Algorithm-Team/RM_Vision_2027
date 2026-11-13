@@ -80,6 +80,15 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     tools::logger()->error("[soldier] 云台角度配置无效，pitch_encoder_direction 必须为 +1 或 -1");
     return 1;
   }
+  // 开火建议额外容错窗口（仅新增条件，不改原有火控逻辑）：只在自瞄状态下生效。
+  // 最近一次确认跟踪后，窗口内即使本帧没有成功跟踪也继续下发 fire_advice=1；
+  // 0 = 不启用；上限 90ms（0x511 参考 100ms 过期后 CAN 层会改发空闲帧）。
+  const double fire_advice_hold_ms_raw = yaml["fire_advice_hold_ms"].as<double>(40.0);
+  if (!std::isfinite(fire_advice_hold_ms_raw) || fire_advice_hold_ms_raw < 0.0) {
+    tools::logger()->error("[soldier] fire_advice_hold_ms 必须为非负有限数");
+    return 1;
+  }
+  const double fire_advice_hold_ms = std::min(fire_advice_hold_ms_raw, 90.0);
   io::Camera camera(config_path);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
@@ -113,15 +122,19 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   std::optional<io::SoldierCanBoard::PoseSample> reference;
   auto command_frame_time = io::SoldierCanBoard::Clock::now();
   constexpr auto fire_advice_hold_time = 40ms;
-  constexpr auto fire_advice_prediction_window = 50ms;
-  std::optional<io::SoldierCanBoard::TimePoint> last_fire_observation;
   std::optional<io::SoldierCanBoard::TimePoint> fire_advice_deadline;
   bool fire_advice_hold_available = false;
+  // 新增：自瞄状态下，最近一次确认跟踪后的额外保持窗口。
+  const auto fire_advice_tracking_hold_time =
+    std::chrono::duration_cast<io::SoldierCanBoard::Clock::duration>(
+      std::chrono::duration<double, std::milli>(fire_advice_hold_ms));
+  std::optional<io::SoldierCanBoard::TimePoint> tracking_hold_deadline;
   const auto clear_fire_advice = [&] {
     command.fire_advice = false;
-    last_fire_observation.reset();
     fire_advice_deadline.reset();
     fire_advice_hold_available = false;
+    // 新增的 tracking 容错窗口跟随原有清位逻辑一起失效。
+    tracking_hold_deadline.reset();
   };
   const auto monotonic_us = [](io::SoldierCanBoard::TimePoint stamp) {
     return std::chrono::duration_cast<std::chrono::microseconds>(stamp.time_since_epoch()).count();
@@ -130,8 +143,11 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const auto now = io::SoldierCanBoard::Clock::now();
     if (last_send != io::SoldierCanBoard::TimePoint::min() &&
         now - last_send < io::soldier_can::config::kMinimumSendPeriod) return;
-    // 相机没有新帧时也会重发，建议位仍按上次确认的时间过期。
-    if (fire_advice_deadline && now >= *fire_advice_deadline) command.fire_advice = false;
+    // 相机没有新帧时也会重发，建议位仍按上次确认的时间过期；
+    // 新增的 tracking 容错窗口未过期时不清位。
+    if (fire_advice_deadline && now >= *fire_advice_deadline &&
+        !(tracking_hold_deadline && now < *tracking_hold_deadline))
+      command.fire_advice = false;
     last_send = now;
     io::SoldierCanBoard::SendAttempt attempt{};
     // 发送间隔与图像帧间隔不同。复用最新解算时保留原参考，过期由 CAN 层改发空闲帧。
@@ -189,7 +205,6 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     command = {};
     reference.reset();
     command_frame_time = t;
-    bool prediction_window_open = false;
     Eigen::Vector3d gimbal_pos = Eigen::Vector3d::Zero();
     Eigen::Vector3d target_pos = Eigen::Vector3d::Zero();
     const auto_aim::Target * target = nullptr;
@@ -235,32 +250,20 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
             // 只容忍刚确认的跟踪目标漏检一次，漏检帧不续期。
             const bool hold_for_one_frame = autoaim_active.value_or(false) && state == "temp_lost" &&
               fire_advice_hold_available && fire_advice_deadline && now < *fire_advice_deadline;
-            command.fire_advice = confirmed_this_frame || hold_for_one_frame;
+            // 新增：自瞄状态下，最近一次确认跟踪在额外容错窗口内也保持开火建议。
+            const bool tracking_hold_open = autoaim_active.value_or(false) && tracking_hold_deadline &&
+              now < *tracking_hold_deadline;
+            command.fire_advice = confirmed_this_frame || hold_for_one_frame || tracking_hold_open;
             fire_advice_hold_available = confirmed_this_frame;
             if (confirmed_this_frame) {
-              last_fire_observation = t;
               fire_advice_deadline = now + fire_advice_hold_time;
+              tracking_hold_deadline = now + fire_advice_tracking_hold_time;
             }
             command.yaw_rad = tools::limit_rad(aim.yaw);
             // Aimer 的 pitch 向上为负，和 Solver 姿态的 Ry 方向相同。
             command.pitch_raw_rad = std::clamp(
               pitch_zero + pitch_direction * aim.pitch,
               io::soldier_can::config::kMinPitchRawRad, io::soldier_can::config::kMaxPitchRawRad);
-            if (autoaim_active.value_or(false) && state == "temp_lost" && last_fire_observation) {
-              const auto prediction_deadline = *last_fire_observation + fire_advice_prediction_window;
-              prediction_window_open = now < prediction_deadline;
-              const auto & point = aimer.debug_aim_point;
-              if (prediction_window_open && ballistic_aim && point.valid && point.xyza.allFinite() &&
-                  command.pitch_raw_rad == pitch_zero + pitch_direction * aim.pitch) {
-                // xyza[3] 沿板中心指向车体中心，正对我方时与视线方向一致。
-                const double bearing = std::atan2(point.xyza.y(), point.xyza.x());
-                const double facing_error = std::abs(tools::limit_rad(point.xyza[3] - bearing));
-                if (facing_error <= std::numbers::pi / 4.0) {
-                  command.fire_advice = true;
-                  fire_advice_deadline = std::min(prediction_deadline, now + fire_advice_hold_time);
-                }
-              }
-            }
             reference = frame_pose->reference;
             target_pos = {
               command.yaw_rad, pitch_direction * (command.pitch_raw_rad - pitch_zero), 0.0};
@@ -269,7 +272,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
       }
     }
 
-    if (!command.fire_advice && !prediction_window_open) clear_fire_advice();
+    if (!command.fire_advice) clear_fire_advice();
     send_latest();
 
     const bool tx_tracking = last_debug_tx && (last_debug_tx->payload[1] & 0x01) != 0;

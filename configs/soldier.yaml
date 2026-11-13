@@ -61,6 +61,11 @@ can_channel: 0                  # 达妙 USB-CAN 通道；经典 CAN 2.0、1 Mbp
 # pitch_raw 与算法 pitch 按下列零点和方向转换。
 pitch_encoder_zero_rad: 0.0
 pitch_encoder_direction: 1       # 只允许 +1 或 -1；需按编码器正方向标定
+# 开火建议额外容错窗口(ms)：在原有火控逻辑之上只做加法，只在自瞄状态
+# （0x511 autoaim_active=1）下生效。最近一次确认跟踪后，窗口内即使本帧丢目标/
+# 解算失败也继续下发 fire_advice=1；漏检帧不延长窗口。0 = 不启用；上限 90
+# （0x511 参考 100ms 过期后 CAN 层会自动降为空闲帧）。
+fire_advice_hold_ms: 40
 
 #####-----标定参数（主相机 DA8419516，1440x1080）-----#####
 R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
