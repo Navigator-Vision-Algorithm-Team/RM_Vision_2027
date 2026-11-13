@@ -46,7 +46,8 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
     // 本路执行 YOLO，否则整帧跳过。与 Decider 共用同一个 enemy_color 原子量，
     // 串口 robot_id 换色时门控和过滤一起跟随，不会出现「按蓝触发、按红剔除」。
     auto gate = std::make_shared<ColorGate>(
-      config_path, static_cast<int>(i), shared ? &shared->enemy_color : nullptr);
+      config_path, static_cast<int>(i), shared ? &shared->enemy_color : nullptr,
+      shared ? &shared->main_tracking : nullptr);
     job.inference_gate = [gate](const cv::Mat & img) { return gate->should_infer(img); };
 
     job.postprocess = [cfg, decider, shared, gate, last_color = initial_color](

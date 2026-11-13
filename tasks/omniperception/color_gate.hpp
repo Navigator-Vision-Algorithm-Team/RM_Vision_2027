@@ -36,6 +36,8 @@ struct ColorGateConfig
   bool enable = true;
   bool adaptive = true;
   bool debug = false;
+  // 主相机 tracking 时暂停本路 YOLO 推理（颜色层继续跑，保持命中证据）
+  bool suspend_on_main_tracking = true;
 
   // ---- 频率 ----
   int divisor = 1;     // 空闲期颜色检测抽帧倍数（1 = 每帧，2 = 半帧率）
@@ -89,6 +91,7 @@ struct ColorGateStats
   std::uint64_t heartbeats = 0;
   std::uint64_t yolo_hits = 0;
   std::uint64_t color_miss_yolo_hit = 0;  // 颜色层漏检但 YOLO 检出的帧
+  std::uint64_t suspended = 0;            // 因主相机 tracking 而暂停推理的帧
   double color_ms = 0.0;
 };
 
@@ -106,9 +109,12 @@ struct ColorGateStats
 class ColorGate
 {
 public:
+  // main_tracking 指向主线程的 OmniSharedState::main_tracking 时，
+  // 主相机进入 tracking 后本路 YOLO 自动暂停。
   ColorGate(
     const std::string & config_path, int camera_index,
-    std::atomic<auto_aim::Color> * enemy_color = nullptr);
+    std::atomic<auto_aim::Color> * enemy_color = nullptr,
+    std::atomic<bool> * main_tracking = nullptr);
 
   // 本帧是否执行 YOLO。
   bool should_infer(const cv::Mat & bgr);
@@ -135,6 +141,7 @@ private:
   ColorGateConfig cfg_;
   int camera_index_ = 0;
   std::atomic<auto_aim::Color> * enemy_color_ = nullptr;
+  std::atomic<bool> * main_tracking_ = nullptr;
 
   auto_aim::Color color_ = auto_aim::Color::red;
   bool color_known_ = true;

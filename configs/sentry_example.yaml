@@ -60,6 +60,9 @@ omni_gate_divisor: 1                # 空闲期颜色检测抽帧倍数（2 = 7.
 omni_gate_scale: 0.5                # 颜色检测降采样比例；0.25 会吃掉远端小灯条，不建议
 omni_gate_adaptive: true            # 灰度世界白平衡 + V 下限 + H 偏移自适应
 omni_gate_debug: false              # 打印状态切换
+# 主相机 tracking 时暂停全向 YOLO：主相机已锁定目标，全向搜索没有意义。
+# 颜色层仍每帧运行并保持命中计数，主相机一丢目标下一帧就能直接接管（无去抖空窗）。
+omni_gate_suspend_on_main_tracking: true
 
 # HSV 阈值（OpenCV 的 H 范围是 0~179）。红色跨 0 点，必须两段。
 omni_gate_red_h: [0, 8, 170, 179]

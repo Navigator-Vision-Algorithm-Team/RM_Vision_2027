@@ -58,8 +58,9 @@ const char * gate_state_name(GateState state)
 }
 
 ColorGate::ColorGate(
-  const std::string & config_path, int camera_index, std::atomic<auto_aim::Color> * enemy_color)
-: camera_index_(camera_index), enemy_color_(enemy_color)
+  const std::string & config_path, int camera_index, std::atomic<auto_aim::Color> * enemy_color,
+  std::atomic<bool> * main_tracking)
+: camera_index_(camera_index), enemy_color_(enemy_color), main_tracking_(main_tracking)
 {
   YAML::Node yaml;
   try {
@@ -72,6 +73,8 @@ ColorGate::ColorGate(
   cfg_.enable = pick(yaml, "omni_gate_enable", camera_index_, cfg_.enable);
   cfg_.adaptive = pick(yaml, "omni_gate_adaptive", camera_index_, cfg_.adaptive);
   cfg_.debug = pick(yaml, "omni_gate_debug", camera_index_, cfg_.debug);
+  cfg_.suspend_on_main_tracking = pick(
+    yaml, "omni_gate_suspend_on_main_tracking", camera_index_, cfg_.suspend_on_main_tracking);
 
   cfg_.divisor = std::max(1, pick(yaml, "omni_gate_divisor", camera_index_, cfg_.divisor));
   cfg_.scale = std::clamp(pick(yaml, "omni_gate_scale", camera_index_, cfg_.scale), 0.1, 1.0);
@@ -184,6 +187,32 @@ bool ColorGate::should_infer(const cv::Mat & bgr)
 
   const auto now = Clock::now();
   const bool first_frame = (stats_.frames == 1);
+
+  // 主相机已锁定目标：本路不做 YOLO。颜色层照常运行并把命中计数保底到
+  // debounce 阈值，主相机一旦丢失（tracking -> temp_lost/lost），下一帧就能
+  // 直接进入推理，不会出现「先等 133ms 去抖」的空窗。
+  if (
+    cfg_.suspend_on_main_tracking && main_tracking_ &&
+    main_tracking_->load(std::memory_order_relaxed)) {
+    const auto color_begin = Clock::now();
+    const bool hit = detect(bgr);
+    stats_.color_ms =
+      std::chrono::duration<double, std::milli>(Clock::now() - color_begin).count();
+    hit_this_frame_ = hit;
+    if (hit) stats_.color_hits++;
+
+    state_ = GateState::Idle;
+    miss_streak_ = 0;
+    hit_streak_ = hit ? std::max(hit_streak_, cfg_.debounce_hits) : 0;
+
+    // 主相机锁定期间的「有意不推理」也算已处理，避免心跳在这里补一帧 YOLO
+    last_infer_ = now;
+    stats_.skipped++;
+    stats_.suspended++;
+    stats_.state = state_;
+    maybe_log(now);
+    return false;
+  }
 
   // 心跳兜底：灯条熄灭（extinguish）、紫色基地等目标没有任何红蓝证据，
   // 只靠颜色层会永久漏检。用极低频的全帧推理兜住，成本 ~4ms/s。
@@ -417,11 +446,13 @@ cv::Mat ColorGate::color_mask(const cv::Mat & hsv) const
 
 cv::Mat ColorGate::red_mask(const cv::Mat & hsv, int shift) const
 {
+  // 自适应 H 偏移只「扩展」窗口，绝不整体平移：平移会把窗口另一侧的
+  // 真实目标挤出去（H=0 的纯红曾被 shift=+2 排除在 [2,10] 之外）。
   const int vmin = static_cast<int>(std::lround(v_min_));
-  const int lo1 = std::clamp(cfg_.red_h1_lo + shift, 0, 179);
-  const int hi1 = std::clamp(cfg_.red_h1_hi + shift, 0, 179);
-  const int lo2 = std::clamp(cfg_.red_h2_lo + shift, 0, 179);
-  const int hi2 = std::clamp(cfg_.red_h2_hi + shift, 0, 179);
+  const int lo1 = std::clamp(cfg_.red_h1_lo + std::min(shift, 0), 0, 179);
+  const int hi1 = std::clamp(cfg_.red_h1_hi + std::max(shift, 0), 0, 179);
+  const int lo2 = std::clamp(cfg_.red_h2_lo + std::min(shift, 0), 0, 179);
+  const int hi2 = std::clamp(cfg_.red_h2_hi + std::max(shift, 0), 0, 179);
 
   cv::Mat mask = cv::Mat::zeros(hsv.size(), CV_8U);
   cv::Mat part;
@@ -442,8 +473,8 @@ cv::Mat ColorGate::red_mask(const cv::Mat & hsv, int shift) const
 
 cv::Mat ColorGate::blue_mask(const cv::Mat & hsv, int shift) const
 {
-  const int lo = std::clamp(cfg_.blue_h_lo + shift, 0, 179);
-  const int hi = std::clamp(cfg_.blue_h_hi + shift, 0, 179);
+  const int lo = std::clamp(cfg_.blue_h_lo + std::min(shift, 0), 0, 179);
+  const int hi = std::clamp(cfg_.blue_h_hi + std::max(shift, 0), 0, 179);
   if (lo > hi) return cv::Mat::zeros(hsv.size(), CV_8U);
 
   const int vmin = static_cast<int>(std::lround(v_min_));
@@ -587,11 +618,11 @@ void ColorGate::maybe_log(std::chrono::steady_clock::time_point now)
     stats_.frames > 0 ? 100.0 * static_cast<double>(stats_.skipped) / stats_.frames : 0.0;
 
   tools::logger()->info(
-    "[ColorGate] cam{} {} hit={:.1f}% skip={:.0f}% trig={} hb={} yolo={} miss={} "
+    "[ColorGate] cam{} {} hit={:.1f}% skip={:.0f}% trig={} hb={} susp={} yolo={} miss={} "
     "vmin={:.0f} smin={} hshift={}/{} {:.2f}ms",
     camera_index_, gate_state_name(state_), hit_ratio, skip_ratio, stats_.triggers,
-    stats_.heartbeats, stats_.yolo_hits, stats_.color_miss_yolo_hit, v_min_, s_min_, h_shift_red_,
-    h_shift_blue_, stats_.color_ms);
+    stats_.heartbeats, stats_.suspended, stats_.yolo_hits, stats_.color_miss_yolo_hit, v_min_,
+    s_min_, h_shift_red_, h_shift_blue_, stats_.color_ms);
 }
 
 }  // namespace omniperception

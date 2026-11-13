@@ -30,7 +30,14 @@ struct OmniSharedState
 {
   void set_enemy_color(auto_aim::Color color) { enemy_color.store(color); }
 
+  // 主相机是否处于 tracking。true 时各全向推理线程暂停 YOLO 推理：
+  // 主相机已经锁定目标，全向的搜索没有意义，省下这部分算力。
+  // 颜色层仍然每帧运行（保持命中证据），因此主相机一丢目标，
+  // 全向下一帧就能直接进入推理，不需要重新去抖。
+  void set_main_tracking(bool tracking) { main_tracking.store(tracking, std::memory_order_relaxed); }
+
   std::atomic<auto_aim::Color> enemy_color{auto_aim::Color::red};
+  std::atomic<bool> main_tracking{false};
 };
 
 using OmniSharedStatePtr = std::shared_ptr<OmniSharedState>;
