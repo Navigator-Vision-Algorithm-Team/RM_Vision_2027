@@ -113,10 +113,13 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   std::optional<io::SoldierCanBoard::PoseSample> reference;
   auto command_frame_time = io::SoldierCanBoard::Clock::now();
   constexpr auto fire_advice_hold_time = 20ms;
+  constexpr auto fire_advice_prediction_window = 50ms;
+  std::optional<io::SoldierCanBoard::TimePoint> last_fire_observation;
   std::optional<io::SoldierCanBoard::TimePoint> fire_advice_deadline;
   bool fire_advice_hold_available = false;
   const auto clear_fire_advice = [&] {
     command.fire_advice = false;
+    last_fire_observation.reset();
     fire_advice_deadline.reset();
     fire_advice_hold_available = false;
   };
@@ -128,13 +131,13 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     if (last_send != io::SoldierCanBoard::TimePoint::min() &&
         now - last_send < io::soldier_can::config::kMinimumSendPeriod) return;
     // 相机没有新帧时也会重发，建议位仍按上次确认的时间过期。
-    if (fire_advice_deadline && now >= *fire_advice_deadline) clear_fire_advice();
+    if (fire_advice_deadline && now >= *fire_advice_deadline) command.fire_advice = false;
     last_send = now;
     io::SoldierCanBoard::SendAttempt attempt{};
     // 发送间隔与图像帧间隔不同。复用最新解算时保留原参考，过期由 CAN 层改发空闲帧。
     const auto result = can_board.send(command, reference, &attempt);
-    if (command.fire_advice &&
-        (result != io::SoldierCanBoard::SendResult::sent || (attempt.payload[1] & 0x02) == 0)) {
+    if (result != io::SoldierCanBoard::SendResult::sent ||
+        (command.fire_advice && (attempt.payload[1] & 0x02) == 0)) {
       clear_fire_advice();
     }
     last_debug_tx = auto_aim::DebugCanTx{
@@ -186,6 +189,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     command = {};
     reference.reset();
     command_frame_time = t;
+    bool prediction_window_open = false;
     Eigen::Vector3d gimbal_pos = Eigen::Vector3d::Zero();
     Eigen::Vector3d target_pos = Eigen::Vector3d::Zero();
     const auto_aim::Target * target = nullptr;
@@ -233,12 +237,30 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
               fire_advice_hold_available && fire_advice_deadline && now < *fire_advice_deadline;
             command.fire_advice = confirmed_this_frame || hold_for_one_frame;
             fire_advice_hold_available = confirmed_this_frame;
-            if (confirmed_this_frame) fire_advice_deadline = now + fire_advice_hold_time;
+            if (confirmed_this_frame) {
+              last_fire_observation = t;
+              fire_advice_deadline = now + fire_advice_hold_time;
+            }
             command.yaw_rad = tools::limit_rad(aim.yaw);
             // Aimer 的 pitch 向上为负，和 Solver 姿态的 Ry 方向相同。
             command.pitch_raw_rad = std::clamp(
               pitch_zero + pitch_direction * aim.pitch,
               io::soldier_can::config::kMinPitchRawRad, io::soldier_can::config::kMaxPitchRawRad);
+            if (autoaim_active.value_or(false) && state == "temp_lost" && last_fire_observation) {
+              const auto prediction_deadline = *last_fire_observation + fire_advice_prediction_window;
+              prediction_window_open = now < prediction_deadline;
+              const auto & point = aimer.debug_aim_point;
+              if (prediction_window_open && ballistic_aim && point.valid && point.xyza.allFinite() &&
+                  command.pitch_raw_rad == pitch_zero + pitch_direction * aim.pitch) {
+                // xyza[3] 沿板中心指向车体中心，正对我方时与视线方向一致。
+                const double bearing = std::atan2(point.xyza.y(), point.xyza.x());
+                const double facing_error = std::abs(tools::limit_rad(point.xyza[3] - bearing));
+                if (facing_error <= std::numbers::pi / 3.0) {
+                  command.fire_advice = true;
+                  fire_advice_deadline = std::min(prediction_deadline, now + fire_advice_hold_time);
+                }
+              }
+            }
             reference = frame_pose->reference;
             target_pos = {
               command.yaw_rad, pitch_direction * (command.pitch_raw_rad - pitch_zero), 0.0};
@@ -247,7 +269,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
       }
     }
 
-    if (!command.fire_advice) clear_fire_advice();
+    if (!command.fire_advice && !prediction_window_open) clear_fire_advice();
     send_latest();
 
     const bool tx_tracking = last_debug_tx && (last_debug_tx->payload[1] & 0x01) != 0;
