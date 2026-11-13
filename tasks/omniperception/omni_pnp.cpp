@@ -120,6 +120,47 @@ cv::Mat approximate_camera_matrix(
   return K;
 }
 
+cv::Mat rotate_camera_matrix(
+  const cv::Mat & camera_matrix, int rotate_degrees, const cv::Size & rotated_size)
+{
+  if (rotate_degrees == 0 || camera_matrix.rows != 3 || camera_matrix.cols != 3) {
+    return camera_matrix;
+  }
+  if (rotated_size.width <= 0 || rotated_size.height <= 0) return camera_matrix;
+
+  // 标定值可能是 CV_32F（手写配置）也可能是 CV_64F（eigen2cv），统一到 double
+  cv::Mat K;
+  camera_matrix.convertTo(K, CV_64F);
+
+  const double fx = K.at<double>(0, 0);
+  const double fy = K.at<double>(1, 1);
+  const double cx = K.at<double>(0, 2);
+  const double cy = K.at<double>(1, 2);
+
+  // 旋转后尺寸是 (原高, 原宽)
+  const double raw_h = rotated_size.width;
+  const double raw_w = rotated_size.height;
+
+  double new_cx = cx;
+  double new_cy = cy;
+  if (rotate_degrees > 0) {
+    // 顺时针 90°：(u,v) -> (H-1-v, u)
+    new_cx = raw_h - 1.0 - cy;
+    new_cy = cx;
+  } else {
+    // 逆时针 90°：(u,v) -> (v, W-1-u)
+    new_cx = cy;
+    new_cy = raw_w - 1.0 - cx;
+  }
+
+  cv::Mat out = K.clone();
+  out.at<double>(0, 0) = fy;  // fx' = fy
+  out.at<double>(1, 1) = fx;  // fy' = fx
+  out.at<double>(0, 2) = new_cx;
+  out.at<double>(1, 2) = new_cy;
+  return out;
+}
+
 Eigen::Matrix3d mount_to_R_camera2gimbal(double mount_yaw_deg, double mount_pitch_deg)
 {
   const double yaw = mount_yaw_deg * CV_PI / 180.0;

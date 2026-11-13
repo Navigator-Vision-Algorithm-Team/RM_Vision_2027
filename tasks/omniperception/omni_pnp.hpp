@@ -89,6 +89,38 @@ cv::Mat approximate_camera_matrix(
   const cv::Size & image_size, double fov_h_deg, double fov_v_deg);
 
 // -----------------------------------------------------------------------------
+//  图像旋转后的内参变换
+//
+//  io::Camera 会把全向图像旋转 ±90° 使其正立，而 omni_camera_matrix_N 是在
+//  「未旋转」的原始图像上标定的。必须先变换内参再解 PnP，否则 yaw/pitch 会
+//  整体偏 90°，且重投影误差很大。
+//
+//  参数：
+//    camera_matrix  原始（未旋转图像）坐标系下的 3x3 内参
+//    rotate_degrees 90 = 顺时针，-90 = 逆时针（与 io::Camera::rotation() 一致）
+//    rotated_size   旋转【之后】的图像尺寸
+//
+//  推导（纯针孔，忽略 skew）：
+//    顺时针 90°：像素映射 (u,v) -> (H-1-v, u)
+//                 => cx' = H-1-cy, cy' = cx, fx' = fy, fy' = fx
+//    逆时针 90°：像素映射 (u,v) -> (v, W-1-u)
+//                 => cx' = cy,     cy' = W-1-cx, fx' = fy, fy' = fx
+//    其中 (W,H) 是旋转前的尺寸，而旋转后尺寸是 (H,W)，
+//    所以 H = rotated_size.width、W = rotated_size.height。
+//
+//  ⚠ 只变换内参还不够：上面得到的是「标准上三角形式」的内参，它对应的新相机系
+//  相对物理相机绕光轴转了 ±90°。调用方（Decider::delta_angle）还必须把外参
+//  右乘 Rz(-rotate_degrees)，否则解出的 yaw/pitch 依然整体偏 90°。
+//
+//  径向畸变 k1/k2/k3 在绕光轴旋转下不变；切向 p1/p2 严格来说要跟着变号，
+//  但量级只有 1e-4（亚像素），这里保持不变。
+//
+//  rotate_degrees == 0、K 不是 3x3、或 rotated_size 非正时原样返回（不拷贝）。
+// -----------------------------------------------------------------------------
+cv::Mat rotate_camera_matrix(
+  const cv::Mat & camera_matrix, int rotate_degrees, const cv::Size & rotated_size);
+
+// -----------------------------------------------------------------------------
 //  兜底方案 2：用安装角构造 R_camera2gimbal
 //
 //  ⚠ 仅当 !cfg.has_extrinsic（yaml 没填 omni_R/t_camera2gimbal_N，且 tf 树里

@@ -124,6 +124,9 @@ int main(int argc, char * argv[])
     //配置设置
     omniperception::OmniCameraConfig cfg;
     cfg.camera = cam.get();
+    // 图像方向修正：io::Camera 已按安装方位把图转了 90°，
+    // 这里把同一角度带给 PnP，用于把标定内参变换到旋转后的坐标系。
+    cfg.rotate = cam->rotation();
     cfg.recorder = std::shared_ptr<tools::Recorder>(std::move(recorder));
     cfg.mount_yaw = yaml["omni_mount_yaw_" + std::to_string(i)]
                       ? yaml["omni_mount_yaw_" + std::to_string(i)].as<double>()

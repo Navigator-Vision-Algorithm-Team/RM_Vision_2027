@@ -128,12 +128,23 @@ Eigen::Vector2d Decider::delta_angle(
   const auto & armor = armors.front();
 
   // ------------------------- 方案 A：PnP -------------------------
+  // io::Camera 已按安装方位把图像转了 90°，旋转后图像的「水平」对应原始图像的
+  // 「垂直」（横装模组转正后变成竖图），所以 fov_h/fov_v 必须先交换再用。
+  const bool rotated = (cfg.rotate != 0);
+  const double fov_h = rotated ? cfg.fov_v : cfg.fov_h;
+  const double fov_v = rotated ? cfg.fov_h : cfg.fov_v;
+
   // 1) 内参：优先标定值，其次用 FOV 近似（占位方案）
   cv::Mat K = cfg.camera_matrix;
   bool using_approx_K = false;
   if (K.empty()) {
-    K = approximate_camera_matrix(image_size, cfg.fov_h, cfg.fov_v);
+    // 用旋转后的 image_size + 交换后的 fov，估算出来的内参天然在旋转后坐标系
+    K = approximate_camera_matrix(image_size, fov_h, fov_v);
     using_approx_K = true;
+  } else if (rotated) {
+    // 标定内参对应的是「未旋转」的原始图像，必须同步变换主点与焦距，
+    // 否则 PnP 解出的方向会整体偏 90°。
+    K = rotate_camera_matrix(K, cfg.rotate, image_size);
   }
 
   // 2) 畸变：没有标定值就当无畸变（空 Mat，solvePnP 会自动忽略）
@@ -145,6 +156,16 @@ Eigen::Vector2d Decider::delta_angle(
   if (!cfg.has_extrinsic) {
     R_camera2gimbal = mount_to_R_camera2gimbal(cfg.mount_yaw, cfg.mount_pitch);
     t_camera2gimbal.setZero();
+  }
+
+  // 【图像旋转的外参补偿】图像转正后，PnP 解出的「相机系」相对物理相机绕光轴
+  // 转了 ±90°，只变换内参还不够，外参必须右乘回来，否则 yaw/pitch 仍偏 90°。
+  // 推导：顺时针旋转使 d_new = Rz(+90°)·d_old，故 R_new2gimbal = R·Rz(-90°)。
+  // 平移不受影响：新旧相机系共享光心。
+  if (rotated) {
+    const double theta = -cfg.rotate * CV_PI / 180.0;
+    R_camera2gimbal =
+      R_camera2gimbal * Eigen::AngleAxisd(theta, Eigen::Vector3d::UnitZ()).toRotationMatrix();
   }
 
   // 【大小yaw结构说明】本函数的外参 R_camera2gimbal / t_camera2gimbal 是
@@ -180,8 +201,9 @@ Eigen::Vector2d Decider::delta_angle(
   // 只有在「连 fov 都没有」或「PnP 解被几何检查拒绝」时才会走到这里。
   // 这两个式子的输出本来就是 command 约定（yaw 左正、pitch 下正），保持不变。
   // TODO(可选): 标定完成后可以删除这个分支，避免两套角度来源混用。
-  da[0] = cfg.mount_yaw + (cfg.fov_h / 2) - armor.center_norm.x * cfg.fov_h;
-  da[1] = armor.center_norm.y * cfg.fov_v - cfg.fov_v / 2 + cfg.mount_pitch;
+  // 注意用交换后的 fov：图像已转 90°，center_norm.x 对应的是原图的垂直视场。
+  da[0] = cfg.mount_yaw + (fov_h / 2) - armor.center_norm.x * fov_h;
+  da[1] = armor.center_norm.y * fov_v - fov_v / 2 + cfg.mount_pitch;
   return da;
 }
 

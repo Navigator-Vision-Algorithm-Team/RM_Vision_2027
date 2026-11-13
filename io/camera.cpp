@@ -11,6 +11,23 @@
 
 namespace io
 {
+namespace
+{
+
+/*
+ * 全向相机的默认图像旋转，按安装方位一一对应：
+ *   omni1 前右 -> 顺时针 90      omni2 前左 -> 逆时针 90
+ *   omni3 后左 -> 顺时针 90      omni4 后右 -> 逆时针 90
+ * 主相机及其它 sursign 不旋转（用户要求：只有全向相机做此处理）。
+ */
+int default_omni_rotation(const std::string & sursign)
+{
+  if (sursign == "omni1" || sursign == "omni3") return 90;
+  if (sursign == "omni2" || sursign == "omni4") return -90;
+  return 0;
+}
+
+}  // namespace
 
 cv::Mat CameraBase::read() { return {}; }
 
@@ -30,6 +47,25 @@ Camera::Camera(const std::string & config_path, std::string sursign)
     device_name = yaml[position_key].as<std::string>();
   else if (!sursign.empty())
     device_name = sursign;
+
+  // 全向相机的图像方向修正。yaml 的 rotate_<sursign> 可覆盖内置映射
+  //（模组装反时把符号反过来即可）；主相机不读这个键，恒为 0。
+  rotate_degrees_ = default_omni_rotation(sursign);
+  if (!sursign.empty() && yaml[key("rotate")]) {
+    const int value = yaml[key("rotate")].as<int>();
+    if (value == 90 || value == -90 || value == 0) {
+      rotate_degrees_ = value;
+    } else {
+      tools::logger()->warn(
+        "[{}] rotate_{} = {} 无效（只支持 90 / -90 / 0），沿用内置值 {}°", device_name, sursign,
+        value, rotate_degrees_);
+    }
+  }
+  if (rotate_degrees_ != 0) {
+    tools::logger()->info(
+      "[{}] 图像旋转修正 {}°（{}）", device_name, rotate_degrees_,
+      rotate_degrees_ > 0 ? "顺时针" : "逆时针");
+  }
 
   if (camera_name == "mindvision") {
     auto gamma = tools::read<double>(yaml, key("gamma"));
@@ -79,8 +115,19 @@ Camera::~Camera() = default;
 void Camera::read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp)
 {
   camera_->read(img, timestamp);
-  if (recorder_ && !img.empty()) {
-    recorder_->record(img, timestamp, frame_id_++, img.type());
+  if (img.empty()) return;
+
+  // 先记录「未旋转」的原始帧：replay 模式同样经过本函数，若这里存的是旋转后的
+  // 图像，回放时会被再转一次。
+  if (recorder_) recorder_->record(img, timestamp, frame_id_++, img.type());
+
+  // 全向相机的方向修正（主相机 rotate_degrees_ = 0，直接跳过，无额外开销）。
+  if (rotate_degrees_ != 0) {
+    cv::Mat rotated;
+    cv::rotate(
+      img, rotated,
+      rotate_degrees_ > 0 ? cv::ROTATE_90_CLOCKWISE : cv::ROTATE_90_COUNTERCLOCKWISE);
+    img = rotated;
   }
 }
 

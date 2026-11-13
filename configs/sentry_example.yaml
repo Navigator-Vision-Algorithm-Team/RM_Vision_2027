@@ -88,6 +88,17 @@ omni_gate_pair_dy_ratio: 0.35
 omni_gate_pair_gap_ratio_min: 1.2
 omni_gate_pair_gap_ratio_max: 5.0
 
+# ----- 全向相机图像方向修正 -----
+# io::Camera 会按安装方位自动旋转全向图像（仅全向，主相机不转）：
+#   omni1 前右 -> 顺时针 90      omni2 前左 -> 逆时针 90
+#   omni3 后左 -> 顺时针 90      omni4 后右 -> 逆时针 90
+# 模组装反时用 rotate_omniN 覆盖（90 / -90 / 0）。PnP 会自动把标定内参的
+# 主点与焦距变换到旋转后的坐标系，不需要重新标定内参。
+# rotate_omni1: 90
+# rotate_omni2: -90
+# rotate_omni3: 90
+# rotate_omni4: -90
+
 # ----- 全向相机 1 (sursign="omni1") -----
 camera_name_omni1: "hikrobot"
 exposure_ms_omni1: 50.0
