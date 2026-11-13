@@ -7,6 +7,8 @@ add_library(omniperception OBJECT
     decider.cpp
     # 每路全向相机一个 YOLO/线程的任务工厂（供 auto_aim::multithread::YoloPipeline 使用）
     omni_jobs.cpp
+    # 常驻颜色层：命中敌方颜色才触发该路 YOLO（两级流水的 L0）
+    color_gate.cpp
     # 【改动】全向相机的 PnP 胶水层（复用 auto_aim 的公共 PnP 内核）
     omni_pnp.cpp
 )

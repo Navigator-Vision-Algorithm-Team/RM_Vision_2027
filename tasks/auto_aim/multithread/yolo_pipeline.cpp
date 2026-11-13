@@ -269,6 +269,7 @@ void YoloPipeline::run(std::size_t index)
     notify_ready(nullptr);
 
     std::size_t frames = 0;
+    std::size_t skipped = 0;
     double last_inference_ms = 0.0;
     auto last_stats = std::chrono::steady_clock::now();
 
@@ -286,16 +287,29 @@ void YoloPipeline::run(std::size_t index)
       result.camera_id = job.camera_id;
       result.timestamp = timestamp;
 
-      if (inference_enabled_.load(std::memory_order_relaxed)) {
+      // 门控（全向相机：常驻颜色层）在推理线程内串行执行，失败时整帧跳过
+      // detect()。YOLO 实例与模型仍常驻，跳帧没有加载/卸载开销。
+      bool run_inference = inference_enabled_.load(std::memory_order_relaxed);
+      if (run_inference && job.inference_gate) {
+        run_inference = job.inference_gate(img);
+      }
+
+      if (run_inference) {
         const auto begin = std::chrono::steady_clock::now();
         result.armors = yolo.detect(img);
         last_inference_ms = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - begin)
                               .count();
         result.inference_ms = last_inference_ms;
+      } else {
+        skipped++;
       }
 
-      if (job.postprocess) job.postprocess(img, timestamp, result.armors, result);
+      // 门控跳过的帧没有检测结果，postprocess（录像 / 颜色同步）一并跳过：
+      // 否则 4 路全向仍要为空画面付出 clone + 视频编码开销，把省下来的算力又吃回去。
+      if (run_inference && job.postprocess) {
+        job.postprocess(img, timestamp, result.armors, result);
+      }
 
       // 主相机每帧都入队（驱动主循环、录像）；全向只在检测到目标时入队
       const bool should_push = result.is_main() || !result.armors.empty();
@@ -308,11 +322,22 @@ void YoloPipeline::run(std::size_t index)
       const auto now = std::chrono::steady_clock::now();
       const double elapsed = std::chrono::duration<double>(now - last_stats).count();
       if (elapsed >= kStatsPeriodS) {
-        tools::logger()->info(
-          "[YoloPipeline] '{}' cpu={} {:.1f}fps infer={:.1f}ms", name,
-          tools::current_thread_cpu(), static_cast<double>(frames) / elapsed,
-          last_inference_ms);
+        // skip 只在用门控时有意义（主相机恒为 0），此时保持旧日志格式不变
+        if (skipped > 0) {
+          const double skip_ratio =
+            100.0 * static_cast<double>(skipped) / static_cast<double>(frames);
+          tools::logger()->info(
+            "[YoloPipeline] '{}' cpu={} {:.1f}fps infer={:.1f}ms skip={:.0f}%", name,
+            tools::current_thread_cpu(), static_cast<double>(frames) / elapsed,
+            last_inference_ms, skip_ratio);
+        } else {
+          tools::logger()->info(
+            "[YoloPipeline] '{}' cpu={} {:.1f}fps infer={:.1f}ms", name,
+            tools::current_thread_cpu(), static_cast<double>(frames) / elapsed,
+            last_inference_ms);
+        }
         frames = 0;
+        skipped = 0;
         last_stats = now;
       }
     }

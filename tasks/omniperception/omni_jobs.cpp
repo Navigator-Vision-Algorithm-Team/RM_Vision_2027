@@ -7,6 +7,7 @@
 #include <memory>
 #include <utility>
 
+#include "color_gate.hpp"
 #include "decider.hpp"
 #include "tools/logger.hpp"
 #include "tools/recorder.hpp"
@@ -41,10 +42,21 @@ std::vector<auto_aim::multithread::CameraJob> make_omni_jobs(
     // 线程池在空闲的大核上自主展开）。能效核不足时 YoloPipeline 会告警并回退。
     job.core_preference = tools::CpuCoreType::Efficiency;
 
-    job.postprocess = [cfg, decider, shared, last_color = initial_color](
+    // 常驻颜色层（两级流水线的 L0）：只有画面里出现敌方颜色的成对灯条时才允许
+    // 本路执行 YOLO，否则整帧跳过。与 Decider 共用同一个 enemy_color 原子量，
+    // 串口 robot_id 换色时门控和过滤一起跟随，不会出现「按蓝触发、按红剔除」。
+    auto gate = std::make_shared<ColorGate>(
+      config_path, static_cast<int>(i), shared ? &shared->enemy_color : nullptr);
+    job.inference_gate = [gate](const cv::Mat & img) { return gate->should_infer(img); };
+
+    job.postprocess = [cfg, decider, shared, gate, last_color = initial_color](
                         const cv::Mat & img, std::chrono::steady_clock::time_point ts,
                         std::list<auto_aim::Armor> & armors,
                         auto_aim::multithread::CameraResult & result) mutable {
+      // 把原始 YOLO 结果回报给门控：颜色层漏检但 YOLO 命中时在线放宽阈值。
+      // 必须放在 armor_filter 之前，否则「YOLO 命中但颜色层漏检」的样本会被过滤掉。
+      gate->observe_yolo(armors);
+
       // 录像：必须 clone 后再画框。虽然 hikrobot/mindvision 每帧返回的都是独立缓冲，
       // 但伪相机走零拷贝缓冲池、只重画左上角 overlay，直接在原图画框会污染池缓冲
       // 并在后续帧留下残影。这路相机 keep_image=false，原图无人使用，克隆出来的

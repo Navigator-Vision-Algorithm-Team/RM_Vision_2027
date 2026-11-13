@@ -66,6 +66,12 @@ struct CameraJob
   // CPU 推理是否限制为单线程。全向相机默认 true（每路独占一核），
   // 主相机可关闭，允许 OpenVINO 自主并行。
   bool single_thread_cpu = true;
+  // 推理门控：返回 true 才执行本帧 YOLO，返回 false 直接跳过推理
+  // （全向相机的常驻颜色层就挂在这里）。为空表示每帧都推理，即旧行为。
+  //
+  // 跳帧只是不调用 detect()：YOLO 实例与模型仍常驻内存，没有加载/卸载开销。
+  // 门控失败时 result.armors 为空，postprocess 照常调用（录像 / 颜色同步不中断）。
+  std::function<bool(const cv::Mat & img)> inference_gate;
   // 推理之后、入队之前的相机相关处理（全向相机：过滤 / 优先级 / 角度解算 / 录像）。
   // img 是 const：处理函数只能读取，需要画框请自行 clone。
   // 原因：伪相机（camera_name=fake）走的是零拷贝缓冲池，且 render_overlay() 每帧

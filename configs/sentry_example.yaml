@@ -38,6 +38,53 @@ omni_camera_count: 0
 # false = 原地保持：停在当前朝向，不转动
 spin_when_no_omni: false
 
+# =============================================================================
+#  全向感知两级流水线（算力按需分配）
+#
+#  L0 常驻颜色层：全向相机保持开启，每帧用 OpenCV HSV 查「敌方颜色的成对灯条」，
+#     约 1~2 ms/帧。没命中就整帧跳过 YOLO。
+#  L1 YOLO 推理层：只在 L0 命中（或心跳到期）时执行。模型常驻内存，
+#     跳帧只是不调用 detect()，没有加载/卸载开销。
+#
+#  所有参数都有默认值，整段删掉也能跑；每个键都支持 omni_gate_xxx_omniN 覆盖。
+# =============================================================================
+omni_gate_enable: true              # false = 退回每帧 YOLO（旧行为）
+omni_gate_heartbeat_ms: 4000        # 兜底心跳推理：灯条熄灭/紫色基地等无颜色证据的目标
+omni_gate_debounce_hits: 2          # 连续命中多少帧才触发（15fps 时 2 帧 ≈ 133ms）
+omni_gate_hold_ms: 1000             # 触发后强制推理时长
+omni_gate_cooldown_ms: 400          # 冷却期，防频繁切换；冷却内再次命中会立即回到推理
+omni_gate_miss_frames: 5            # 连续多少帧无颜色证据才允许提前退出
+omni_gate_min_active_ms: 300        # 最短驻留，防「刚触发就退出」
+omni_gate_max_active_ms: 5000       # 单次最长推理，防大屏长期把某路锁在推理态
+omni_gate_divisor: 1                # 空闲期颜色检测抽帧倍数（2 = 7.5fps，延迟 +66ms）
+omni_gate_scale: 0.5                # 颜色检测降采样比例；0.25 会吃掉远端小灯条，不建议
+omni_gate_adaptive: true            # 灰度世界白平衡 + V 下限 + H 偏移自适应
+omni_gate_debug: false              # 打印状态切换
+
+# HSV 阈值（OpenCV 的 H 范围是 0~179）。红色跨 0 点，必须两段。
+omni_gate_red_h: [0, 8, 170, 179]
+omni_gate_blue_h: [98, 132]         # 蓝灯条实际偏青，中心约 112
+omni_gate_s_min: 90
+omni_gate_v_min: 90                 # V 下限初值，开启自适应后按画面亮度动态调整
+omni_gate_v_floor: 35
+omni_gate_v_ceil: 130
+
+# 面积 / 形状（全部按降采样后的分辨率比例化，适配任意相机分辨率）
+omni_gate_min_area_ratio: 0.00015
+omni_gate_max_area_ratio: 0.015
+omni_gate_max_color_ratio: 0.12     # 全屏命中占比超过 12% 判为大面积干扰色（大屏/地毯）
+omni_gate_min_fill_ratio: 0.55
+omni_gate_min_aspect: 1.6
+omni_gate_max_aspect: 18.0
+omni_gate_min_len_px: 4.0
+
+# 灯条成对约束：把「画面里有红色」升级成「画面里有一块装甲板」
+omni_gate_pair_len_ratio_min: 0.65
+omni_gate_pair_len_ratio_max: 1.5
+omni_gate_pair_dy_ratio: 0.35
+omni_gate_pair_gap_ratio_min: 1.2
+omni_gate_pair_gap_ratio_max: 5.0
+
 # ----- 全向相机 1 (sursign="omni1") -----
 camera_name_omni1: "hikrobot"
 exposure_ms_omni1: 50.0
