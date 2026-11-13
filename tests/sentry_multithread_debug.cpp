@@ -254,6 +254,8 @@ int main(int argc, char * argv[])
         tracker.set_enemy_color(enemy);
         decider.set_enemy_color(enemy);
         omni_state->set_enemy_color(enemy);
+        // robot_id 是「颜色是否可信」的唯一依据（没收到时门控红蓝都查）
+        omni_state->set_robot_id(id);
         tools::logger()->info(
           "[Main] robot_id={}（{} / {}）-> 己方颜色 = {}，敌方 = {}（覆盖配置 enemy_color）", id,
           own_red ? "red" : "blue", io::robot_role_name(id), own_red ? "red" : "blue",
@@ -429,12 +431,20 @@ int main(int argc, char * argv[])
       //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
       auto detection_queue = omniperception::take_detection_results(pipeline);
 
+      // 主相机已锁定目标时全向不再推理，队列里可能残留进入 tracking 之前的一条结果，
+      // 丢弃它，避免把稳定的 tracking 拉回 switching。
+      if (tracker.state() == "tracking") detection_queue.clear();
+
       decider.sort(detection_queue);
 
       // 传入的是全向相机中的装甲板候选，和主相机中的装甲板候选，为什么两个不放在同一个queue中传入给tracker呢？
       // 因为我们认为在主相机发现的相机的优先级会天然的大于全向相机中发现的
       // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
       auto [switch_target, target] = tracker.track(detection_queue, armors, timestamp, true, img.size());
+
+      // 主相机锁定目标时暂停全向 YOLO（ColorGate 按 main_tracking 短路），
+      // 只保留常驻颜色层；放在 track() 之后，丢失目标最多晚一帧恢复。
+      omni_state->set_main_tracking(tracker.state() == "tracking");
       
       // 全向相机的 delta_yaw 是「大yaw 系」角（零点 = 大yaw 正前方、向左为正，
       // 由 Decider::delta_angle 用 tf 给的「相机 -> 大yaw」位姿算出），

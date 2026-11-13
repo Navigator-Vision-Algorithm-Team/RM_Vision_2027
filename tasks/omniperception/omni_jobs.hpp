@@ -2,6 +2,7 @@
 #define OMNIPERCEPTION__OMNI_JOBS_HPP
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -36,8 +37,13 @@ struct OmniSharedState
   // 全向下一帧就能直接进入推理，不需要重新去抖。
   void set_main_tracking(bool tracking) { main_tracking.store(tracking, std::memory_order_relaxed); }
 
+  // 下位机上报的己方编号（0 = 还没收到）。颜色门控用它判断 enemy_color 是
+  // 「串口真实值」还是「配置兜底值」：后者可能是反的，开赛初期必须红蓝都查。
+  void set_robot_id(std::uint8_t id) { robot_id.store(id, std::memory_order_relaxed); }
+
   std::atomic<auto_aim::Color> enemy_color{auto_aim::Color::red};
   std::atomic<bool> main_tracking{false};
+  std::atomic<std::uint8_t> robot_id{0};
 };
 
 using OmniSharedStatePtr = std::shared_ptr<OmniSharedState>;

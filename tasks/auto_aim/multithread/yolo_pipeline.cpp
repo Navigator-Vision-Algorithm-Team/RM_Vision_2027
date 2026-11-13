@@ -167,7 +167,14 @@ YoloPipeline::~YoloPipeline()
 
 void YoloPipeline::set_inference_enabled(bool enabled)
 {
-  inference_enabled_.store(enabled, std::memory_order_relaxed);
+  const bool previous = inference_enabled_.exchange(enabled, std::memory_order_relaxed);
+  if (previous == enabled) return;
+
+  // 这条日志用来区分「全向门控跳过」和「整机未开赛、所有相机都不推理」：
+  // 后者每路都会显示 skip=100% 且 infer 永远为 0，看一眼就知道不是门控的问题。
+  tools::logger()->info(
+    "[YoloPipeline] 推理总开关 {}（{}）", enabled ? "ON" : "OFF",
+    enabled ? "比赛已开始" : "比赛未开始，所有相机暂停推理，检查 is_game_started / use_referee_system");
 }
 
 WaitStatus YoloPipeline::wait_main(CameraResult & result, std::chrono::milliseconds timeout)
@@ -269,7 +276,8 @@ void YoloPipeline::run(std::size_t index)
     notify_ready(nullptr);
 
     std::size_t frames = 0;
-    std::size_t skipped = 0;
+    std::size_t skipped_gate = 0;      // 门控主动跳过（全向颜色层没命中 / 主相机 tracking）
+    std::size_t skipped_disabled = 0;  // 整机推理总开关关闭（比赛未开始）
     double last_inference_ms = 0.0;
     auto last_stats = std::chrono::steady_clock::now();
 
@@ -289,7 +297,8 @@ void YoloPipeline::run(std::size_t index)
 
       // 门控（全向相机：常驻颜色层）在推理线程内串行执行，失败时整帧跳过
       // detect()。YOLO 实例与模型仍常驻，跳帧没有加载/卸载开销。
-      bool run_inference = inference_enabled_.load(std::memory_order_relaxed);
+      const bool infer_enabled = inference_enabled_.load(std::memory_order_relaxed);
+      bool run_inference = infer_enabled;
       if (run_inference && job.inference_gate) {
         run_inference = job.inference_gate(img);
       }
@@ -301,8 +310,10 @@ void YoloPipeline::run(std::size_t index)
                               std::chrono::steady_clock::now() - begin)
                               .count();
         result.inference_ms = last_inference_ms;
+      } else if (infer_enabled) {
+        skipped_gate++;
       } else {
-        skipped++;
+        skipped_disabled++;
       }
 
       // 门控跳过的帧没有检测结果，postprocess（录像 / 颜色同步）一并跳过：
@@ -322,14 +333,17 @@ void YoloPipeline::run(std::size_t index)
       const auto now = std::chrono::steady_clock::now();
       const double elapsed = std::chrono::duration<double>(now - last_stats).count();
       if (elapsed >= kStatsPeriodS) {
-        // skip 只在用门控时有意义（主相机恒为 0），此时保持旧日志格式不变
-        if (skipped > 0) {
-          const double skip_ratio =
-            100.0 * static_cast<double>(skipped) / static_cast<double>(frames);
+        // skip 只在用门控 / 总开关关闭时有意义（主相机正常时恒为 0），
+        // 两种原因分开报，避免把「未开赛」误判成「门控有问题」。
+        if (skipped_gate > 0 || skipped_disabled > 0) {
+          const double total = static_cast<double>(frames);
+          const double gate_ratio = 100.0 * static_cast<double>(skipped_gate) / total;
+          const double disabled_ratio = 100.0 * static_cast<double>(skipped_disabled) / total;
           tools::logger()->info(
-            "[YoloPipeline] '{}' cpu={} {:.1f}fps infer={:.1f}ms skip={:.0f}%", name,
-            tools::current_thread_cpu(), static_cast<double>(frames) / elapsed,
-            last_inference_ms, skip_ratio);
+            "[YoloPipeline] '{}' cpu={} {:.1f}fps infer={:.1f}ms skip={:.0f}% "
+            "(门控 {:.0f}% | 全局关闭 {:.0f}%)",
+            name, tools::current_thread_cpu(), static_cast<double>(frames) / elapsed,
+            last_inference_ms, gate_ratio + disabled_ratio, gate_ratio, disabled_ratio);
         } else {
           tools::logger()->info(
             "[YoloPipeline] '{}' cpu={} {:.1f}fps infer={:.1f}ms", name,
@@ -337,7 +351,8 @@ void YoloPipeline::run(std::size_t index)
             last_inference_ms);
         }
         frames = 0;
-        skipped = 0;
+        skipped_gate = 0;
+        skipped_disabled = 0;
         last_stats = now;
       }
     }

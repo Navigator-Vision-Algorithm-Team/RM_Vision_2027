@@ -275,6 +275,9 @@ int main(int argc, char * argv[])
         // 全向四路的 Decider 在各自推理线程里，必须经共享状态同步，
         // 否则换色后全向仍按旧颜色过滤，检测结果会被全部剔除。
         omni_state->set_enemy_color(enemy);
+        // robot_id 是「颜色是否可信」的唯一依据：没收到之前，全向门控会红蓝都查，
+        // 避免配置里的 enemy_color 与实际阵营相反时开赛初期全向完全失效。
+        omni_state->set_robot_id(id);
         tools::logger()->info(
           "[Main] robot_id={}（{} / {}）-> 己方颜色 = {}，敌方 = {}（覆盖配置 enemy_color）", id,
           own_red ? "red" : "blue", io::robot_role_name(id), own_red ? "red" : "blue",

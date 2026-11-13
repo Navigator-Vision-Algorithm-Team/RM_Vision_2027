@@ -49,8 +49,8 @@ spin_when_no_omni: false
 #  所有参数都有默认值，整段删掉也能跑；每个键都支持 omni_gate_xxx_omniN 覆盖。
 # =============================================================================
 omni_gate_enable: true              # false = 退回每帧 YOLO（旧行为）
-omni_gate_heartbeat_ms: 4000        # 兜底心跳推理：灯条熄灭/紫色基地等无颜色证据的目标
-omni_gate_debounce_hits: 2          # 连续命中多少帧才触发（15fps 时 2 帧 ≈ 133ms）
+omni_gate_heartbeat_ms: 2000        # 兜底心跳推理：灯条熄灭/紫色基地等无颜色证据的目标
+omni_gate_debounce_hits: 1          # 连续命中多少帧才触发（1 = 当帧即触发，最大化有效性）
 omni_gate_hold_ms: 1000             # 触发后强制推理时长
 omni_gate_cooldown_ms: 400          # 冷却期，防频繁切换；冷却内再次命中会立即回到推理
 omni_gate_miss_frames: 5            # 连续多少帧无颜色证据才允许提前退出
@@ -59,10 +59,11 @@ omni_gate_max_active_ms: 5000       # 单次最长推理，防大屏长期把某
 omni_gate_divisor: 1                # 空闲期颜色检测抽帧倍数（2 = 7.5fps，延迟 +66ms）
 omni_gate_scale: 0.5                # 颜色检测降采样比例；0.25 会吃掉远端小灯条，不建议
 omni_gate_adaptive: true            # 灰度世界白平衡 + V 下限 + H 偏移自适应
-omni_gate_debug: false              # 打印状态切换
-# 主相机 tracking 时暂停全向 YOLO：主相机已锁定目标，全向搜索没有意义。
-# 颜色层仍每帧运行并保持命中计数，主相机一丢目标下一帧就能直接接管（无去抖空窗）。
-omni_gate_suspend_on_main_tracking: true
+omni_gate_debug: false              # 打印状态切换与中间量（调参时置 true）
+# 主相机 tracking 时暂停全向 YOLO。默认 false（YOLO 有效性优先）：
+# 主相机锁定期间全向继续工作，目标被遮挡或短暂丢失时不用等去抖。
+# 若算力确实吃紧再置 true，此时颜色层仍保持命中计数，丢失后下一帧即可接管。
+omni_gate_suspend_on_main_tracking: false
 
 # HSV 阈值（OpenCV 的 H 范围是 0~179）。红色跨 0 点，必须两段。
 omni_gate_red_h: [0, 8, 170, 179]
@@ -72,19 +73,22 @@ omni_gate_v_min: 90                 # V 下限初值，开启自适应后按画�
 omni_gate_v_floor: 35
 omni_gate_v_ceil: 130
 
-# 面积 / 形状（全部按降采样后的分辨率比例化，适配任意相机分辨率）
-omni_gate_min_area_ratio: 0.00015
+# 面积 / 形状（按降采样后的分辨率比例化，适配任意相机分辨率）
+# ⚠ 灯条是细长目标：1080p + scale 0.5 时，5 m 处只有约 5×1 px（≈5 px²）。
+#   旧默认值 0.00015（≈58 px²）会把 1 m 以外的目标全部滤掉，这是「总是 skip」的主因。
+#   现在的值对应「绝对下限 3 px² + 比例 0.000008」，主要由长度/长宽比/成对把关。
+omni_gate_min_area_ratio: 0.000008
 omni_gate_max_area_ratio: 0.015
 omni_gate_max_color_ratio: 0.12     # 全屏命中占比超过 12% 判为大面积干扰色（大屏/地毯）
-omni_gate_min_fill_ratio: 0.55
+omni_gate_min_fill_ratio: 0.4
 omni_gate_min_aspect: 1.6
 omni_gate_max_aspect: 18.0
-omni_gate_min_len_px: 4.0
+omni_gate_min_len_px: 2.5           # 降采样后的最小灯条长度；4.0 时 8 m 外全丢
 
 # 灯条成对约束：把「画面里有红色」升级成「画面里有一块装甲板」
 omni_gate_pair_len_ratio_min: 0.65
 omni_gate_pair_len_ratio_max: 1.5
-omni_gate_pair_dy_ratio: 0.35
+omni_gate_pair_dy_ratio: 0.5        # 倾斜视角下两灯条 y 中心会拉开，0.35 太紧
 omni_gate_pair_gap_ratio_min: 1.2
 omni_gate_pair_gap_ratio_max: 5.0
 

@@ -36,8 +36,10 @@ struct ColorGateConfig
   bool enable = true;
   bool adaptive = true;
   bool debug = false;
-  // 主相机 tracking 时暂停本路 YOLO 推理（颜色层继续跑，保持命中证据）
-  bool suspend_on_main_tracking = true;
+  // 主相机 tracking 时暂停本路 YOLO 推理（颜色层继续跑，保持命中证据）。
+  // 默认关闭：YOLO 有效性优先于降低功耗 —— 主相机锁定期间全向继续工作，
+  // 这样目标被遮挡 / 短暂丢失时全向已有结果，不需要等去抖。
+  bool suspend_on_main_tracking = false;
 
   // ---- 频率 ----
   int divisor = 1;     // 空闲期颜色检测抽帧倍数（1 = 每帧，2 = 半帧率）
@@ -56,29 +58,33 @@ struct ColorGateConfig
   int v_ceil = 130;  // 自适应上限
 
   // ---- 面积 / 形状（比例化，适配任意分辨率）----
-  double min_area_ratio = 0.00015;
+  // ⚠ 灯条是「细长」目标：1 px 宽也能有 5~30 px² 的面积，按画面占比设下限会
+  //   在 2~3 m 就把目标全部滤掉。默认值按「1080p、scale=0.5、5 m 处约 5 px²」
+  //   标定：720×540 时 0.000008 只对应 3.1 px²，绝对下限 3 px² 由 detect() 兜底。
+  double min_area_ratio = 0.000008;
   double max_area_ratio = 0.015;
   double max_color_ratio = 0.12;  // 全屏命中占比闸门（大屏 / 地毯）
-  double min_fill_ratio = 0.55;
+  double min_fill_ratio = 0.4;
   double min_aspect = 1.6;
   double max_aspect = 18.0;
-  double min_len_px = 4.0;
+  double min_len_px = 2.5;
 
   // ---- 灯条成对约束：把「有颜色」升级成「有装甲板」----
   double pair_len_ratio_min = 0.65;
   double pair_len_ratio_max = 1.5;
-  double pair_dy_ratio = 0.35;
+  double pair_dy_ratio = 0.5;  // 倾斜视角下两条灯条的 y 中心会拉开，0.35 太紧
   double pair_gap_ratio_min = 1.2;
   double pair_gap_ratio_max = 5.0;
 
   // ---- 时序（毫秒）----
-  int debounce_hits = 2;
+  // YOLO 有效性优先：宁可多推理几帧，也不让目标漏在门控里。
+  int debounce_hits = 1;
   int miss_frames = 5;
   int hold_ms = 1000;
   int cooldown_ms = 400;
   int min_active_ms = 300;
   int max_active_ms = 5000;
-  int heartbeat_ms = 4000;  // 兜底心跳推理，0 = 关闭
+  int heartbeat_ms = 2000;  // 兜底心跳推理，0 = 关闭
 };
 
 struct ColorGateStats
@@ -92,6 +98,14 @@ struct ColorGateStats
   std::uint64_t yolo_hits = 0;
   std::uint64_t color_miss_yolo_hit = 0;  // 颜色层漏检但 YOLO 检出的帧
   std::uint64_t suspended = 0;            // 因主相机 tracking 而暂停推理的帧
+
+  // skip 的原因分解，用来快速定位「总是 skip」是哪一类
+  std::uint64_t skip_suspended = 0;  // 主相机 tracking
+  std::uint64_t skip_no_color = 0;   // 颜色层没命中
+  std::uint64_t skip_debounce = 0;   // 命中但未达去抖阈值
+  std::uint64_t skip_cooldown = 0;   // 冷却期内未命中
+  std::uint64_t skip_divisor = 0;    // 空闲期抽帧
+
   double color_ms = 0.0;
 };
 
@@ -114,7 +128,8 @@ public:
   ColorGate(
     const std::string & config_path, int camera_index,
     std::atomic<auto_aim::Color> * enemy_color = nullptr,
-    std::atomic<bool> * main_tracking = nullptr);
+    std::atomic<bool> * main_tracking = nullptr,
+    std::atomic<std::uint8_t> * robot_id = nullptr);
 
   // 本帧是否执行 YOLO。
   bool should_infer(const cv::Mat & bgr);
@@ -142,6 +157,7 @@ private:
   int camera_index_ = 0;
   std::atomic<auto_aim::Color> * enemy_color_ = nullptr;
   std::atomic<bool> * main_tracking_ = nullptr;
+  std::atomic<std::uint8_t> * robot_id_ = nullptr;
 
   auto_aim::Color color_ = auto_aim::Color::red;
   bool color_known_ = true;

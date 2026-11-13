@@ -59,8 +59,11 @@ const char * gate_state_name(GateState state)
 
 ColorGate::ColorGate(
   const std::string & config_path, int camera_index, std::atomic<auto_aim::Color> * enemy_color,
-  std::atomic<bool> * main_tracking)
-: camera_index_(camera_index), enemy_color_(enemy_color), main_tracking_(main_tracking)
+  std::atomic<bool> * main_tracking, std::atomic<std::uint8_t> * robot_id)
+: camera_index_(camera_index),
+  enemy_color_(enemy_color),
+  main_tracking_(main_tracking),
+  robot_id_(robot_id)
 {
   YAML::Node yaml;
   try {
@@ -136,7 +139,11 @@ ColorGate::ColorGate(
     const auto name = pick(yaml, "enemy_color", camera_index_, std::string("red"));
     color_ = (name == "red") ? auto_aim::Color::red : auto_aim::Color::blue;
   }
-  color_known_ = (color_ == auto_aim::Color::red || color_ == auto_aim::Color::blue);
+  // robot_id 还没上报时，enemy_color 只是配置兜底值，可能与实际阵营相反。
+  // 此时按「颜色未知」处理（红蓝都检测），开赛初期不会因为配置写反而全向失效。
+  const std::uint8_t initial_id = robot_id_ ? robot_id_->load(std::memory_order_relaxed) : 0;
+  const bool id_known = robot_id_ ? (initial_id != 0) : true;
+  color_known_ = id_known && (color_ == auto_aim::Color::red || color_ == auto_aim::Color::blue);
 
   v_min_ = static_cast<double>(cfg_.v_min);
   s_min_ = cfg_.s_min;
@@ -157,10 +164,14 @@ void ColorGate::sync_color()
   if (!enemy_color_) return;
 
   const auto color = enemy_color_->load(std::memory_order_relaxed);
-  if (color == color_) return;
+  const std::uint8_t id = robot_id_ ? robot_id_->load(std::memory_order_relaxed) : 0;
+  const bool id_known = robot_id_ ? (id != 0) : true;
+  const bool known = id_known && (color == auto_aim::Color::red || color == auto_aim::Color::blue);
+
+  if (color == color_ && known == color_known_) return;
 
   color_ = color;
-  color_known_ = (color == auto_aim::Color::red || color == auto_aim::Color::blue);
+  color_known_ = known;
 
   // 换色后旧的触发窗口不再可信，直接回到 Idle 并清空去抖计数
   state_ = GateState::Idle;
@@ -173,7 +184,7 @@ void ColorGate::sync_color()
   tools::logger()->info(
     "[ColorGate] cam{} 敌方颜色 -> {}（{}）", camera_index_,
     color_known_ ? auto_aim::COLORS[static_cast<int>(color_)] : "unknown",
-    color_known_ ? "来自串口 robot_id" : "颜色未同步，临时检测红蓝两色");
+    color_known_ ? "来自串口 robot_id" : "robot_id 未到，临时检测红蓝两色");
 }
 
 bool ColorGate::should_infer(const cv::Mat & bgr)
@@ -209,6 +220,7 @@ bool ColorGate::should_infer(const cv::Mat & bgr)
     last_infer_ = now;
     stats_.skipped++;
     stats_.suspended++;
+    stats_.skip_suspended++;
     stats_.state = state_;
     maybe_log(now);
     return false;
@@ -231,6 +243,7 @@ bool ColorGate::should_infer(const cv::Mat & bgr)
   if (state_ == GateState::Idle && cfg_.divisor > 1 && frame_counter_ % cfg_.divisor != 0) {
     hit_this_frame_ = false;
     stats_.skipped++;
+    stats_.skip_divisor++;
     stats_.state = state_;
     maybe_log(now);
     return false;
@@ -285,6 +298,16 @@ bool ColorGate::should_infer(const cv::Mat & bgr)
     last_infer_ = now;
   } else {
     stats_.skipped++;
+    // 按「为什么没推理」分类，日志里能直接看出是颜色层没命中还是别的原因
+    if (state_ == GateState::Idle) {
+      if (hit) {
+        stats_.skip_debounce++;
+      } else {
+        stats_.skip_no_color++;
+      }
+    } else if (state_ == GateState::Cooldown) {
+      stats_.skip_cooldown++;
+    }
   }
   stats_.state = state_;
   maybe_log(now);
@@ -318,14 +341,25 @@ void ColorGate::observe_yolo(const std::list<auto_aim::Armor> & armors)
   relax_streak_ = 0;
 
   const auto now = Clock::now();
-  if (now - last_relax_ < std::chrono::seconds(60)) return;
+  if (now - last_relax_ < std::chrono::seconds(30)) return;
   last_relax_ = now;
 
   v_min_ = std::max(static_cast<double>(cfg_.v_floor), v_min_ - 10.0);
   s_min_ = std::max(50, s_min_ - 10);
+
+  // 几何门同样会把目标卡掉（远处灯条降采样后只有 1~2 px 宽），必须一起放宽，
+  // 否则「YOLO 能检出、颜色层却永远不放行」的矛盾无法自愈。
+  // 每个量都有下限，连续放宽收敛到「主要靠成对约束」，不会退化成全通过。
+  cfg_.min_area_ratio = std::max(1e-5, cfg_.min_area_ratio * 0.6);
+  cfg_.min_len_px = std::max(1.5, cfg_.min_len_px * 0.8);
+  cfg_.min_fill_ratio = std::max(0.25, cfg_.min_fill_ratio * 0.9);
+  cfg_.pair_dy_ratio = std::min(0.8, cfg_.pair_dy_ratio * 1.1);
+
   tools::logger()->info(
-    "[ColorGate] cam{} 颜色层漏检但 YOLO 命中，单向放宽阈值：vmin={:.0f} smin={}", camera_index_,
-    v_min_, s_min_);
+    "[ColorGate] cam{} 颜色层漏检但 YOLO 命中，单向放宽：vmin={:.0f} smin={} "
+    "area_ratio={:.2e} len={:.1f} fill={:.2f} dy={:.2f}",
+    camera_index_, v_min_, s_min_, cfg_.min_area_ratio, cfg_.min_len_px, cfg_.min_fill_ratio,
+    cfg_.pair_dy_ratio);
 }
 
 ColorGateStats ColorGate::stats() const
@@ -375,8 +409,20 @@ bool ColorGate::detect(const cv::Mat & bgr)
   std::vector<std::vector<cv::Point>> contours;
   cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
-  const double area_min = std::max(12.0, cfg_.min_area_ratio * total);
+  // 绝对下限取 3 px²：12 px² 的旧值对细长灯条太严——1080p 降采样 0.5 后，
+  // 5 m 处的灯条只有约 5×1 px（≈5 px²），会在 1 m 之外全部被滤掉。
+  // 噪点通常只有 1~2 px²，仍被挡住；后续还有长宽比 / 填充率 / 成对约束。
+  const double area_min = std::max(3.0, cfg_.min_area_ratio * total);
   const double area_max = cfg_.max_area_ratio * total;
+
+  // 首次进入时把阈值换算成像素打印出来，现场调参不用再反推
+  if (cfg_.debug && frame_counter_ <= 1) {
+    tools::logger()->info(
+      "[ColorGate] cam{} detect 输入 {}x{} 面积门 {:.1f}~{:.0f} px² 长度门 {:.1f} px "
+      "成对 dy<{:.2f}×len",
+      camera_index_, mask.cols, mask.rows, area_min, area_max, cfg_.min_len_px,
+      cfg_.pair_dy_ratio);
+  }
 
   struct Bar
   {
@@ -393,7 +439,8 @@ bool ColorGate::detect(const cv::Mat & bgr)
     const cv::RotatedRect rect = cv::minAreaRect(contour);
     const double w = rect.size.width;
     const double h = rect.size.height;
-    if (w < 1.0 || h < 1.0) continue;
+    // 放宽到 0.5：降采样后远处灯条宽度就在 1 px 边缘，卡 1.0 会把它们全丢掉
+    if (w < 0.5 || h < 0.5) continue;
 
     const double len = std::max(w, h);
     const double wid = std::min(w, h);
@@ -407,6 +454,7 @@ bool ColorGate::detect(const cv::Mat & bgr)
 
   // 成对约束：装甲板一定由两条近似等长、近似水平排列的灯条组成。
   // 大屏是一整片低长宽比区域、衣服/旗帜没有成对竖直细长结构，都会在这里被拒。
+  bool paired = false;
   for (std::size_t i = 0; i < bars.size(); i++) {
     for (std::size_t j = i + 1; j < bars.size(); j++) {
       const double mean_len = 0.5 * (bars[i].length + bars[j].length);
@@ -422,11 +470,22 @@ bool ColorGate::detect(const cv::Mat & bgr)
       const double gap = dx / mean_len;
       if (gap < cfg_.pair_gap_ratio_min || gap > cfg_.pair_gap_ratio_max) continue;
 
-      return true;
+      paired = true;
+      break;
     }
+    if (paired) break;
   }
 
-  return false;
+  // 调试开关：每 30 帧打印一次中间量，用来判断是「颜色没过」还是「形状/成对没过」。
+  // 颜色占比 ≈ 0 且轮廓 0  -> 阈值或 enemy_color 不对
+  // 有轮廓但灯条 0        -> 面积/长宽比/填充率太严
+  // 有灯条但不成对        -> 灯条方向不对（旋转没配对）或成对阈值太严
+  if (cfg_.debug && frame_counter_ % 30 == 0) {
+    tools::logger()->info(
+      "[ColorGate] cam{} debug：颜色占比 {:.2f}% 轮廓 {} 灯条 {} 成对 {}", camera_index_,
+      color_ratio * 100.0, contours.size(), bars.size(), paired ? "是" : "否");
+  }
+  return paired;
 }
 
 cv::Mat ColorGate::color_mask(const cv::Mat & hsv) const
@@ -617,12 +676,22 @@ void ColorGate::maybe_log(std::chrono::steady_clock::time_point now)
   const double skip_ratio =
     stats_.frames > 0 ? 100.0 * static_cast<double>(stats_.skipped) / stats_.frames : 0.0;
 
+  const auto part = [&](std::uint64_t value) {
+    return stats_.frames > 0
+             ? 100.0 * static_cast<double>(value) / static_cast<double>(stats_.frames)
+             : 0.0;
+  };
+
+  // skip 的原因分解是排查「总是 skip」最快的手段：susp 高 = 主相机在 tracking；
+  // 无色高 = 颜色阈值/方向/颜色配置不对；去抖高 = 命中了但没连续够帧。
   tools::logger()->info(
-    "[ColorGate] cam{} {} hit={:.1f}% skip={:.0f}% trig={} hb={} susp={} yolo={} miss={} "
-    "vmin={:.0f} smin={} hshift={}/{} {:.2f}ms",
-    camera_index_, gate_state_name(state_), hit_ratio, skip_ratio, stats_.triggers,
-    stats_.heartbeats, stats_.suspended, stats_.yolo_hits, stats_.color_miss_yolo_hit, v_min_,
-    s_min_, h_shift_red_, h_shift_blue_, stats_.color_ms);
+    "[ColorGate] cam{} {} hit={:.1f}% skip={:.0f}% [susp {:.0f} | 无色 {:.0f} | 去抖 {:.0f} | "
+    "冷却 {:.0f} | 抽帧 {:.0f}] trig={} hb={} yolo/miss={}/{} vmin={:.0f} smin={} hshift={}/{} "
+    "{:.2f}ms",
+    camera_index_, gate_state_name(state_), hit_ratio, skip_ratio, part(stats_.skip_suspended),
+    part(stats_.skip_no_color), part(stats_.skip_debounce), part(stats_.skip_cooldown),
+    part(stats_.skip_divisor), stats_.triggers, stats_.heartbeats, stats_.yolo_hits,
+    stats_.color_miss_yolo_hit, v_min_, s_min_, h_shift_red_, h_shift_blue_, stats_.color_ms);
 }
 
 }  // namespace omniperception
