@@ -79,7 +79,7 @@ t_camera2gimbal: [0.0, 0.07764, 0.005]
 reticle_distance_m: 3.0
 
 #####-----目标跟踪（Tracker + EKF）-----#####
-min_detect_count: 5                 # 连续检测帧数达到此值后进入 tracking
+min_detect_count: 3                 # 连续检测帧数达到此值后进入 tracking
 max_temp_lost_count: 25             # 普通目标短暂丢失容忍帧数
 outpost_max_temp_lost_count: 75     # 前哨站短暂丢失容忍帧数
 

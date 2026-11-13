@@ -112,6 +112,14 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   io::soldier_can::Command command;
   std::optional<io::SoldierCanBoard::PoseSample> reference;
   auto command_frame_time = io::SoldierCanBoard::Clock::now();
+  constexpr auto fire_advice_hold_time = 20ms;
+  std::optional<io::SoldierCanBoard::TimePoint> fire_advice_deadline;
+  bool fire_advice_hold_available = false;
+  const auto clear_fire_advice = [&] {
+    command.fire_advice = false;
+    fire_advice_deadline.reset();
+    fire_advice_hold_available = false;
+  };
   const auto monotonic_us = [](io::SoldierCanBoard::TimePoint stamp) {
     return std::chrono::duration_cast<std::chrono::microseconds>(stamp.time_since_epoch()).count();
   };
@@ -119,10 +127,16 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const auto now = io::SoldierCanBoard::Clock::now();
     if (last_send != io::SoldierCanBoard::TimePoint::min() &&
         now - last_send < io::soldier_can::config::kMinimumSendPeriod) return;
+    // 相机没有新帧时也会重发，建议位仍按上次确认的时间过期。
+    if (fire_advice_deadline && now >= *fire_advice_deadline) clear_fire_advice();
     last_send = now;
     io::SoldierCanBoard::SendAttempt attempt{};
     // 发送间隔与图像帧间隔不同。复用最新解算时保留原参考，过期由 CAN 层改发空闲帧。
     const auto result = can_board.send(command, reference, &attempt);
+    if (command.fire_advice &&
+        (result != io::SoldierCanBoard::SendResult::sent || (attempt.payload[1] & 0x02) == 0)) {
+      clear_fire_advice();
+    }
     last_debug_tx = auto_aim::DebugCanTx{
       attempt.payload, monotonic_us(command_frame_time), monotonic_us(attempt.started_at),
       static_cast<int>(result), result != io::SoldierCanBoard::SendResult::transport_error};
@@ -138,7 +152,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const auto status = can_board.snapshot();
     const auto autoaim_active =
       status ? std::optional{status->pose.value.autoaim_active} : std::nullopt;
-    if (!autoaim_active.value_or(false)) command.fire_advice = false;
+    if (!autoaim_active.value_or(false)) clear_fire_advice();
     const char * mode = !autoaim_active ? "未知（无新鲜 0x511）" :
       *autoaim_active ? "自瞄模式（C 板已接管）" : "自瞄未接管";
     if (last_autoaim_active != autoaim_active) {
@@ -164,6 +178,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
     const auto session = frame_pose ? frame_pose->reference.session : can_board.session();
     if (session != last_session || enemy_color != last_enemy_color) {
       tracker.reset();
+      clear_fire_advice();
       last_session = session;
       last_enemy_color = enemy_color;
     }
@@ -206,12 +221,19 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
           note = ballistic_aim ? "ballistic" : "geometric";
           if (aim.control && std::isfinite(aim.yaw) && std::isfinite(aim.pitch)) {
             command.tracking = true;
-            command.fire_advice = autoaim_active.value_or(false) && state == "tracking" &&
+            const bool confirmed_this_frame = autoaim_active.value_or(false) && state == "tracking" &&
               std::any_of(armors.begin(), armors.end(), [&](const auto & armor) {
                 return armor.name == target->name && armor.type == target->armor_type &&
                        armor.xyz_in_world.allFinite() && armor.xyz_in_world.squaredNorm() > 0.0 &&
                        armor.ypd_in_world.allFinite() && armor.ypr_in_world.allFinite();
               });
+            const auto now = io::SoldierCanBoard::Clock::now();
+            // 只容忍刚确认的跟踪目标漏检一次，漏检帧不续期。
+            const bool hold_for_one_frame = autoaim_active.value_or(false) && state == "temp_lost" &&
+              fire_advice_hold_available && fire_advice_deadline && now < *fire_advice_deadline;
+            command.fire_advice = confirmed_this_frame || hold_for_one_frame;
+            fire_advice_hold_available = confirmed_this_frame;
+            if (confirmed_this_frame) fire_advice_deadline = now + fire_advice_hold_time;
             command.yaw_rad = tools::limit_rad(aim.yaw);
             // Aimer 的 pitch 向上为负，和 Solver 姿态的 Ry 方向相同。
             command.pitch_raw_rad = std::clamp(
@@ -225,6 +247,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
       }
     }
 
+    if (!command.fire_advice) clear_fire_advice();
     send_latest();
 
     const bool tx_tracking = last_debug_tx && (last_debug_tx->payload[1] & 0x01) != 0;
