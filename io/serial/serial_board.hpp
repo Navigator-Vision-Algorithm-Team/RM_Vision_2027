@@ -104,6 +104,11 @@ public:
   uint64_t imu_frame_count() const { return imu_frame_count_.load(); }
   uint8_t last_raw_roboid() const { return last_raw_roboid_.load(); }
 
+  // 已成功解析的 0x0001/0x0100 帧数（CRC 通过才计数）。
+  // 用来判断「启用裁判系统但下位机根本没转发」——那会让 is_game_started()
+  // 永远为 false，主相机与全向都不推理。
+  uint64_t game_status_frame_count() const { return game_status_frame_count_.load(); }
+
   /*
    * 导航转发用的裁判状态快照：一次加锁取出 0x0001 / 0x0201 中导航需要的三个量，
    * 附带「是否收到过对应帧」的有效位（用于避免把未初始化值当成真实数据发布）。
@@ -181,6 +186,7 @@ private:
   /* 诊断用：0x0502 帧计数与最近一次原始 roboid（含 0） */
   std::atomic<uint64_t> imu_frame_count_{0};
   std::atomic<uint8_t> last_raw_roboid_{0};
+  std::atomic<uint64_t> game_status_frame_count_{0};
   /* 「是否收到过对应帧」：只置位不清零，供裁判状态转发侧判断数据是否可用 */
   std::atomic<bool> game_status_received_{false};
   std::atomic<bool> robot_status_received_{false};

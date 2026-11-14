@@ -268,6 +268,12 @@ int main(int argc, char * argv[])
   bool last_game_started = serial_board.is_game_started();
   bool last_referee_ready = false;
 
+  // 裁判断流诊断：启用裁判但下位机没转发 0x0001 时，game_started_ 永远是 false，
+  // 推理总开关会一直关着，而除此之外没有任何报错。
+  auto last_referee_check = std::chrono::steady_clock::now();
+  uint64_t last_referee_frames = serial_board.game_status_frame_count();
+  bool referee_timeout_warned = false;
+
   // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
   // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
   while (!exiter.exit() && rclcpp::ok()) {
@@ -336,6 +342,29 @@ int main(int argc, char * argv[])
     const bool referee_ready = referee.game_status_valid && referee.robot_status_valid;
     if (referee_ready && !last_referee_ready) io::log_match_info(serial_board, "裁判就绪");
     last_referee_ready = referee_ready;
+
+    // 每 5 s 检查一次 0x0001 的帧计数：5 s 不增长说明下位机根本没转发裁判帧，
+    // game_started_ 会一直是 false，主相机和全向都不会推理。这条日志是排查
+    // 「裁判数据读不到 / 推理不启动」最直接的线索。
+    if (serial_board.referee_enabled()) {
+      const auto check_now = std::chrono::steady_clock::now();
+      if (check_now - last_referee_check >= std::chrono::seconds(5)) {
+        const uint64_t frames = serial_board.game_status_frame_count();
+        if (frames == last_referee_frames) {
+          if (!referee_timeout_warned) {
+            referee_timeout_warned = true;
+            tools::logger()->warn(
+              "[Main] 已启用裁判系统（use_referee_system=true）但 5s 内没有收到 "
+              "0x0001/0x0100：is_game_started() 将保持 false，主相机与全向都不会推理。"
+              "请检查下位机是否转发裁判帧 / 波特率，或把 use_referee_system 改为 false");
+          }
+        } else {
+          referee_timeout_warned = false;
+        }
+        last_referee_frames = frames;
+        last_referee_check = check_now;
+      }
+    }
 
     // 限时等待主相机结果：统一结果队列里主相机的优先级最高。
     // 必须带超时，相机掉线时也能回到 while 条件响应 Ctrl+C / SIGTERM。

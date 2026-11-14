@@ -316,6 +316,7 @@ void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
     game_status_ = gs;
   }
   game_status_received_.store(true);
+  game_status_frame_count_.fetch_add(1, std::memory_order_relaxed);
 
   // Update game-started state based on progress
   if (use_referee_system_) {

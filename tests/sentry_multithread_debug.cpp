@@ -87,6 +87,12 @@ int main(int argc, char * argv[])
   // 云台关节反馈：复用 SerialBoard 已有的串口接收线程（不额外占串口）
   serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
 
+  // 裁判状态转发：必须与正式入口（src/sentry_multithread.cpp）一致。
+  // 否则 debug 版跑起来时 Publish2Nav 的 referee_source_ 为空，
+  // publish_referee() 直接 return，导航侧收不到 referee/* 三个话题，
+  // 表现为「裁判数据没发出去 / 停在 WAIT_GAME_START」。
+  ros2.set_referee_source([&serial_board]() { return serial_board.referee_state(); });
+
   // Exiter 必须在 io::ROS2 之后构造：rclcpp::init 接管 SIGINT，后装的 handler 才生效
   tools::Exiter exiter;
 
@@ -245,6 +251,11 @@ int main(int argc, char * argv[])
   bool last_game_started = serial_board.is_game_started();
   bool last_referee_ready = false;
 
+  // 裁判断流诊断：启用裁判但收不到 0x0001 时推理永远不会启动
+  auto last_referee_check = std::chrono::steady_clock::now();
+  uint64_t last_referee_frames = serial_board.game_status_frame_count();
+  bool referee_timeout_warned = false;
+
   // 已应用的己方 ID：只在变化时更新颜色，避免每帧重复清目标
   uint8_t last_robot_id = 0;
   auto last_id_report = std::chrono::steady_clock::now();
@@ -308,6 +319,27 @@ int main(int argc, char * argv[])
     const bool referee_ready = referee.game_status_valid && referee.robot_status_valid;
     if (referee_ready && !last_referee_ready) io::log_match_info(serial_board, "裁判就绪");
     last_referee_ready = referee_ready;
+
+    // 5 s 内 0x0001 帧数不增长 -> 下位机没转发裁判帧，推理不会启动
+    if (serial_board.referee_enabled()) {
+      const auto check_now = std::chrono::steady_clock::now();
+      if (check_now - last_referee_check >= std::chrono::seconds(5)) {
+        const uint64_t frames = serial_board.game_status_frame_count();
+        if (frames == last_referee_frames) {
+          if (!referee_timeout_warned) {
+            referee_timeout_warned = true;
+            tools::logger()->warn(
+              "[Main] 已启用裁判系统（use_referee_system=true）但 5s 内没有收到 "
+              "0x0001/0x0100：is_game_started() 将保持 false，主相机与全向都不会推理。"
+              "请检查下位机是否转发裁判帧 / 波特率，或把 use_referee_system 改为 false");
+          }
+        } else {
+          referee_timeout_warned = false;
+        }
+        last_referee_frames = frames;
+        last_referee_check = check_now;
+      }
+    }
 
     // 限时等待主相机结果（统一队列里主相机优先级最高），
     // 相机掉线时也不会把 Ctrl+C / SIGTERM 堵死
