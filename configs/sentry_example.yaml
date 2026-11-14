@@ -409,7 +409,7 @@ t_camera2gimbal: [0.03084, 0.0, 0.08898]
 
 # 游戏控制相关
 # 在日常调试的时候这个地方就是这个地方是false
-use_referee_system: false
+use_referee_system: true
 game_start_progress_threshold: 4
 
 # test_nav：导航联调开关（只影响对外发布的 referee/* 话题，不影响自瞄的 is_game_started()）
