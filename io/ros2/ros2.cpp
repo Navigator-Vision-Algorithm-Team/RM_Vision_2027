@@ -23,6 +23,13 @@ ROS2::~ROS2()
   if (subscribe_spin_thread_ && subscribe_spin_thread_->joinable()) subscribe_spin_thread_->join();
 }
 
+void ROS2::set_referee_source(Publish2Nav::RefereeSource source)
+{
+  // 复用已有的发布节点与 spin 线程：裁判状态频率低，没必要再起一个节点
+  if (!publish2nav_) return;
+  publish2nav_->set_referee_source(std::move(source));
+}
+
 void ROS2::publish(const Eigen::Vector4d & target_pos) { publish2nav_->send_data(target_pos); }
 
 std::function<void(double, double)> ROS2::gimbal_joint_sender()

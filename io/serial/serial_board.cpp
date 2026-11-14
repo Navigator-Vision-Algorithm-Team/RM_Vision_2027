@@ -23,6 +23,14 @@ SerialBoard::SerialBoard(const std::string & config_path)
   baud_rate_ = yaml["baud_rate"].as<uint32_t>(921600);
   bullet_speed = yaml["bullet_speed"].as<double>(28.0);
   use_referee_system_ = yaml["use_referee_system"].as<bool>(false);
+  test_nav_ = yaml["test_nav"].as<bool>(false);
+  test_nav_state_.game_progress = 4;
+  test_nav_state_.maximum_hp = yaml["test_nav_max_hp"].as<int32_t>(400);
+  test_nav_state_.current_hp =
+    std::min(yaml["test_nav_hp"].as<int32_t>(test_nav_state_.maximum_hp),
+      test_nav_state_.maximum_hp);
+  test_nav_state_.game_status_valid = true;
+  test_nav_state_.robot_status_valid = true;
   game_start_progress_threshold_ = yaml["game_start_progress_threshold"].as<int>(4);
   // 到热量上限前 heat_stop_margin 就停火；回落到 limit - 2*margin 后恢复。
   // 17mm 单发热量约 10，默认 10 即"再打一发就顶到上限"时收手。
@@ -244,6 +252,23 @@ RobotStatus SerialBoard::robot_status() const
   return robot_status_;
 }
 
+RefereeState SerialBoard::referee_state() const
+{
+  if (test_nav_) return test_nav_state_;
+
+  RefereeState state;
+  {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    state.game_progress = game_status_.game_progress;
+    state.current_hp = robot_status_.remain_hp;
+    state.maximum_hp = robot_status_.max_hp;
+  }
+  if (state.maximum_hp > 0) state.current_hp = std::min(state.current_hp, state.maximum_hp);
+  state.game_status_valid = game_status_received_.load();
+  state.robot_status_valid = robot_status_received_.load();
+  return state;
+}
+
 bool SerialBoard::is_game_started() const
 {
   return game_started_.load();
@@ -387,6 +412,7 @@ void SerialBoard::handle_game_status(const referee_comm::v2027::game_status_t & 
     std::lock_guard<std::mutex> lock(status_mutex_);
     game_status_ = gs;
   }
+  game_status_received_.store(true);
 
   // Update game-started state based on progress
   if (use_referee_system_) {
@@ -426,6 +452,7 @@ void SerialBoard::handle_robot_status(const referee_comm::v2027::robot_status_t 
     heat_limit_ = pkt.shooter_barrel_heat_limit;
     robot_status_ = rs;
   }
+  robot_status_received_.store(true);
 
   if (new_team) {
     // 红方 1~11，蓝方 101~111（蓝方 = 红方 + 100），2/102 为保留位

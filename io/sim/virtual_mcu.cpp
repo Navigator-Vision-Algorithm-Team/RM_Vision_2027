@@ -259,12 +259,12 @@ void VirtualMcu::emit_referee(const Sink & sink)
     frame, sizeof(frame), seq_++, referee_comm::v2027::GAME_STATUS, &game, sizeof(game));
   if (n > 0) sink(frame, n);
 
-  // 0x0201 机器人状态：哨兵 400 血，17mm 热量相关字段给个常数
+  // 0x0201 机器人状态：血量与 ID 可配置，便于联调导航和敌我识别。
   referee_comm::v2027::robot_status_t robot{};
   robot.robot_id = robot_id_;
   robot.robot_level = 3;
-  robot.current_HP = 400;
-  robot.maximum_HP = 400;
+  robot.current_HP = cfg_.fake_hp;
+  robot.maximum_HP = cfg_.fake_max_hp;
   robot.shooter_barrel_cooling_value = 40;
   robot.shooter_barrel_heat_limit = 120;
   robot.chassis_power_limit = 40;

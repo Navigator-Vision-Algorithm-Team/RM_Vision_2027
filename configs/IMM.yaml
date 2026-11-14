@@ -183,7 +183,7 @@ measurement:
   #   范围: 0.05 ~ 1.0（**这一项影响最大**，优先调它）
   #   实车 PnP 实测较准，已从 1.0 收到 0.1：
   #     若 nis/dof 仍远小于 1，继续往下收；若反而 > 1.5，说明收过头
-  distance_gain: 0.5
+  distance_gain: 0.1
 
   # distance_offset: 距离方差的下限（Δangle=0 时的值）
   #   单位: m^2（σ = sqrt(值)，0.01 → σ ≈ 0.1 米）
