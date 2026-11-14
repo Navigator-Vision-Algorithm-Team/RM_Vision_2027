@@ -134,14 +134,17 @@ std::list<Armor> YOLOV5::parse(
     cv::Point class_id, color_id;
     int _class_id, _color_id;
     double score_color, score_num;
-    // 至此到这个地方，我们的_class_id 都有着0 to 7，也就是八个类别，但是我们是需要3个，1， 3， 哨兵，所以我们需要在一个地方过滤，而这个地方是刚拿到yolo的结果，并且处理的地方，我们在这个地方做一次过滤是最合理的。
+    // _class_id 是模型输出的类别索引（0~7）：0=哨兵 1=英雄 2=工程 3=三号 4=四号
+    // 5=五号 6=前哨站 7=基地。这里先做一次白名单过滤，只留下需要瞄准的类别。
     cv::minMaxLoc(classes_scores, NULL, &score_num, NULL, &class_id);
     cv::minMaxLoc(color_scores, NULL, &score_color, NULL, &color_id);
     _class_id = class_id.x;
     _color_id = color_id.x;
 
-    // 过滤掉不想要的类别
-    if (_class_id != 1 && _class_id != 3 && _class_id != 0) {
+    // 只放行需要瞄准的类别：0=哨兵 1=英雄 3=三号 4=四号。
+    // 2=工程 / 5=五号 / 6=前哨站 / 7=基地 仍然丢弃（与 decider 的 armor_filter 一致）。
+    // 四号以前漏在这里，导致检测框在进入 Armor 构造之前就被丢掉。
+    if (_class_id != 0 && _class_id != 1 && _class_id != 3 && _class_id != 4) {
       continue;
     }
 

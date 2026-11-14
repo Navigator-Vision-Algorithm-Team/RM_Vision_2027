@@ -173,24 +173,13 @@ Armor::Armor(
 
   ratio = max_length / max_width;
   color = color_id == 0 ? Color::blue : color_id == 1 ? Color::red : Color::extinguish;// 这个地方也要更改。没有着么多的选择。
-  // 现在的numID只有0 1 3，其中0是哨兵，1是英雄，3是步兵
-  // name = num_id == 0  ? ArmorName::sentry
-  //        : num_id > 5 ? ArmorName(num_id)
-  //                     : ArmorName(num_id - 1);
-  switch (num_id) {
-    case 0:
-      name = ArmorName::sentry;
-      break;
-    case 1:
-      name = ArmorName::one;  // 英雄
-      break;
-    case 3:
-      name = ArmorName::three;  // 步兵
-      break;
-    default:
-      name = ArmorName::not_armor;
-      break;
-  }
+  // 模型类别（num_id）定义：0=哨兵 1=英雄 2=工程 3=三号 4=四号 5=五号 6=前哨站 7=基地
+  // 与下面 YOLOV5+ROI 构造函数保持同一套映射，避免两种路径对同一类别给出不同名字。
+  // 注意：四号（num_id=4）以前被漏掉（只有 0/1/3 三个 case），会被判成 not_armor
+  // 后在 check_name 里过滤掉，表现为「瞄不到四号装甲板」。
+  name = num_id == 0  ? ArmorName::sentry
+         : num_id > 5 ? ArmorName(num_id)
+                      : ArmorName(num_id - 1);
   type = num_id == 1 ? ArmorType::big : ArmorType::small; // 这个地方只要numID == 1，说明是英雄，那就是大的装甲板。
 }
 
