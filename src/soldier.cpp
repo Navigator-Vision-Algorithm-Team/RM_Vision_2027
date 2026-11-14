@@ -52,6 +52,8 @@ int main(int argc, char * argv[])
 
   io::Camera camera(config_path);  // 不带 sursign：读取 camera_name / exposure_ms / gain
   io::SerialBoard serial_board(config_path);
+  // 启动时打印一次比赛信息（裁判系统 / robot_id / 弹速 / 血量）
+  io::log_match_info(serial_board, "启动");
 
   auto_aim::YOLO detector(config_path, false);
   auto_aim::Solver solver(config_path);

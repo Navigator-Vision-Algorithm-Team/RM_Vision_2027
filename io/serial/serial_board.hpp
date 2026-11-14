@@ -116,6 +116,9 @@ public:
   /* 比赛是否已开始；未启用裁判系统时恒为 true */
   bool is_game_started() const;
 
+  /* 配置里是否启用了裁判系统（use_referee_system），供启动日志区分两种「常开」 */
+  bool referee_enabled() const { return use_referee_system_; }
+
   /*
    * 读取并清除「下位机请求复位」标志（由 0x505 的 reset 位置位）。
    * 语义是读后清零，不要连续调用两次。
@@ -298,6 +301,19 @@ inline const char * robot_role_name(uint8_t id)
   }
   return "unknown";
 }
+
+/*
+ * 打印一次比赛信息快照，供各个入口（sentry / debug / 仿真）统一复用。
+ *
+ * 推荐调用时机：
+ *   · 程序启动（reason="启动"）—— 裁判帧通常还没到，主要确认裁判系统是否启用、
+ *     robot_id 有没有上报、弹速是多少
+ *   · 裁判帧首次到齐（reason="裁判就绪"）—— 补打真实血量与剩余时间
+ *   · is_game_started() 翻转（reason="比赛开始" / "比赛结束"）
+ *
+ * 数据未就绪时打印「未知」，不会用默认 0 冒充真实值。
+ */
+void log_match_info(const SerialBoard & board, const std::string & reason);
 
 }  // namespace io
 

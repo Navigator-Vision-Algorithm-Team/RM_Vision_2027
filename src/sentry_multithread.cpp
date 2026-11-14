@@ -62,6 +62,10 @@ int main(int argc, char * argv[])
   io::SerialBoard serial_board(config_path);
   tools::logger()->info("[Main] SerialBoard ready.");
 
+  // 启动时先打一次比赛信息：此刻裁判帧通常还没到，重点是让现场确认
+  // 「裁判系统是否启用、robot_id 有没有上报、弹速是多少」。
+  io::log_match_info(serial_board, "启动");
+
   // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
   // 与主循环（视觉处理）解耦，避免被主链路延迟。
   io::ROS2 ros2([&serial_board](const io::NavCommand & nav_command) {
@@ -260,6 +264,10 @@ int main(int argc, char * argv[])
   auto last_main_frame = std::chrono::steady_clock::now();
   auto last_stall_log = last_main_frame;
 
+  // 比赛信息只在状态翻转时打印一次，避免主循环每帧刷屏
+  bool last_game_started = serial_board.is_game_started();
+  bool last_referee_ready = false;
+
   // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
   // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
   while (!exiter.exit() && rclcpp::ok()) {
@@ -315,7 +323,19 @@ int main(int argc, char * argv[])
 
     // 开赛前关闭推理：相机仍持续出图（主相机帧照常入队，供录像使用），
     // 避免赛前 5 路 YOLO 空转占满 CPU。
-    pipeline.set_inference_enabled(serial_board.is_game_started());
+    const bool game_started = serial_board.is_game_started();
+    if (game_started != last_game_started) {
+      last_game_started = game_started;
+      io::log_match_info(serial_board, game_started ? "比赛开始" : "比赛结束");
+    }
+    pipeline.set_inference_enabled(game_started);
+
+    // 裁判帧首次到齐时补打一次：启动瞬间 0x0001/0x0201 往往还没到，
+    // 只打「尚未收到」的话现场看不到真实血量与剩余时间。
+    const auto referee = serial_board.referee_state();
+    const bool referee_ready = referee.game_status_valid && referee.robot_status_valid;
+    if (referee_ready && !last_referee_ready) io::log_match_info(serial_board, "裁判就绪");
+    last_referee_ready = referee_ready;
 
     // 限时等待主相机结果：统一结果队列里主相机的优先级最高。
     // 必须带超时，相机掉线时也能回到 while 条件响应 Ctrl+C / SIGTERM。

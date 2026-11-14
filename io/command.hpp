@@ -44,12 +44,14 @@ struct NavCommand
 };
 
 /*
- * 下位机上报、导航决策节点需要的那部分裁判状态（上行 0x0001 / 0x0201 帧）。
+ * 下位机上报、导航决策节点与本地日志共用的裁判状态（上行 0x0001 / 0x0201 帧）。
  *
  * 字段来源：
- *   game_progress  0x0001 的 game_info 高 4 位（0~15，按赛制 4 = 比赛中）
- *   current_hp     0x0201 的 remain_hp
- *   maximum_hp     0x0201 的 max_hp
+ *   game_type         0x0001 的 game_info 低 4 位
+ *   game_progress     0x0001 的 game_info 高 4 位（0~15，按赛制 4 = 比赛中）
+ *   stage_remain_time 0x0001 的阶段剩余时间（秒）
+ *   current_hp        0x0201 的 remain_hp
+ *   maximum_hp        0x0201 的 max_hp
  *
  * game_status_valid / robot_status_valid 表示「是否收到过对应帧」，与数据是否新鲜无关。
  * 转发侧必须按有效位决定发不发：导航侧把 maximum_hp == 0 解释为「满血值未知」并
@@ -57,7 +59,9 @@ struct NavCommand
  */
 struct RefereeState
 {
+  uint8_t game_type = 0;
   uint8_t game_progress = 0;
+  uint16_t stage_remain_time = 0;
   int32_t current_hp = 0;
   int32_t maximum_hp = 0;
   bool game_status_valid = false;

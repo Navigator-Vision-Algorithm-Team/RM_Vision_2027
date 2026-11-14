@@ -4,6 +4,8 @@
 #include <cmath>
 #include <stdexcept>
 
+#include <fmt/core.h>
+
 #include "io/serial/gimbal/protocol_crc.hpp"
 #include "io/sim/common.hpp"
 #include "io/sim/recorder.hpp"
@@ -31,7 +33,9 @@ SerialBoard::SerialBoard(const std::string & config_path)
   if (test_nav_) {
     const uint16_t max_hp = yaml["test_nav_max_hp"].as<uint16_t>(400);
     const uint16_t hp = yaml["test_nav_hp"].as<uint16_t>(max_hp);
+    test_nav_state_.game_type = 1;
     test_nav_state_.game_progress = 4;  // 4 = 比赛中，即导航侧的「比赛开始」信号
+    test_nav_state_.stage_remain_time = 300;
     test_nav_state_.maximum_hp = static_cast<int32_t>(max_hp);
     test_nav_state_.current_hp = static_cast<int32_t>(hp > max_hp ? max_hp : hp);
     test_nav_state_.game_status_valid = true;
@@ -277,7 +281,9 @@ RefereeState SerialBoard::referee_state() const
   RefereeState state;
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
+    state.game_type = game_status_.game_type;
     state.game_progress = game_status_.game_progress;
+    state.stage_remain_time = game_status_.stage_remain_time;
     state.current_hp = static_cast<int32_t>(robot_status_.remain_hp);
     state.maximum_hp = static_cast<int32_t>(robot_status_.max_hp);
   }
@@ -629,6 +635,36 @@ void SerialBoard::reconnect()
       std::this_thread::sleep_for(std::chrono::seconds(1));
     }
   }
+}
+
+void log_match_info(const SerialBoard & board, const std::string & reason)
+{
+  const auto state = board.referee_state();
+  const uint8_t id = board.robot_id();
+
+  // uint8_t 在 fmt 里可能被当成字符，统一显式转 int，日志里永远是数字
+  const std::string role = is_valid_robot_id(id) ? robot_role_name(id) : "未知";
+  const std::string id_text =
+    (id == 0) ? "未上报" : fmt::format("{}({})", static_cast<int>(id), role);
+  const std::string inference = board.is_game_started() ? "开" : "关";
+
+  // 血量：没收到 0x0201 时 maximum_hp 是 0，不能打印成 "0/0" 误导现场
+  const std::string hp = (state.robot_status_valid && state.maximum_hp > 0)
+                           ? fmt::format("{}/{}", state.current_hp, state.maximum_hp)
+                           : std::string("未知");
+
+  if (!state.game_status_valid) {
+    tools::logger()->info(
+      "[Main] 比赛信息[{}]：尚未收到 0x0001（裁判系统={}）robot_id={} 弹速={:.1f}m/s 推理={}",
+      reason, board.referee_enabled() ? "已启用" : "未启用，推理常开", id_text,
+      board.bullet_speed, inference);
+    return;
+  }
+
+  tools::logger()->info(
+    "[Main] 比赛信息[{}]：阶段={}(type={}) 剩余={}s 血量={} robot_id={} 弹速={:.1f}m/s 推理={}",
+    reason, static_cast<int>(state.game_progress), static_cast<int>(state.game_type),
+    static_cast<int>(state.stage_remain_time), hp, id_text, board.bullet_speed, inference);
 }
 
 }  // namespace io

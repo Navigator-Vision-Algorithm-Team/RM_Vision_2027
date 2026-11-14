@@ -50,6 +50,8 @@ int main(int argc, char * argv[])
   // io::CBoard cboard(config_path);
 
   io::SerialBoard serial_board(config_path);
+  // 启动时打印一次比赛信息（裁判系统 / robot_id / 弹速 / 血量）
+  io::log_match_info(serial_board, "启动");
 
   // [CAN] 多线程检测器，已改为单线程 YOLO
   // auto_aim::multithread::MultiThreadDetector detector(config_path);
