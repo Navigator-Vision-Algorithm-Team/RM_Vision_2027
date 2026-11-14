@@ -27,9 +27,10 @@ frame_rate_main: 120.0
 # 0 = 不启用全向感知 (等价于普通自瞄)
 omni_camera_count: 0
 
-# ----- 单主相机（omni_camera_count = 0）丢失目标时的云台行为 -----
-# true  = 自旋扫描：云台按固定步长持续转动，扩大搜索范围（缺省值，保持旧行为）
-# false = 原地保持：停在当前朝向，不转动
+# ----- 云台行为 -----
+# true = 比赛开始后始终自旋，并以小幅正弦波上下点头；此模式下禁用开火
+gimbal_wave_motion: true
+# 仅在 gimbal_wave_motion: false 时生效：无全向相机且丢失目标时是否自旋扫描
 spin_when_no_omni: true
 
 # ----- 全向相机 1 (sursign="omni1") -----

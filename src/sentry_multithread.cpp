@@ -1,6 +1,7 @@
 #include <fmt/core.h>
 
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <thread>
@@ -95,16 +96,17 @@ int main(int argc, char * argv[])
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
 
-  // 单主相机（omni_count == 0）时，丢失目标后的云台行为开关：
-  //   true  = 自旋扫描（旧行为，按固定步长持续转动）
-  //   false = 原地保持当前朝向
-  // 缺省 true，保持旧行为；yaml 里写 spin_when_no_omni: false 即可关闭自旋
+  // 全局波形关闭时，单主相机丢失目标后的旧行为开关。
   const bool spin_when_no_omni =
     yaml["spin_when_no_omni"] ? yaml["spin_when_no_omni"].as<bool>() : true;
+  const bool gimbal_wave_motion =
+    yaml["gimbal_wave_motion"] ? yaml["gimbal_wave_motion"].as<bool>() : true;
   if (omni_count == 0) {
     tools::logger()->info(
-      "[Main] single main camera, spin when lost: {}", spin_when_no_omni ? "on" : "off");
+      "[Main] legacy spin when lost: {}", spin_when_no_omni ? "on" : "off");
   }
+  tools::logger()->info(
+    "[Main] gimbal wave motion: {}", gimbal_wave_motion ? "on (shoot disabled)" : "off");
 
   // 缓冲时间， 确保全向相机初始化完成，避免出现空帧，但是我们的全向相机和主相机并不在同一个物理链路上，所以这个sleep并没有非常的必要
   // if (omni_count > 0) {
@@ -259,6 +261,10 @@ int main(int argc, char * argv[])
   bool has_omni_cache = false;
   double cached_omni_yaw = 0;
   double cached_omni_pitch = 0;
+  bool gimbal_wave_initialized = false;
+  std::chrono::steady_clock::time_point gimbal_wave_start;
+  double gimbal_wave_yaw_center = 0;
+  double gimbal_wave_pitch_center = 0;
 
   // 主相机最后出帧的时间：用于相机掉线时的告警（超时等待本身不会卡死主循环）
   auto last_main_frame = std::chrono::steady_clock::now();
@@ -453,6 +459,29 @@ int main(int argc, char * argv[])
 
     io::Command command{false, false, 0, 0};
 
+    auto apply_gimbal_wave = [&]() {
+      if (!gimbal_wave_initialized) {
+        gimbal_wave_initialized = true;
+        gimbal_wave_start = std::chrono::steady_clock::now();
+        gimbal_wave_yaw_center = gimbal_pos[0];
+        gimbal_wave_pitch_center = gimbal_pos[1];
+      }
+
+      constexpr double kSpinYawSpeed = 0.5;
+      constexpr double kPitchWaveAmplitude = 0.08726646259971647;  // 5 degrees
+      constexpr double kPitchWavePeriod = 2.0;
+      constexpr double kPi = 3.14159265358979323846;
+      const double elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - gimbal_wave_start).count();
+
+      command.control = true;
+      command.shoot = false;
+      command.yaw = tools::limit_rad(gimbal_wave_yaw_center + kSpinYawSpeed * elapsed);
+      command.pitch = tools::limit_rad(
+        gimbal_wave_pitch_center +
+        kPitchWaveAmplitude * std::sin(2.0 * kPi * elapsed / kPitchWavePeriod));
+    };
+
     // 0x0402 报文里没有 control 位（见 io/serial/gimbal/packet.hpp），固件对
     // pitch / yaw 无条件执行，control 只参与 shoot 的与运算。所以「视觉不接管」
     // 也必须下发一个合法角度：这里统一改写成当前姿态，保持云台不动。
@@ -463,7 +492,7 @@ int main(int argc, char * argv[])
       command.pitch = gimbal_pos[1];
     };
 
-    // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
+    // 全局波形关闭时，无全向相机且主相机丢失目标按 spin_when_no_omni 扫描或保持。
     // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
     // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
     // 直接走 else 会把云台拽回世界系 0 度。
@@ -486,6 +515,7 @@ int main(int argc, char * argv[])
       }
 
       main_recorder.record(img, q_main, timestamp);
+      if (gimbal_wave_motion) apply_gimbal_wave();
       hold_current_pose();
       serial_board.send(command);
     } else {
@@ -569,6 +599,7 @@ int main(int argc, char * argv[])
       }
 
       command.shoot = shooter.shoot(command, aimer, target, gimbal_pos);
+      if (gimbal_wave_motion) apply_gimbal_wave();
 
       // 绘制检测框和跟踪信息（用于赛后录像复盘）
       for (const auto & armor : armors) {
