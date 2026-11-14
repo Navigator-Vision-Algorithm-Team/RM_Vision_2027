@@ -187,6 +187,9 @@ private:
   std::atomic<uint64_t> imu_frame_count_{0};
   std::atomic<uint8_t> last_raw_roboid_{0};
   std::atomic<uint64_t> game_status_frame_count_{0};
+
+  /* 0x0001 长度不认识 / CRC 失败时只告警一次，避免每帧刷屏（接收线程独占访问） */
+  bool game_status_format_warned_ = false;
   /* 「是否收到过对应帧」：只置位不清零，供裁判状态转发侧判断数据是否可用 */
   std::atomic<bool> game_status_received_{false};
   std::atomic<bool> robot_status_received_{false};
@@ -204,8 +207,16 @@ private:
   /* 数据源异常时重建连接 */
   void reconnect();
 
-  /* 0x0001 比赛状态 */
+  /* 0x0001 比赛状态：压缩格式（下位机按本项目约定打包） */
   void handleGameStatus(const GameStatusPacket & pkt);
+
+  /* 0x0001 比赛状态：RM 裁判系统标准格式（下位机原样转发） */
+  void handleGameStatusStd(const GameStatusPacketStd & pkt);
+
+  /* 两种 0x0001 格式共用的落地逻辑（写快照 + 更新 game_started_） */
+  void applyGameStatus(
+    uint8_t game_type, uint8_t game_progress, uint16_t stage_remain_time,
+    uint64_t sync_timestamp);
 
   /* 0x0201 机器人状态 */
   void handleGameRobotStatus(const GameRobotStatusPacket & pkt);

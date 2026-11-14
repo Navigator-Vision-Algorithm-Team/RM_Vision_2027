@@ -99,9 +99,16 @@ struct bassPacket
 } __attribute__((packed));
 
 /*
- * cmd_id 0x0001 / 0x0100 — 比赛状态。
+ * cmd_id 0x0001 / 0x0100 — 比赛状态（本项目压缩格式）。
  *
  * game_info 的低 4 位是 game_type，高 4 位是 game_progress。
+ * 数据段 11 字节（1 + 2 + 8），整帧 20 字节。
+ *
+ * ⚠ 这与 RM 裁判系统标准协议不同：标准 0x0001 的 game_type / game_progress
+ *   是两个独立字节，数据段 12 字节、整帧 21 字节。下位机如果「原样转发」
+ *   标准裁判帧，用下面的结构体会整体错位 1 字节，CRC16 必然失败，并且
+ *   串口游标少前进 1 字节，会连累后续帧。两种格式都必须能解析，
+ *   见 GameStatusPacketStd 与 SerialBoard 里按 header.data_length 的分派。
  */
 struct GameStatusPacket
 {
@@ -111,6 +118,29 @@ struct GameStatusPacket
   uint64_t sync_timestamp;
   uint16_t crc16 = 0;
 } __attribute__((packed));
+
+/*
+ * cmd_id 0x0001 / 0x0100 — 比赛状态（RM 裁判系统标准格式，下位机原样转发时用）。
+ *
+ *   uint8  game_type
+ *   uint8  game_progress
+ *   uint16 stage_remain_time
+ *   uint64 SyncTimeStamp
+ * 数据段 12 字节，整帧 21 字节。
+ */
+struct GameStatusPacketStd
+{
+  Header header;
+  uint8_t game_type;
+  uint8_t game_progress;
+  uint16_t stage_remain_time;
+  uint64_t sync_timestamp;
+  uint16_t crc16 = 0;
+} __attribute__((packed));
+
+// 两种格式只差 1 字节：靠这两个断言锁住，改动结构体时能立刻发现
+static_assert(sizeof(GameStatusPacket) == 20, "压缩格式 0x0001 必须是 20 字节");
+static_assert(sizeof(GameStatusPacketStd) == 21, "标准格式 0x0001 必须是 21 字节");
 
 /*
  * cmd_id 0x0201 / 0x0102 — 机器人血量 / 射击 / 功率状态。

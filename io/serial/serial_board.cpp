@@ -305,11 +305,26 @@ bool SerialBoard::reset_pending()
 
 void SerialBoard::handleGameStatus(const GameStatusPacket & pkt)
 {
+  // 本项目压缩格式：game_info 高 4 位 = game_progress，低 4 位 = game_type
+  applyGameStatus(
+    static_cast<uint8_t>(pkt.game_info & 0x0F),
+    static_cast<uint8_t>((pkt.game_info >> 4) & 0x0F), pkt.stage_remain_time, pkt.sync_timestamp);
+}
+
+void SerialBoard::handleGameStatusStd(const GameStatusPacketStd & pkt)
+{
+  // RM 裁判系统标准格式：game_type / game_progress 是两个独立字节
+  applyGameStatus(pkt.game_type, pkt.game_progress, pkt.stage_remain_time, pkt.sync_timestamp);
+}
+
+void SerialBoard::applyGameStatus(
+  uint8_t game_type, uint8_t game_progress, uint16_t stage_remain_time, uint64_t sync_timestamp)
+{
   GameStatus gs;
-  gs.game_type = static_cast<uint8_t>(pkt.game_info & 0x0F);
-  gs.game_progress = static_cast<uint8_t>((pkt.game_info >> 4) & 0x0F);
-  gs.stage_remain_time = pkt.stage_remain_time;
-  gs.sync_timestamp = pkt.sync_timestamp;
+  gs.game_type = game_type;
+  gs.game_progress = game_progress;
+  gs.stage_remain_time = stage_remain_time;
+  gs.sync_timestamp = sync_timestamp;
 
   {
     std::lock_guard<std::mutex> lock(status_mutex_);
@@ -577,19 +592,82 @@ void SerialBoard::receiveThread()
       }
       case 0x0001:
       case 0x0100: {
-        data.resize(sizeof(GameStatusPacket) - sizeof(Header));
+        // 两种格式只差 1 字节，必须按 header.data_length 分派：
+        //   11 = 本项目压缩格式（整帧 20 字节）
+        //   12 = RM 裁判系统标准格式，下位机原样转发（整帧 21 字节）
+        // 如果统一按 sizeof 读，遇到标准格式会少读 1 字节：本帧 CRC 失败，
+        // 且串口游标错位，会连累后面所有帧。
+        const uint16_t payload_len = header.data_length;
+        const bool compact = (payload_len == sizeof(GameStatusPacket) - sizeof(Header) - 2);
+        const bool standard = (payload_len == sizeof(GameStatusPacketStd) - sizeof(Header) - 2);
+
+        if (!compact && !standard) {
+          // 长度不认识：读掉数据段 + CRC16 让游标归位，再靠下一帧重同步
+          if (payload_len < 256) {
+            std::vector<uint8_t> skip(static_cast<size_t>(payload_len) + 2);
+            read(skip.data(), skip.size());
+          }
+          if (!game_status_format_warned_) {
+            game_status_format_warned_ = true;
+            tools::logger()->warn(
+              "[SerialBoard] 0x0001 data_length={} 不认识（期望 11=本项目压缩格式 / "
+              "12=RM 标准格式），请确认下位机转发格式；该帧已跳过", payload_len);
+          }
+          break;
+        }
+
+        data.resize(static_cast<size_t>(payload_len) + 2);  // 数据段 + CRC16
         if (!read(data.data(), data.size())) { error_count++; break; }
         data.insert(data.begin(), headdata.begin(), headdata.end());
-        GameStatusPacket pkt = fromVector<GameStatusPacket>(data);
-        if (!crc16::Verify_CRC16_Check_Sum(
-              reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt))) break;
-        error_count = 0;
-        handleGameStatus(pkt);
+
+        const auto crc_ok = [](const auto & pkt) {
+          return crc16::Verify_CRC16_Check_Sum(
+            reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt));
+        };
+
+        if (standard) {
+          GameStatusPacketStd pkt = fromVector<GameStatusPacketStd>(data);
+          if (!crc_ok(pkt)) {
+            if (!game_status_format_warned_) {
+              game_status_format_warned_ = true;
+              tools::logger()->warn(
+                "[SerialBoard] 0x0001（RM 标准格式，21 字节）CRC16 校验失败，"
+                "检查下位机字节序 / 数据段长度");
+            }
+            break;
+          }
+          error_count = 0;
+          handleGameStatusStd(pkt);
+        } else {
+          GameStatusPacket pkt = fromVector<GameStatusPacket>(data);
+          if (!crc_ok(pkt)) {
+            if (!game_status_format_warned_) {
+              game_status_format_warned_ = true;
+              tools::logger()->warn(
+                "[SerialBoard] 0x0001（本项目压缩格式，20 字节）CRC16 校验失败，"
+                "检查下位机字节序 / 数据段长度");
+            }
+            break;
+          }
+          error_count = 0;
+          handleGameStatus(pkt);
+        }
         break;
       }
       case 0x0201:
       case 0x0102: {
-        data.resize(sizeof(GameRobotStatusPacket) - sizeof(Header));
+        // 0x0201 的 RM 标准格式与本项目结构体长度一致（数据段 13 字节），
+        // 但仍按 data_length 读取：下位机多/少发字节时至少不会让游标错位。
+        const uint16_t payload_len = header.data_length;
+        if (payload_len != sizeof(GameRobotStatusPacket) - sizeof(Header) - 2) {
+          if (payload_len < 256) {
+            std::vector<uint8_t> skip(static_cast<size_t>(payload_len) + 2);
+            read(skip.data(), skip.size());
+          }
+          break;
+        }
+
+        data.resize(static_cast<size_t>(payload_len) + 2);
         if (!read(data.data(), data.size())) { error_count++; break; }
         data.insert(data.begin(), headdata.begin(), headdata.end());
         GameRobotStatusPacket pkt = fromVector<GameRobotStatusPacket>(data);
