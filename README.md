@@ -86,8 +86,13 @@ sudo apt update
 sudo apt install -y \
   build-essential cmake \
   libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev \
-  libyaml-cpp-dev nlohmann-json3-dev libusb-1.0-0-dev
+  libyaml-cpp-dev nlohmann-json3-dev libusb-1.0-0-dev \
+  libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
 ```
+
+录像使用 FFmpeg 硬件 H.264 编码（`h264_vaapi`），需要 Intel 核显的 VAAPI 驱动作为**运行时**依赖；
+Ubuntu 上通常已随 `intel-media-va-driver` 或 `intel-media-va-driver-non-free` 提供，可用
+`vainfo` 确认。驱动缺失时录制器会自动回退 `libx264` 软编，不会影响程序运行，只是 CPU 占用上升。
 
 仓库包含海康与迈德威视相机 SDK 的 x86_64、aarch64 运行库。使用真实 USB 相机时，还需按设备安装 udev 规则并确认相机 SDK 与设备权限正常；海康规则示例位于 `io/hikrobot/udev/51-mvs.rules`。
 

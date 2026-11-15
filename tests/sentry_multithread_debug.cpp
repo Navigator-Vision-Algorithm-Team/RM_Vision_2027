@@ -47,7 +47,6 @@ const std::string keys =
 int main(int argc, char * argv[])
 {
   tools::Plotter plotter;
-  tools::Recorder main_recorder(30, "main");
 
   cv::CommandLineParser cli(argc, argv, keys);
   if (cli.has("help")) {
@@ -57,6 +56,13 @@ int main(int argc, char * argv[])
   auto config_path = cli.get<std::string>(0);
 
   auto yaml = tools::load(config_path);
+
+  // 录像参数：主相机出帧 120~150 fps，录像只按 record_fps_main 抽帧（默认 30）；
+  // quality 对应 VAAPI global_quality / libx264 crf，取值 1~51，越小越清晰
+  const double main_record_fps =
+    yaml["record_fps_main"] ? yaml["record_fps_main"].as<double>() : 30.0;
+  const int record_quality = yaml["record_quality"] ? yaml["record_quality"].as<int>() : 25;
+  tools::Recorder main_recorder(main_record_fps, "main", record_quality);
 
   // 坐标变换树：所有几何量（每个相机相对旋转轴的位置/姿态）都来自配置 tf.frames，
   // 代码里不写死任何安装尺寸。大yaw 与小yaw 作为两个动态关节，每帧由 0x502 刷新。
@@ -118,7 +124,10 @@ int main(int argc, char * argv[])
   for (int i = 1; i <= omni_count; i++) {
     auto sursign = "omni" + std::to_string(i);
     auto cam = std::make_unique<io::Camera>(config_path, sursign);
-    auto recorder = std::make_unique<tools::Recorder>(30, sursign);
+    // 全向相机实际出帧率来自 frame_rate_omniN（配置里是 15），按 30 声明会让回放速度翻倍
+    const double omni_record_fps =
+      yaml["frame_rate_" + sursign] ? yaml["frame_rate_" + sursign].as<double>() : 15.0;
+    auto recorder = std::make_unique<tools::Recorder>(omni_record_fps, sursign, record_quality);
 
     //缓冲时间
     if (i < omni_count) {

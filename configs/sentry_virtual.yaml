@@ -13,6 +13,13 @@ com_port: '/dev/ttyACM0'            # 串口设备路径
 baud_rate: 921600                    # 波特率
 bullet_speed: 28.0                   # 默认弹速 (m/s), 会被下位机数据覆盖
 
+# ----- 录像 (tools::Recorder) -----
+# 产物：records/<相机名>/<启动时刻>.mkv（H.264）与同名 .txt（每行 "t w x y z"，秒 + 四元数）。
+# 编码优先 h264_vaapi（Intel iGPU 硬件编码），不可用时自动回退 libx264，两者都失败则不录像。
+# 全向相机的录像帧率不需要在这里配：直接用上面各路的 frame_rate_omniN（当前 15）。
+record_fps_main: 30.0        # 主相机录像帧率，Hz；范围 10 ~ 60；调大更连贯，但编码与磁盘线性增加
+record_quality: 25           # 编码质量，1 ~ 51，越小越清晰、体积越大；对应 VAAPI global_quality / libx264 crf
+
 # ----- 主相机 (sursign="main") -----
 # camera_name 决定相机类型: "hikrobot" | "mindvision" | "Usbcamera"
 camera_name_main: "fake"

@@ -81,5 +81,6 @@ target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools 
 add_executable(referee_forward_test referee_forward_test.cpp)
 target_link_libraries(referee_forward_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 
+# soldier_debug 只在 io_soldier_can 存在时定义，其 install 写在上面那个 if 块里。
 install(TARGETS sentry_multithread_debug yolodebug referee_forward_test
         RUNTIME DESTINATION bin)
