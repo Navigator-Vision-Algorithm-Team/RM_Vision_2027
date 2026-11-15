@@ -59,6 +59,15 @@ void Tracker::reset()
   tools::logger()->info("[Tracker] Reset by MCU signal.");
 }
 
+void Tracker::set_enemy_color(Color color)
+{
+  // 颜色没变就不动，避免每帧收到同一 ID 时反复清目标
+  if (color == enemy_color_) return;
+  enemy_color_ = color;
+  reset();  // 换色后旧目标属于另一方，清掉重跟
+  tools::logger()->info("[Tracker] enemy color -> {}", color == Color::red ? "red" : "blue");
+}
+
 const Target * Tracker::track(
   std::list<Armor> & armors, std::chrono::steady_clock::time_point t, bool use_enemy_color,
   cv::Size image_size)
@@ -71,11 +80,8 @@ const Target * Tracker::track(
     tools::logger()->warn("[Tracker] Large dt: {:.3f}s", dt);
     state_ = "lost";
   }
-  // 默认按配置过滤；soldier 主循环已使用 C 板 robot_id 选择并过滤敌方颜色，
-  // 因此会传 false，避免这里再用静态 YAML 颜色把正确候选删掉。
-  if (use_enemy_color) {
-    armors.remove_if([&](const auto_aim::Armor & a) { return a.color != enemy_color_; });
-  }
+  // 过滤掉非我方装甲板
+  armors.remove_if([&](const auto_aim::Armor & a) { return a.color != enemy_color_; });
 
   // 过滤前哨站顶部装甲板
   // armors.remove_if([this](const auto_aim::Armor & a) {

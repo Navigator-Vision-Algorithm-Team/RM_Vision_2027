@@ -150,18 +150,12 @@ cmake -S . -B build -DOpenVINO_DIR=/path/to/openvino/runtime/cmake
 
 启动前请先核对对应 YAML 文件中的相机型号、相机参数、串口设备路径、波特率、敌方颜色和本车标定数据。仓库配置中的示例参数不一定适用于你的车辆。
 
-步兵使用达妙 USB-CAN SDK，构建时需要指定 SDK 路径，见 [步兵 CAN 构建步骤](io/can/README.md#在小电脑上构建步兵程序)。
-
 ```bash
 # 标准自瞄：需要匹配的相机、下位机和实车配置
 ./build/mt_standard configs/mtstandard.yaml
 
 # 步兵入口
 ./build/soldier configs/soldier.yaml
-
-# 步兵 Foxglove 调试：复用正式步兵的 CAN 2.0 处理，构建时需要 ROS 2
-cmake --build build --target soldier_debug
-./build/tests/soldier_debug
 
 # 哨兵入口：仅在构建时检测到 ROS 2 依赖后可用
 ./build/sentry_multithread configs/sentry_example.yaml
@@ -198,6 +192,10 @@ python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts
 - [Kalman 调参文档](docs/kalman_tuning.md)
 - [相机标定流程](calibration/README.md)
 
+## 开发规范
+
+仓库的注释与编码要求见 [docs/coding_standards.md](docs/coding_standards.md)，属于强制规范：文件头说明整体作用、函数注释说明功能与输入输出、变量声明处说明含义、配置项逐个说明意义。该文档应作为固定上下文持续加载，新增或修改代码前请先阅读。
+
 ## 测试与验证
 
 默认构建中包含虚拟数据源运行器，可先运行：
@@ -211,9 +209,10 @@ python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts
 ## 参与开发
 
 1. 从对应入口及配置文件阅读当前实现，优先使用虚拟数据源复现问题。
-2. 修改后本地构建并运行相关目标；涉及通信或坐标系时同步核对相应协议和标定文档。
-3. 提交代码时说明目标程序、配置变化、测试方式和未覆盖的硬件条件。
-4. 不要提交运行日志、录制数据、个人设备路径、密钥或未经授权分发的模型/SDK 文件。
+2. 改动前先遵守 [docs/coding_standards.md](docs/coding_standards.md)：新增文件、函数、变量与配置项必须按规范写注释。
+3. 修改后本地构建并运行相关目标；涉及通信或坐标系时同步核对相应协议和标定文档。
+4. 提交代码时说明目标程序、配置变化、测试方式和未覆盖的硬件条件。
+5. 不要提交运行日志、录制数据、个人设备路径、密钥或未经授权分发的模型/SDK 文件。
 
 ## 致谢与许可
 

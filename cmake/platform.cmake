@@ -24,7 +24,7 @@ string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _sp_proc)
 if(_sp_proc MATCHES "^(x86_64|amd64|x64)$")
   set(SP_PROCESSOR "x86_64")
   set(SP_ARCH "amd64")
-  set(SP_DMCAN_ARCH "x86_64")
+  set(SP_DMCAN_ARCH "x86_64")   # 达妙 CAN SDK 的目录名，与 SP_ARCH 不同名
 elseif(_sp_proc MATCHES "^(aarch64|arm64|armv8.*)$")
   set(SP_PROCESSOR "aarch64")
   set(SP_ARCH "arm64")

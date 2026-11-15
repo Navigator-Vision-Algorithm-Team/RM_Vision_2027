@@ -20,7 +20,16 @@ Decider::Decider(const std::string & config_path) : count_(0)
   auto yaml = YAML::LoadFile(config_path);
   enemy_color_ =
     (yaml["enemy_color"].as<std::string>() == "red") ? auto_aim::Color::red : auto_aim::Color::blue;
-  mode_ = yaml["mode"].as<double>(MODE_ONE);
+  mode_ = yaml["mode"].as<double>();
+}
+
+void Decider::set_enemy_color(auto_aim::Color color)
+{
+  if (color == enemy_color_) return;
+  enemy_color_ = color;
+  tools::logger()->info(
+    "[Decider] 敌我颜色由裁判 robot_id 更新为敌人={}（配置 enemy_color 被覆盖）",
+    auto_aim::COLORS[static_cast<int>(color)]);
 }
 
 io::Command Decider::decide(
@@ -183,14 +192,9 @@ Eigen::Vector2d Decider::delta_angle(
 */
 bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
 {
-  return armor_filter(armors, enemy_color_);
-}
-
-bool Decider::armor_filter(std::list<auto_aim::Armor> & armors, auto_aim::Color enemy_color)
-{
   if (armors.empty()) return true;
   // 过滤非敌方装甲板
-  armors.remove_if([enemy_color](const auto_aim::Armor & a) { return a.color != enemy_color; });
+  armors.remove_if([&](const auto_aim::Armor & a) { return a.color != enemy_color_; });
 
   // 25赛季没有5号装甲板
   armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::five; });
