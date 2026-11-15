@@ -51,16 +51,10 @@ int main(int argc, char * argv[])
   if (tf_tree.empty()) {
     tools::logger()->warn(
       "[Main] 配置里没有 tf.frames：主相机/全向相机将使用各自的回退外参（未标定则为安装角近似）");
-  } else {
-    std::string frames;
-    for (const auto & f : tf_tree.frames()) frames += f + " ";
-    tools::logger()->info("[Main] tf frames: {}", frames);
   }
 
-  tools::logger()->info("[Main] Initializing SerialBoard...");
   // 串口初始化
   io::SerialBoard serial_board(config_path);
-  tools::logger()->info("[Main] SerialBoard ready.");
 
   // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
   // 与主循环（视觉处理）解耦，避免被主链路延迟。
@@ -83,10 +77,8 @@ int main(int argc, char * argv[])
   // 后安装的 handler 才能让 Ctrl+C 重新置位退出标志。
   tools::Exiter exiter;
 
-  tools::logger()->info("[Main] Opening camera...");
   // 相机初始化
   io::Camera camera(config_path, "main");
-  tools::logger()->info("[Main] Camera ready: {}", camera.device_name());
 
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
@@ -97,11 +89,6 @@ int main(int argc, char * argv[])
   // 缺省 true，保持旧行为；yaml 里写 spin_when_no_omni: false 即可关闭自旋
   const bool spin_when_no_omni =
     yaml["spin_when_no_omni"] ? yaml["spin_when_no_omni"].as<bool>() : true;
-  if (omni_count == 0) {
-    tools::logger()->info(
-      "[Main] single main camera, spin when lost: {}", spin_when_no_omni ? "on" : "off");
-  }
-
   // 缓冲时间， 确保全向相机初始化完成，避免出现空帧，但是我们的全向相机和主相机并不在同一个物理链路上，所以这个sleep并没有非常的必要
   // if (omni_count > 0) {
   //   std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -149,9 +136,9 @@ int main(int argc, char * argv[])
     omniperception::load_omni_pnp_config(cfg, yaml, i);
 
     // 外参优先级：tf 树 > yaml 的 omni_R/t_camera2gimbal_N > 安装角近似。
-    // 三态日志（避免"明明用了 tf 却报警说要用安装角"的误导）：
-    //   ① tf 查到          -> debug：实车正常路径，不打扰
-    //   ② tf 无、yaml 有    -> info ：合法降级（例如仿真配置没写 tf）
+    // 按外参来源处理，避免"明明用了 tf 却报警说要用安装角"的误导：
+    //   ① tf 查到          -> 使用 tf 外参，不输出日志
+    //   ② tf 无、yaml 有    -> 使用 yaml 外参，不输出日志
     //   ③ tf 无、yaml 也无  -> warn ：真的在走安装角近似（t=0，近距离有视差误差）
     // 进入本块时 cfg.has_extrinsic 的含义是「yaml 是否给了有效外参」。
     {
@@ -164,18 +151,11 @@ int main(int argc, char * argv[])
         cfg.R_camera2gimbal = T_cam2yaw.R;
         cfg.t_camera2gimbal = T_cam2yaw.t;
         cfg.has_extrinsic = true;
-        tools::logger()->debug(
-          "[omni{}] 外参 <- tf ({} -> {})", i, frame, io::tf::Tree::YAW_AXIS);
       } else if (!cfg.has_extrinsic) {
         // ③ 两个来源都没有：decider 会退回 mount_to_R_camera2gimbal()，且 t 置 0。
         tools::logger()->warn(
           "[omni{}] tf 里没有 {} -> {}，且未配置 omni_R/t_camera2gimbal_{} "
           "-> 将用安装角 mount_yaw/mount_pitch 近似外参（t=0，近距离有视差误差）",
-          i, frame, io::tf::Tree::YAW_AXIS, i);
-      } else {
-        // ② tf 缺失但 yaml 给了有效 R/t：合法降级，不是错误。
-        tools::logger()->info(
-          "[omni{}] tf 里没有 {} -> {}，外参沿用 yaml 的 omni_R/t_camera2gimbal_{}",
           i, frame, io::tf::Tree::YAW_AXIS, i);
       }
     }
@@ -233,11 +213,8 @@ int main(int argc, char * argv[])
     io::tf::Transform T_cam2plate;
     if (tf_tree.lookup(io::tf::Tree::MAIN_CAM, io::tf::Tree::SMALL_YAW, T_cam2plate)) {
       solver.set_extrinsic(T_cam2plate.R, T_cam2plate.t);
-      tools::logger()->info("[Main] main_cam extrinsic <- tf tree");
     }
   }
-
-  bool game_started_logged = false;
 
     // 全向感知缓存：全向发现目标后的 yaw/pitch，主相机锁定前反复播报
   bool has_omni_cache = false;
@@ -246,7 +223,7 @@ int main(int argc, char * argv[])
 
   // 主相机最后出帧的时间：用于相机掉线时的告警（超时等待本身不会卡死主循环）
   auto last_main_frame = std::chrono::steady_clock::now();
-  auto last_stall_log = last_main_frame;
+  bool camera_stall_warning_logged = false;
 
   // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
   // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
@@ -264,15 +241,15 @@ int main(int argc, char * argv[])
     if (status == auto_aim::multithread::WaitStatus::Timeout) {
       const auto now = std::chrono::steady_clock::now();
       const double stalled = std::chrono::duration<double>(now - last_main_frame).count();
-      if (stalled >= 2.0 &&
-          std::chrono::duration<double>(now - last_stall_log).count() >= 2.0) {
-        last_stall_log = now;
+      if (stalled >= 2.0 && !camera_stall_warning_logged) {
+        camera_stall_warning_logged = true;
         tools::logger()->warn("[Main] 主相机已 {:.1f}s 没有新帧，继续等待...", stalled);
       }
       continue;
     }
 
     last_main_frame = std::chrono::steady_clock::now();
+    camera_stall_warning_logged = false;
     if (frame.img.empty()) {
       continue;
     }
@@ -315,19 +292,10 @@ int main(int argc, char * argv[])
 
     // 比赛未开始时跳过自瞄逻辑（裁判系统控制）
     if (!serial_board.is_game_started()) {
-      if (!game_started_logged) {
-        game_started_logged = true;
-        tools::logger()->info("[Main] Game not started yet, waiting...");
-      }
       //注意这个地方的功耗···检查之后似乎没有很多
       main_recorder.record(img, q_main, timestamp);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
-    }
-
-    if (!game_started_logged) {
-      game_started_logged = true;
-      tools::logger()->info("[Main] Game started! Entering detection & tracking loop");
     }
 
     // 主相机在小yaw 上，Solver 的 "gimbal" 就是小yaw 板
