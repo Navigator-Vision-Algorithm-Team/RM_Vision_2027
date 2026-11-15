@@ -37,7 +37,7 @@ find_package(nlohmann_json REQUIRED)
 find_package(OpenVINO REQUIRED)
 
 include_directories(${EIGEN3_INCLUDE_DIR})
-include_directories(${OpenCV_INCLUDE_DIRS})
+include_directories(SYSTEM ${OpenCV_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR})
 
 option(SP_BUILD_SOLDIER "Build soldier with the Damiao USB-CAN SDK" ON)

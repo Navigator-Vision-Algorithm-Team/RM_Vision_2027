@@ -46,21 +46,15 @@ int main(int argc, char * argv[])
   auto yaml = tools::load(config_path);
 
   // 坐标变换树：所有几何量（每个相机相对旋转轴的位置/姿态）都来自配置 tf.frames，
-  // 代码里不写死任何安装尺寸。大yaw 与小yaw 作为两个动态关节，每帧由 0x502 刷新。
+  // 代码里不写死任何安装尺寸。大yaw 与小yaw 作为两个动态关节，每帧由 0x0503 刷新。
   io::tf::Tree tf_tree = io::tf::load_tree(yaml);
   if (tf_tree.empty()) {
     tools::logger()->warn(
       "[Main] 配置里没有 tf.frames：主相机/全向相机将使用各自的回退外参（未标定则为安装角近似）");
-  } else {
-    std::string frames;
-    for (const auto & f : tf_tree.frames()) frames += f + " ";
-    tools::logger()->info("[Main] tf frames: {}", frames);
   }
 
-  tools::logger()->info("[Main] Initializing SerialBoard...");
   // 串口初始化
   io::SerialBoard serial_board(config_path);
-  tools::logger()->info("[Main] SerialBoard ready.");
 
   // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
   // 与主循环（视觉处理）解耦，避免被主链路延迟。
@@ -68,7 +62,7 @@ int main(int argc, char * argv[])
     serial_board.send(nav_command);
   });
 
-  // 云台关节反馈：复用 SerialBoard 已有的串口接收线程，收到一帧 0x502 就发布一次
+  // 云台关节反馈：复用 SerialBoard 已有的串口接收线程，收到一帧 0x0503 就发布一次
   // JointState，不额外启动程序、不重复占用串口。
   serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
 
@@ -83,10 +77,8 @@ int main(int argc, char * argv[])
   // 后安装的 handler 才能让 Ctrl+C 重新置位退出标志。
   tools::Exiter exiter;
 
-  tools::logger()->info("[Main] Opening camera...");
   // 相机初始化
   io::Camera camera(config_path, "main");
-  tools::logger()->info("[Main] Camera ready: {}", camera.device_name());
 
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
@@ -97,11 +89,6 @@ int main(int argc, char * argv[])
   // 缺省 true，保持旧行为；yaml 里写 spin_when_no_omni: false 即可关闭自旋
   const bool spin_when_no_omni =
     yaml["spin_when_no_omni"] ? yaml["spin_when_no_omni"].as<bool>() : true;
-  if (omni_count == 0) {
-    tools::logger()->info(
-      "[Main] single main camera, spin when lost: {}", spin_when_no_omni ? "on" : "off");
-  }
-
   // 缓冲时间， 确保全向相机初始化完成，避免出现空帧，但是我们的全向相机和主相机并不在同一个物理链路上，所以这个sleep并没有非常的必要
   // if (omni_count > 0) {
   //   std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -149,9 +136,9 @@ int main(int argc, char * argv[])
     omniperception::load_omni_pnp_config(cfg, yaml, i);
 
     // 外参优先级：tf 树 > yaml 的 omni_R/t_camera2gimbal_N > 安装角近似。
-    // 三态日志（避免"明明用了 tf 却报警说要用安装角"的误导）：
-    //   ① tf 查到          -> debug：实车正常路径，不打扰
-    //   ② tf 无、yaml 有    -> info ：合法降级（例如仿真配置没写 tf）
+    // 按外参来源处理，避免"明明用了 tf 却报警说要用安装角"的误导：
+    //   ① tf 查到          -> 使用 tf 外参，不输出日志
+    //   ② tf 无、yaml 有    -> 使用 yaml 外参，不输出日志
     //   ③ tf 无、yaml 也无  -> warn ：真的在走安装角近似（t=0，近距离有视差误差）
     // 进入本块时 cfg.has_extrinsic 的含义是「yaml 是否给了有效外参」。
     {
@@ -164,18 +151,11 @@ int main(int argc, char * argv[])
         cfg.R_camera2gimbal = T_cam2yaw.R;
         cfg.t_camera2gimbal = T_cam2yaw.t;
         cfg.has_extrinsic = true;
-        tools::logger()->debug(
-          "[omni{}] 外参 <- tf ({} -> {})", i, frame, io::tf::Tree::YAW_AXIS);
       } else if (!cfg.has_extrinsic) {
         // ③ 两个来源都没有：decider 会退回 mount_to_R_camera2gimbal()，且 t 置 0。
         tools::logger()->warn(
           "[omni{}] tf 里没有 {} -> {}，且未配置 omni_R/t_camera2gimbal_{} "
           "-> 将用安装角 mount_yaw/mount_pitch 近似外参（t=0，近距离有视差误差）",
-          i, frame, io::tf::Tree::YAW_AXIS, i);
-      } else {
-        // ② tf 缺失但 yaml 给了有效 R/t：合法降级，不是错误。
-        tools::logger()->info(
-          "[omni{}] tf 里没有 {} -> {}，外参沿用 yaml 的 omni_R/t_camera2gimbal_{}",
           i, frame, io::tf::Tree::YAW_AXIS, i);
       }
     }
@@ -192,24 +172,21 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
-  // 配置里的 enemy_color 只是「还没收到 0x0502 roboid」时的兜底。启动时先把它
-  // 推断出的己方/敌方颜色打出来，现场一眼就能确认视觉认为自己是哪一方。
   const auto config_enemy_color =
     yaml["enemy_color"].as<std::string>() == "red" ? auto_aim::Color::red
                                                   : auto_aim::Color::blue;
-  const auto config_own_color =
-    config_enemy_color == auto_aim::Color::red ? auto_aim::Color::blue : auto_aim::Color::red;
-  tools::logger()->info(
-    "[Main] 己方颜色（配置兜底）= {}，敌方 = {}；收到 0x0502 roboid 后按编号表覆盖",
-    auto_aim::COLORS[static_cast<int>(config_own_color)],
-    auto_aim::COLORS[static_cast<int>(config_enemy_color)]);
-
-  // 全向推理线程与主线程共享的运行时状态（目前只有敌方颜色）。
-  // make_omni_jobs 给每路全向建一个独立 Decider，主线程的
-  // Decider::set_enemy_color 传不进推理线程；不同步的后果是全向检测到的装甲板
-  // 被 armor_filter 按旧颜色全部剔除，表现为「全向感知完全失效」。
   auto omni_state = std::make_shared<omniperception::OmniSharedState>();
   omni_state->set_enemy_color(config_enemy_color);
+
+  // 敌我颜色以新通信协议转发的裁判 0x0201 robot_id 为准；未收到时使用配置兜底。
+  auto refresh_enemy_color = [&]() {
+    const auto own_red = serial_board.own_team_red();
+    if (!own_red) return;
+    const auto enemy_color = *own_red ? auto_aim::blue : auto_aim::red;
+    tracker.set_enemy_color(enemy_color);
+    decider.set_enemy_color(enemy_color);
+    omni_state->set_enemy_color(enemy_color);
+  };
 
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程，
   // 相机数据只喂给自己的实例，不再出现多路相机争抢同一个 OpenVINO InferRequest。
@@ -236,17 +213,8 @@ int main(int argc, char * argv[])
     io::tf::Transform T_cam2plate;
     if (tf_tree.lookup(io::tf::Tree::MAIN_CAM, io::tf::Tree::SMALL_YAW, T_cam2plate)) {
       solver.set_extrinsic(T_cam2plate.R, T_cam2plate.t);
-      tools::logger()->info("[Main] main_cam extrinsic <- tf tree");
     }
   }
-
-  bool game_started_logged = false;
-
-  // 敌我颜色动态识别：串口 0x0502 的 roboid（唯一来源）给出己方 ID，
-  // 按附录二编号表（1~11 红方、101~111 蓝方）判定己方颜色，敌方恒为反色。
-  // 配置里的 enemy_color 只在还没收到 ID 时兜底，收到后按实际对阵覆盖。
-  uint8_t last_robot_id = 0;
-  auto last_id_report = std::chrono::steady_clock::now();
 
     // 全向感知缓存：全向发现目标后的 yaw/pitch，主相机锁定前反复播报
   bool has_omni_cache = false;
@@ -255,58 +223,11 @@ int main(int argc, char * argv[])
 
   // 主相机最后出帧的时间：用于相机掉线时的告警（超时等待本身不会卡死主循环）
   auto last_main_frame = std::chrono::steady_clock::now();
-  auto last_stall_log = last_main_frame;
+  bool camera_stall_warning_logged = false;
 
   // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
   // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
   while (!exiter.exit() && rclcpp::ok()) {
-    // 每帧检查一次己方 ID：一旦下位机上报（比赛开始前后都可能），立刻把敌方颜色
-    // 换成实际对阵的反色；ID 不变时什么都不做，不会反复清目标。
-    if (const uint8_t id = serial_board.robot_id(); id != 0 && id != last_robot_id) {
-      last_robot_id = id;
-      if (io::is_red_robot_id(id) || io::is_blue_robot_id(id)) {
-        const bool own_red = io::is_red_robot_id(id);
-        const auto enemy = own_red ? auto_aim::Color::blue : auto_aim::Color::red;
-        tracker.set_enemy_color(enemy);
-        decider.set_enemy_color(enemy);
-        // 全向四路的 Decider 在各自推理线程里，必须经共享状态同步，
-        // 否则换色后全向仍按旧颜色过滤，检测结果会被全部剔除。
-        omni_state->set_enemy_color(enemy);
-        tools::logger()->info(
-          "[Main] robot_id={}（{} / {}）-> 己方颜色 = {}，敌方 = {}（覆盖配置 enemy_color）", id,
-          own_red ? "red" : "blue", io::robot_role_name(id), own_red ? "red" : "blue",
-          enemy == auto_aim::Color::red ? "red" : "blue");
-      } else {
-        tools::logger()->warn(
-          "[Main] robot_id={} 不在附录二编号表内（1~11 红 / 101~111 蓝），保持配置的 enemy_color",
-          id);
-      }
-    }
-
-    // 低频诊断：还没拿到有效 ID 时，把「0x0502 帧没到」和「帧到了但 roboid=0」
-    // 区分开。两种情况都会让颜色停在配置兜底值上，但修法完全不同：
-    //   frames == 0  -> 固件包长/CRC 问题，或根本没发 0x0502
-    //   raw == 0     -> 帧正常，固件没把 robot_id 填进 roboid
-    if (serial_board.robot_id() == 0) {
-      const auto now = std::chrono::steady_clock::now();
-      if (std::chrono::duration<double>(now - last_id_report).count() >= 5.0) {
-        last_id_report = now;
-        const auto frames = serial_board.imu_frame_count();
-        if (frames == 0) {
-          tools::logger()->warn(
-            "[Main] 仍未收到 0x0502 帧，无法判定阵营；己方颜色按配置兜底 = {}。"
-            "检查下位机 0x0502 是否已带 roboid（包长 26 字节）",
-            auto_aim::COLORS[static_cast<int>(config_own_color)]);
-        } else {
-          tools::logger()->warn(
-            "[Main] 0x0502 已收 {} 帧，但 roboid={}（0 = 下位机未填）；"
-            "己方颜色按配置兜底 = {}。请确认固件把 robot_id 写进 0x0502 的 roboid",
-            frames, serial_board.last_raw_roboid(),
-            auto_aim::COLORS[static_cast<int>(config_own_color)]);
-        }
-      }
-    }
-
     // 开赛前关闭推理：相机仍持续出图（主相机帧照常入队，供录像使用），
     // 避免赛前 5 路 YOLO 空转占满 CPU。
     pipeline.set_inference_enabled(serial_board.is_game_started());
@@ -320,15 +241,15 @@ int main(int argc, char * argv[])
     if (status == auto_aim::multithread::WaitStatus::Timeout) {
       const auto now = std::chrono::steady_clock::now();
       const double stalled = std::chrono::duration<double>(now - last_main_frame).count();
-      if (stalled >= 2.0 &&
-          std::chrono::duration<double>(now - last_stall_log).count() >= 2.0) {
-        last_stall_log = now;
+      if (stalled >= 2.0 && !camera_stall_warning_logged) {
+        camera_stall_warning_logged = true;
         tools::logger()->warn("[Main] 主相机已 {:.1f}s 没有新帧，继续等待...", stalled);
       }
       continue;
     }
 
     last_main_frame = std::chrono::steady_clock::now();
+    camera_stall_warning_logged = false;
     if (frame.img.empty()) {
       continue;
     }
@@ -371,19 +292,10 @@ int main(int argc, char * argv[])
 
     // 比赛未开始时跳过自瞄逻辑（裁判系统控制）
     if (!serial_board.is_game_started()) {
-      if (!game_started_logged) {
-        game_started_logged = true;
-        tools::logger()->info("[Main] Game not started yet, waiting...");
-      }
       //注意这个地方的功耗···检查之后似乎没有很多
       main_recorder.record(img, q_main, timestamp);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
-    }
-
-    if (!game_started_logged) {
-      game_started_logged = true;
-      tools::logger()->info("[Main] Game started! Entering detection & tracking loop");
     }
 
     // 主相机在小yaw 上，Solver 的 "gimbal" 就是小yaw 板
@@ -435,6 +347,8 @@ int main(int argc, char * argv[])
       serial_board.send(command);
     } else {
       //这是主相机的处理，立马处理的目标
+      // 先按裁判给的身份刷新敌我颜色，再做过滤
+      refresh_enemy_color();
       // 过滤敌人
       decider.armor_filter(armors);
 
@@ -504,7 +418,9 @@ int main(int argc, char * argv[])
         has_omni_cache = false;
       }
 
-      command.shoot = shooter.shoot(command, aimer, target, gimbal_pos);
+      // 热量保护：枪管热量到 0x0201 上限前 heat_stop_margin 就停止开火
+      //（其余控制量照常下发，云台继续跟瞄，只是不发弹）
+      command.shoot = shooter.shoot(command, aimer, target, gimbal_pos) && serial_board.can_shoot();
 
       // 绘制检测框和跟踪信息（用于赛后录像复盘）
       for (const auto & armor : armors) {
