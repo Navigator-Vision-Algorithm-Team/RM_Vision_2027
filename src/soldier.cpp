@@ -108,7 +108,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
   auto last_send = io::SoldierCanBoard::TimePoint::min();
   auto last_log = io::SoldierCanBoard::Clock::now();
   std::optional<bool> last_autoaim_active;
-  std::optional<auto_aim::DebugCanTx> last_debug_tx;
+  std::optional<io::SoldierCanBoard::SendResult> last_send_result;
   // 火控保持窗口：仅有效的敌方检测续期，空帧和重复发送均不续期。
   constexpr auto kFireAdviceHold = 200ms;
   std::optional<io::SoldierCanBoard::TimePoint> last_fire_advice_detection;
@@ -130,12 +130,8 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
       last_fire_advice_detection.reset();
     }
     command.fire_advice = last_fire_advice_detection.has_value();
-    io::SoldierCanBoard::SendAttempt attempt{};
     // 发送间隔与图像帧间隔不同。复用最新解算时保留原参考，过期由 CAN 层改发空闲帧。
-    const auto result = can_board.send(command, reference, &attempt);
-    last_debug_tx = auto_aim::DebugCanTx{
-      attempt.payload, monotonic_us(command_frame_time), monotonic_us(attempt.started_at),
-      static_cast<int>(result), result != io::SoldierCanBoard::SendResult::transport_error};
+    last_send_result = can_board.send(command, reference);
   };
 
   while (!exiter.exit()) {
@@ -195,11 +191,13 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
       const Eigen::Quaterniond q(
         Eigen::AngleAxisd(gimbal_pos[0], Eigen::Vector3d::UnitZ()) *
         Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()));
-      solver.set_R_gimbal2world(q.toRotationMatrix());
+      solver.set_R_gimbal2world(q);
 
       state = "waiting_enemy_color";
       if (enemy_color) {
-        decider.armor_filter(armors, *enemy_color);
+        // develop 版本的 Decider 只保留单参数 armor_filter：先同步颜色再从配置颜色过滤。
+        decider.set_enemy_color(*enemy_color);
+        decider.armor_filter(armors);
         // 检出敌方目标才续期；短暂漏检仍可保持建议位，瞄准角度仍由跟踪链路计算。
         if (!geometry_only && !armors.empty()) {
           last_fire_advice_detection = io::SoldierCanBoard::Clock::now();
@@ -213,11 +211,18 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
             !geometry_only && robot->bullet_speed_valid && robot->bullet_speed_m_s > 0.0;
           io::Command aim{};
           if (ballistic_aim) {
-            aim = aimer.aim_ballistic(*target, t, robot->bullet_speed_m_s);
+            // develop 的 Aimer 只有一个入口：内部同时做时间补偿、选板与弹道解算。
+            aim = aimer.aim(*target, t, robot->bullet_speed_m_s);
             ballistic_aim = aim.control && std::isfinite(aim.yaw) && std::isfinite(aim.pitch);
           }
-          // 单次弹道无解时仍可用几何角跟随。
-          if (!ballistic_aim) aim = aimer.aim_geometric(*target, t);
+          // 弹道无解（或强制几何模式）时，退化为直接指向目标旋转中心。
+          if (!ballistic_aim) {
+            const Eigen::VectorXd x = target->ekf_x();
+            const double horizon = std::hypot(x[0], x[2]);
+            aim.control = true;
+            aim.yaw = std::atan2(x[2], x[0]);
+            aim.pitch = -std::atan2(x[4], horizon);
+          }
           note = ballistic_aim ? "ballistic" : "geometric";
           if (aim.control && std::isfinite(aim.yaw) && std::isfinite(aim.pitch)) {
             command.tracking = true;
@@ -236,25 +241,19 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
 
     send_latest();
 
-    const bool tx_tracking = last_debug_tx && (last_debug_tx->payload[1] & 0x01) != 0;
+    const bool tx_tracking = command.tracking;
     if (debug_frame) {
       auto_aim::DebugStatus debug_status{
-        gimbal_pos, target_pos, tx_tracking && last_debug_tx->sdk_accepted, false, state, note};
-      debug_status.frame_us = monotonic_us(t);
-      debug_status.can_tx = last_debug_tx;
+        gimbal_pos, target_pos, tx_tracking, false, state, note};
       if (frame_pose && enemy_color) {
         for (const auto & armor : armors) {
           if (!armor.xyz_in_world.allFinite() || armor.xyz_in_world.squaredNorm() <= 0.0) continue;
           debug_status.pnp_results.push_back({armor.box, armor.xyz_in_gimbal});
-          debug_status.observed_armor_world.push_back(armor.xyz_in_world);
         }
       }
       if (command.tracking && aimer.debug_aim_point.valid) {
         debug_status.has_aim_prediction = true;
         debug_status.aim_prediction_world = aimer.debug_aim_point.xyza.head<3>();
-        const auto & timing = aimer.debug_prediction_timing;
-        debug_status.prediction = auto_aim::DebugPrediction{
-          monotonic_us(timing.target_time), timing.extra_delay_s, timing.flight_time_s};
         const auto & point = debug_status.aim_prediction_world;
         const auto pixels = solver.world2pixel({cv::Point3f(point.x(), point.y(), point.z())});
         if (!pixels.empty()) {
@@ -286,11 +285,11 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
         debug_status.ekf_samples = convergence.samples;
         debug_status.ekf_min_samples = convergence.min_samples;
       }
-      debug.publish(armors, debug_status, frame_pose && enemy_color ? &solver : nullptr);
+      debug.publish(armors, debug_status);
     }
 
     const auto now = io::SoldierCanBoard::Clock::now();
-    if (now - last_log >= 500ms && last_debug_tx) {
+    if (now - last_log >= 500ms && last_send_result) {
       last_log = now;
       tools::logger()->info(
         "[soldier] 当前模式：{} | state={} boxes={} candidates={} yaw={:.1f} pitch={:.1f} "
@@ -298,7 +297,7 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
         mode, state, detected_count, enemy_color ? armors.size() : 0,
         target_pos[0] * 180.0 / std::numbers::pi,
         target_pos[1] * 180.0 / std::numbers::pi, tx_tracking,
-        last_debug_tx->result);
+        static_cast<int>(*last_send_result));
     }
   }
   return 0;

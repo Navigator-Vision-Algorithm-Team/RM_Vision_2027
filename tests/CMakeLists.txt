@@ -56,9 +56,10 @@ endif()
 # 与 soldier 共用同一份业务代码（src/soldier.cpp 的 run_soldier）。
 if(TARGET io_soldier_can)
     add_executable(soldier_debug soldier_debug.cpp "${PROJECT_SOURCE_DIR}/src/soldier.cpp")
+    # io_can：auto_aim 的 commandgener.cpp 仍引用 io::CBoard::send，需一并链接。
     target_link_libraries(
         soldier_debug
-        ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
+        ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can io_soldier_can)
     install(TARGETS soldier_debug RUNTIME DESTINATION bin)
 endif()
 

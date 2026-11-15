@@ -66,8 +66,10 @@ add_executable(virtual_run src/virtual_run.cpp)
 
 target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 if(TARGET soldier)
+    # io_can：auto_aim 的 commandgener.cpp 仍引用 io::CBoard::send，需一并链接。
     target_link_libraries(
-        soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
+        soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can
+                io_soldier_can)
 endif()
 target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 
