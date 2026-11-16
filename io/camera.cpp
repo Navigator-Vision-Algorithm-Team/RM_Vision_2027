@@ -67,7 +67,7 @@ Camera::Camera(const std::string & config_path, std::string sursign)
     throw std::runtime_error("Unknow camera_name: " + camera_name + "!");
   }
 
-  // 帧记录（可选）：与 SerialBoard 的串口记录写入同一目录，构成完整可回放会话
+  // 帧记录（可选）：与中转进程的串口记录写入同一会话目录，构成完整可回放会话
   auto record = sim::RecordConfig::load(yaml);
   if (record.enable) {
     recorder_ = std::make_unique<sim::CameraRecorder>(record.dir, record.save_images);

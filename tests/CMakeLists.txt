@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.16.3)
 add_executable(testgimbalspeed testgimbalspeed.cpp)
 target_link_libraries(
     testgimbalspeed
-    ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io io_can)
+    ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 install(TARGETS testgimbalspeed RUNTIME DESTINATION bin)
 
 # ============================================================================
@@ -41,10 +41,9 @@ endif()
 # 与 soldier 共用同一份业务代码（src/soldier.cpp 的 run_soldier）。
 if(TARGET io_soldier_can)
     add_executable(soldier_debug soldier_debug.cpp "${PROJECT_SOURCE_DIR}/src/soldier.cpp")
-    # io_can：auto_aim 的 commandgener.cpp 仍引用 io::CBoard::send，需一并链接。
     target_link_libraries(
         soldier_debug
-        ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can io_soldier_can)
+        ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
     install(TARGETS soldier_debug RUNTIME DESTINATION bin)
 endif()
 
@@ -52,11 +51,11 @@ endif()
 add_executable(sentry_multithread_debug sentry_multithread_debug.cpp)
 target_link_libraries(
     sentry_multithread_debug
-    ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can)
+    ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)
 
 # 仅测试主相机 YOLO：不启动串口、PnP 或多相机处理链路。
 add_executable(yolodebug yolodebug.cpp)
-target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
+target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 
 # ============================================================================
 #  裁判状态转发自测：虚拟下位机 0x0001/0x0201 -> SerialBoard -> ROS 话题

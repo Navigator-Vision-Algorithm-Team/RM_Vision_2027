@@ -4,26 +4,27 @@
  * 数据流：
  *   相机：主相机 + omni_camera_count 路全向相机 → YoloPipeline（每路一个 YOLO 实例、
  *         一个绑核线程）→ 主相机结果优先的统一队列 → 本文件主循环。
- *   姿态：串口 0x0503（500Hz）→ SerialBoard 接收线程插值 → ImuState（大yaw / 小yaw）
- *         → 刷新 io::tf::Tree 的两个动态关节 → Solver::set_R_gimbal2world。
+ *   姿态：中转进程经 iceoryx2 共享内存发布 imu（500Hz）→ io::RelayClient 接收线程
+ *         取样并插值 → ImuState（大yaw / 小yaw）→ 刷新 io::tf::Tree 的两个动态关节
+ *         → Solver::set_R_gimbal2world。
  *   决策：Decider（全向候选排序）与 Tracker（主相机优先）→ Aimer / Shooter
- *         → io::Command → SerialBoard::send（0x0402）。
- *   外设：导航 NavCommand 在 ROS 2 回调里直接下发 0x0405；0x0503 关节角发布为
- *         JointState；0x0001 / 0x0201 裁判状态转发给导航决策节点。
+ *         → io::Command → io::RelayClient::send → iceoryx2 cmd_aim 主题 → 中转写设备。
+ *   外设：本进程不打开串口、不持有 CAN、不参与导航；裁判状态与机器人状态
+ *         全部来自中转发布的 robot / game 主题。
  *
- * 线程：main() 主循环运行在进程主线程；推理在 YoloPipeline 的各相机线程；串口收发在
- *       SerialBoard::receive_thread_；ROS 2 在 rclcpp executor 线程。本文件不跨线程
- *       共享可写状态，并发保护由 YoloPipeline / SerialBoard 内部负责。
+ * 线程：main() 主循环运行在进程主线程；推理在 YoloPipeline 的各相机线程；
+ *       iceoryx2 收发在 io::RelayClient 的接收线程。本文件不跨线程共享可写状态，
+ *       并发保护由 YoloPipeline / RelayClient 内部负责。
  *
  * 依赖：io::tf（外参来源优先级：tf 树 > yaml 的 omni_* 键 > 安装角近似，t 置 0）、
- *       ROS 2（找不到依赖时本目标不参与构建），配置示例 configs/sentry_example.yaml。
+ *       iceoryx2（系统库，与中转共用同一份安装），配置示例 configs/sentry_example.yaml。
  *
  * 注意：
- *   1. 0x0402 报文没有 control 位，pitch / yaw 被固件无条件执行：任何「视觉不接管」的
- *      分支都必须显式回填当前 gimbal_pos，漏填的默认 0 会把云台拽回世界系 0 度。
- *   2. Aimer 输出的 yaw 已是世界系绝对角，不得再叠加 gimbal_pos[0]；Decider 输出的
- *      delta_yaw 是「大yaw 系」角，必须叠加 omni_base_yaw 后才能下发。
- *   3. Exiter 必须在 io::ROS2 之后构造，否则 rclcpp 抢走 SIGINT 处理，Ctrl+C 无法退出。
+ *   1. 下发的 yaw/pitch 是世界系绝对角，由 Aimer 直接给出，不得再叠加 gimbal_pos[0]；
+ *      Decider 输出的 delta_yaw 是「大yaw 系」角，必须先叠加 omni_base_yaw 才能下发。
+ *   2. 链路失效（无 IMU 超时、契约版本不符、中转未启动）时 RelayClient 会把 shoot 位
+ *      强制清零并让 can_shoot() 返回 false：云台继续跟踪，但绝不发弹。
+ *   3. 本进程不再持有 ROS 2 节点，Exiter 无需再考虑 rclcpp 抢占 SIGINT 的顺序问题。
  */
 #include <fmt/core.h>
 

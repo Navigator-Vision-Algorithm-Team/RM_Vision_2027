@@ -48,9 +48,10 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 include_directories(SYSTEM ${OpenCV_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR})
 
-# 步兵使用达妙 USB-CAN SDK（io/can 里的 io_soldier_can 目标）。
-# 没有 SDK 时把 -DSP_BUILD_SOLDIER=OFF 或设置 -DDMCAN_SDK_ROOT=... 即可跳过。
-option(SP_BUILD_SOLDIER "Build soldier with the Damiao USB-CAN SDK" ON)
+# 步兵：达妙 USB-CAN 驱动（io/can 里的 io_soldier_can 目标）。
+# 默认关闭：中转进程尚未提供达妙读取能力，步兵入口暂时不参与构建，
+# 视觉侧统一改由 io::RelayClient 经 iceoryx2 收发。恢复步骤见 io/can/CMakeLists.txt。
+option(SP_BUILD_SOLDIER "Build soldier with the Damiao USB-CAN SDK" OFF)
 
 add_subdirectory(tools)
 add_subdirectory(io)
@@ -86,12 +87,10 @@ endif()
 # 源码保留备查，不参与构建。
 # add_executable(virtual_run src/virtual_run.cpp)
 
-# target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
+# target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 if(TARGET soldier)
-    # io_can：auto_aim 的 commandgener.cpp 仍引用 io::CBoard::send，需一并链接。
     target_link_libraries(
-        soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can
-                io_soldier_can)
+        soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
 endif()
 # target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 
@@ -117,7 +116,7 @@ if(ament_cmake_FOUND AND rclcpp_FOUND AND std_msgs_FOUND AND rosidl_typesupport_
     # 编译 sentry
     add_executable(sentry_multithread src/sentry_multithread.cpp)
 
-    target_link_libraries(sentry_multithread ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can)
+    target_link_libraries(sentry_multithread ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)
 else()
     message(STATUS "ROS2 environment not found, skipping ROS2-related code.")
 endif()

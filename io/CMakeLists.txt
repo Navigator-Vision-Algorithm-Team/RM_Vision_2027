@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 find_package(yaml-cpp REQUIRED)
 
-# CAN 通信部分独立成库（io_can），与串口部分分开维护
+# 达妙 USB-CAN 驱动单独维护（io_soldier_can）；SocketCAN 板卡通信已移除
 add_subdirectory(can)
 
 # 创建目标 io
@@ -22,6 +22,7 @@ add_library(io STATIC
     sim/camera_source.cpp
     # ---- 中转客户端：视觉侧只通过它与 info_relay 交换串口数据 ----
     relay/relay_client.cpp
+    relay/relay_codec.cpp
 )
 
 # 中转客户端依赖 iceoryx2，按系统库查找（与 info_relay 工程共用同一份安装）。

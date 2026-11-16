@@ -6,7 +6,7 @@
 
 # ----- 敌方颜色 -----
 # 可选值: "red" 或 "blue"
-# 仅在还没收到裁判 0x0201（robot_id）时生效：拿到 robot_id 后由 SerialBoard 自动判定己方颜色
+# 仅在还没收到裁判 0x0201（robot_id）时生效：拿到 robot_id 后由 RelayClient 按 robot 主题判定
 # 并取反作为敌人颜色（红方 1~11，蓝方 101~111；3/103 步兵，7/107 哨兵）覆盖本项。
 enemy_color: "red"
 

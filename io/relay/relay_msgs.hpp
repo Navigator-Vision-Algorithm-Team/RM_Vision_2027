@@ -18,8 +18,8 @@
 namespace info_relay::msg
 {
 // 契约版本：字段或线格式任何变化都必须递增；订阅端收到首个 Health 后比对，不符即判链路不可用。
-// 版本 2：Health 尾部填充位启用为 schema_version，用于运行期握手（尺寸仍为 48 字节）。
-inline constexpr uint16_t kSchemaVersion = 2;
+// 版本 3：与中转同步；Health 尾部填充位为 schema_version，用于运行期握手（尺寸仍 48 字节）。
+inline constexpr uint16_t kSchemaVersion = 3;
 
 // 主题名前缀，实际主题为 "<prefix>/<topic>"；前缀由配置文件给出，便于同机跑多套实例
 inline constexpr const char * kDefaultPrefix = "rm_vision";
@@ -118,7 +118,7 @@ struct alignas(8) Health
   uint32_t tx_commands;     // 累计写入串口的下行指令数
   uint32_t rx_hz_x100;      // 最近 1s 上行帧率 ×100（定点表示，10 表示 0.10Hz）
   uint8_t transport_ok;     // 1 表示链路健康（recent_timeout_ms 内有合法帧）
-  uint8_t source_kind;      // 当前数据源：0 real / 1 fake / 2 replay
+  uint8_t source_kind;      // 当前通信链路：0 serial / 1 can
   uint16_t last_latency_us; // 最近一帧 AimCmd 从视觉发出到写入串口的耗时，us
   uint16_t schema_version;  // 契约版本，取 kSchemaVersion；订阅端据此做运行期握手
   uint16_t reserved1;       // 对齐填充，恒为 0；保留给后续追加字段

@@ -4,9 +4,9 @@
 #include <cstdint>
 
 /*
- * io 层与下位机之间的公共数据结构：
- *   下行命令（Command / NavCommand）与上行裁判状态（RefereeState）。
- * 串口收发（io/serial）与 ROS 转发（io/ros2）都只依赖本文件，互不依赖对方的头文件。
+ * 视觉算法与通信层之间的公共数据结构：
+ *   下行命令（Command）与上行裁判状态（RefereeState / ImuState）。
+ * 通信由 io/relay 的 RelayClient 经 iceoryx2 完成，本文件不含任何设备或协议细节。
  */
 
 namespace io
@@ -28,20 +28,6 @@ struct Command
   double yaw;
   double pitch;
   double horizon_distance = 0;
-};
-
-/*
- * 视觉下发给下位机的导航指令（0x0405），只表达底盘速度意图。
- *
- * vy 在本结构体中按「左移为正」填写，SerialBoard::send(NavCommand) 写入报文前会取反；
- * vx / wz 的正方向由下位机协议约定。
- */
-struct NavCommand
-{
-  double vx = 0;            // 体坐标系前进速度 m/s
-  double vy = 0;            // 体坐标系左移速度 m/s
-  double wz = 0;            // 转向角速度 rad/s
-  double target_angle = 0;  // 目标航向角 rad（0x0405 的 target_angle，已确认暂时固定 0）
 };
 
 /*

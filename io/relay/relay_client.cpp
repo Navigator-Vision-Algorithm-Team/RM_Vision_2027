@@ -1,9 +1,10 @@
 /*
- * 视觉侧客户端实现：一条接收线程同时负责"收上行"与"发下行"。
+ * 视觉侧中转客户端的实现：一条接收线程同时负责"收上行"与"发下行"。
  *
- * 数据流：iceoryx2 订阅 imu/robot/game → 加锁更新快照与样本队列；
- *         send() 只把待发指令放进 pending 槽，由接收线程在下一拍发布，
- *         因此本对象不持有任何跨线程的 iceoryx2 句柄，实现上也不需要 pimpl。
+ * 数据流：
+ *   imu / robot / game / health 订阅 → 加锁更新快照与姿态样本队列；
+ *   send() 只把指令写进待发槽，接收线程下一拍打包成 AimCmd 发布。
+ *   因为跨线程只共享待发槽与快照，本类不需要在头文件里暴露任何 iceoryx2 类型。
  *
  * 注意：契约见 relay_client.hpp，本文件只写实现要点。
  */
@@ -12,7 +13,7 @@
 #include <cmath>
 #include <utility>
 
-#include "io/relay/relay_msgs.hpp"
+#include "io/relay/relay_codec.hpp"
 #include "iox2/iceoryx2.hpp"
 #include "tools/logger.hpp"
 #include "tools/yaml.hpp"
@@ -21,14 +22,17 @@ namespace io
 {
 namespace
 {
-// 姿态样本队列上限：500Hz 下约 0.1s，足够覆盖图像处理延迟且不会无限增长
+// 姿态样本队列上限：500Hz 下约 0.13s，足够覆盖图像处理延迟且不会无限增长
 constexpr size_t kSampleCapacity = 64;
+
+// 开火热量余量：距上限不足该值时停火，避免打到顶线被罚
+constexpr int kHeatStopMargin = 2;
 
 // 功能：把 steady_clock 时间点转成纳秒
 // 输入：
 //   tp  时间点
 // 输出：自 epoch 起的纳秒数
-// 备注：与 relay 侧使用同一内核时钟
+// 备注：与中转使用同一内核时钟，可直接比较
 int64_t to_ns(std::chrono::steady_clock::time_point tp)
 {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
@@ -37,9 +41,9 @@ int64_t to_ns(std::chrono::steady_clock::time_point tp)
 // 功能：借共享内存样本发布一帧
 // 输入：
 //   pub      发布者
-//   payload  载荷
+//   payload  线格式载荷
 // 输出：无
-// 备注：队列满时静默丢弃，避免阻塞主循环
+// 备注：队列满时静默丢弃，转发链路不因丢一帧阻塞
 template <typename Publisher, typename Payload>
 void publish(Publisher & pub, const Payload & payload)
 {
@@ -52,6 +56,7 @@ void publish(Publisher & pub, const Payload & payload)
 RelayClient::RelayClient(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
+  // 弹速允许缺省：旧配置里可能没有该键，回落到 28 m/s 以免启动失败
   bullet_speed = yaml["bullet_speed"] ? yaml["bullet_speed"].as<double>() : 28.0;
   if (yaml["relay_timeout_ms"]) timeout_ms_ = yaml["relay_timeout_ms"].as<int>();
   prefix_ = yaml["relay_prefix"] ? yaml["relay_prefix"].as<std::string>()
@@ -72,7 +77,6 @@ void RelayClient::receive_loop()
 {
   using namespace iox2;
 
-  // 主题前缀与 relay 必须一致，构造期已从配置读入
   const std::string prefix = prefix_;
 
   auto node_exp = NodeBuilder().create<ServiceType::Ipc>();
@@ -85,36 +89,28 @@ void RelayClient::receive_loop()
   auto imu_name = ServiceName::create((prefix + "/" + info_relay::msg::kTopicImu).c_str());
   auto rb_name = ServiceName::create((prefix + "/" + info_relay::msg::kTopicRobot).c_str());
   auto gm_name = ServiceName::create((prefix + "/" + info_relay::msg::kTopicGame).c_str());
-  auto aim_name = ServiceName::create((prefix + "/" + info_relay::msg::kTopicCmdAim).c_str());
-  auto nav_name = ServiceName::create((prefix + "/" + info_relay::msg::kTopicCmdNav).c_str());
   auto hl_name = ServiceName::create((prefix + "/" + info_relay::msg::kTopicHealth).c_str());
+  auto aim_name = ServiceName::create((prefix + "/" + info_relay::msg::kTopicCmdAim).c_str());
   if (
     !imu_name.has_value() || !rb_name.has_value() || !gm_name.has_value() ||
-    !aim_name.has_value() || !nav_name.has_value() || !hl_name.has_value()) {
+    !hl_name.has_value() || !aim_name.has_value()) {
     tools::logger()->error("[RelayClient] 主题名非法，链路不可用");
     return;
   }
 
   auto imu_service =
     node.service_builder(imu_name.value()).publish_subscribe<info_relay::msg::Imu>().open_or_create();
-  auto rb_service = node.service_builder(rb_name.value())
-                      .publish_subscribe<info_relay::msg::Robot>()
-                      .open_or_create();
-  auto gm_service = node.service_builder(gm_name.value())
-                      .publish_subscribe<info_relay::msg::Game>()
-                      .open_or_create();
-  auto aim_service = node.service_builder(aim_name.value())
-                       .publish_subscribe<info_relay::msg::AimCmd>()
-                       .open_or_create();
-  auto nav_service = node.service_builder(nav_name.value())
-                       .publish_subscribe<info_relay::msg::NavCmd>()
-                       .open_or_create();
-  auto hl_service = node.service_builder(hl_name.value())
-                      .publish_subscribe<info_relay::msg::Health>()
-                      .open_or_create();
+  auto rb_service =
+    node.service_builder(rb_name.value()).publish_subscribe<info_relay::msg::Robot>().open_or_create();
+  auto gm_service =
+    node.service_builder(gm_name.value()).publish_subscribe<info_relay::msg::Game>().open_or_create();
+  auto hl_service =
+    node.service_builder(hl_name.value()).publish_subscribe<info_relay::msg::Health>().open_or_create();
+  auto aim_service =
+    node.service_builder(aim_name.value()).publish_subscribe<info_relay::msg::AimCmd>().open_or_create();
   if (
     !imu_service.has_value() || !rb_service.has_value() || !gm_service.has_value() ||
-    !aim_service.has_value() || !nav_service.has_value() || !hl_service.has_value()) {
+    !hl_service.has_value() || !aim_service.has_value()) {
     tools::logger()->error("[RelayClient] 创建主题失败，链路不可用");
     return;
   }
@@ -122,45 +118,43 @@ void RelayClient::receive_loop()
   auto imu_sub = imu_service.value().subscriber_builder().create();
   auto rb_sub = rb_service.value().subscriber_builder().create();
   auto gm_sub = gm_service.value().subscriber_builder().create();
-  auto aim_pub = aim_service.value().publisher_builder().create();
-  auto nav_pub = nav_service.value().publisher_builder().create();
   auto hl_sub = hl_service.value().subscriber_builder().create();
+  auto aim_pub = aim_service.value().publisher_builder().create();
   if (
     !imu_sub.has_value() || !rb_sub.has_value() || !gm_sub.has_value() ||
-    !aim_pub.has_value() || !nav_pub.has_value() || !hl_sub.has_value()) {
+    !hl_sub.has_value() || !aim_pub.has_value()) {
     tools::logger()->error("[RelayClient] 创建订阅/发布者失败，链路不可用");
     return;
   }
 
-  tools::logger()->info("[RelayClient] 已连接主题前缀 {}", prefix);
+  tools::logger()->info("[RelayClient] 已连接主题前缀 {}（订阅 imu/robot/game/health）", prefix);
+
+  bool schema_checked = false;  // 版本只在首个 Health 上核对一次
 
   while (!quit_) {
-    // ---- 上行：IMU 逐帧收，状态类只保留最新 ----
+    // ---- 上行：IMU 逐帧收，姿态样本入队供插值 ----
     auto imu = imu_sub.value().receive();
     while (imu.has_value() && imu.value().has_value()) {
-      const auto & m = imu.value().value().payload();
+      const auto & sample = imu.value().value().payload();
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        ImuSample sample;
-        sample.t_ns = static_cast<int64_t>(m.t_ns);
-        sample.state.pitch = m.pitch_rad;
-        sample.state.roll = m.roll_rad;
-        sample.state.upper_yaw = m.yaw_rad;
-        // 关节角还原：lower = yaw - upper_joint
-        sample.state.lower_yaw = m.yaw_rad - m.upper_yaw_rad;
-        imu_samples_.push_back(sample);
+        if (last_imu_ns_ == 0) tools::logger()->info("[RelayClient] 收到首个 IMU 样本，链路建立");
+
+        ImuSample entry;
+        entry.t_ns = static_cast<int64_t>(sample.t_ns);
+        entry.state = relay::from_wire(sample);
+        imu_samples_.push_back(entry);
         if (imu_samples_.size() > kSampleCapacity) imu_samples_.pop_front();
 
-        // 首个样本标志链路建立：现场排查时它比任何错误码都直接
-        if (last_imu_ns_ == 0) tools::logger()->info("[RelayClient] 收到首个 IMU 样本，链路建立");
-        last_imu_ns_ = sample.t_ns;
-        // uptime 回落 = MCU 重启，与 relay 侧判定口径一致
-        if (last_uptime_ms_ != 0 && m.uptime_ms < last_uptime_ms_) reset_pending_ = true;
-        last_uptime_ms_ = m.uptime_ms;
+        // uptime 回落 = MCU 重启，与中转侧判定口径一致
+        if (last_uptime_ms_ != 0 && sample.uptime_ms < last_uptime_ms_) reset_pending_ = true;
+        last_uptime_ms_ = sample.uptime_ms;
+        last_imu_ns_ = entry.t_ns;
       }
       imu = imu_sub.value().receive();
     }
 
+    // ---- 机器人状态：只保留最新一条 ----
     auto rb = rb_sub.value().receive();
     bool has_rb = false;
     info_relay::msg::Robot robot{};
@@ -172,8 +166,8 @@ void RelayClient::receive_loop()
     if (has_rb) {
       std::lock_guard<std::mutex> lock(mutex_);
       robot_id_ = robot.robot_id;
-      own_red_ = robot.own_team_red == 2 ? std::nullopt
-                                         : std::optional<bool>(robot.own_team_red == 1);
+      own_red_ =
+        robot.own_team_red == 2 ? std::nullopt : std::optional<bool>(robot.own_team_red == 1);
       barrel_heat_ = robot.barrel_heat_17mm;
       heat_limit_ = robot.heat_limit;
       referee_.current_hp = robot.current_hp;
@@ -182,6 +176,7 @@ void RelayClient::receive_loop()
       referee_.game_status_valid = (robot.valid_mask & 0x02) != 0;
     }
 
+    // ---- 比赛状态 ----
     auto gm = gm_sub.value().receive();
     bool has_gm = false;
     info_relay::msg::Game game{};
@@ -196,13 +191,12 @@ void RelayClient::receive_loop()
       referee_.game_progress = game.game_progress;
     }
 
-    // 契约版本握手：只认第一帧，之后不再重复比较（版本在一次运行内不会变）
+    // ---- 健康：契约版本握手 + 中转侧链路状态 ----
     auto hl = hl_sub.value().receive();
-    bool checked = false;
     while (hl.has_value() && hl.value().has_value()) {
       const auto version = hl.value().value().payload().schema_version;
-      if (!checked) {
-        checked = true;
+      if (!schema_checked) {
+        schema_checked = true;
         if (version != info_relay::msg::kSchemaVersion) {
           schema_ok_ = false;
           tools::logger()->error(
@@ -213,38 +207,20 @@ void RelayClient::receive_loop()
       hl = hl_sub.value().receive();
     }
 
-    // ---- 下行：把主循环塞进来的指令发出去 ----
+    // ---- 下行：把主循环塞进来的指令打包发布 ----
     std::optional<Command> out_cmd;
-    std::optional<NavCommand> out_nav;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (pending_cmd_) {
         out_cmd = pending_cmd_;
         pending_cmd_.reset();
       }
-      if (pending_nav_) {
-        out_nav = pending_nav_;
-        pending_nav_.reset();
-      }
     }
     if (out_cmd) {
-      info_relay::msg::AimCmd m{};
-      m.t_ns = static_cast<uint64_t>(to_ns(std::chrono::steady_clock::now()));
-      m.yaw_rad = static_cast<float>(out_cmd->yaw);
-      m.pitch_rad = static_cast<float>(out_cmd->pitch);
-      m.control = out_cmd->control ? 1 : 0;
-      // 链路不健康时强制停火，收敛到安全侧
-      m.shoot = (out_cmd->shoot && link_ok()) ? 1 : 0;
-      publish(aim_pub.value(), m);
-    }
-    if (out_nav) {
-      info_relay::msg::NavCmd m{};
-      m.t_ns = static_cast<uint64_t>(to_ns(std::chrono::steady_clock::now()));
-      m.vx = static_cast<float>(out_nav->vx);
-      m.vy = static_cast<float>(out_nav->vy);
-      m.wz = static_cast<float>(out_nav->wz);
-      m.source = 1;  // 1 = 视觉进程
-      publish(nav_pub.value(), m);
+      // 链路不健康时强制停火：云台继续跟踪，但绝不下发开火位
+      Command cmd = *out_cmd;
+      if (!link_ok()) cmd.shoot = false;
+      publish(aim_pub.value(), relay::to_wire(cmd, to_ns(std::chrono::steady_clock::now())));
     }
 
     std::this_thread::sleep_for(std::chrono::microseconds(500));
@@ -252,7 +228,7 @@ void RelayClient::receive_loop()
 }
 
 // 实现要点：样本按时间戳升序入队，找到跨过目标时刻的一对做线性插值；
-// 目标时刻早于首样本或晚于末样本时直接返回对应端的样本，不做外推。
+// 目标早于首样本或晚于末样本时直接返回端点，不外推。
 ImuState RelayClient::interpolate_locked(int64_t t_ns) const
 {
   if (imu_samples_.empty()) return ImuState{};
@@ -297,12 +273,6 @@ void RelayClient::send(Command command) const
   pending_cmd_ = command;
 }
 
-void RelayClient::send(NavCommand command) const
-{
-  std::lock_guard<std::mutex> lock(mutex_);
-  pending_nav_ = command;
-}
-
 bool RelayClient::link_ok() const
 {
   if (!schema_ok_) return false;
@@ -317,7 +287,7 @@ bool RelayClient::can_shoot() const
   if (!link_ok()) return false;
   std::lock_guard<std::mutex> lock(mutex_);
   if (heat_limit_ == 0) return true;  // 没有裁判数据时不拦
-  return static_cast<int>(barrel_heat_) < static_cast<int>(heat_limit_) - 2;
+  return static_cast<int>(barrel_heat_) < static_cast<int>(heat_limit_) - kHeatStopMargin;
 }
 
 bool RelayClient::is_game_started() const
