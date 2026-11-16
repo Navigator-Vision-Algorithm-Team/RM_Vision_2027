@@ -47,7 +47,6 @@ const std::string keys =
 int main(int argc, char * argv[])
 {
   tools::Plotter plotter;
-  tools::Recorder main_recorder(30, "main");
 
   cv::CommandLineParser cli(argc, argv, keys);
   if (cli.has("help")) {
@@ -57,6 +56,13 @@ int main(int argc, char * argv[])
   auto config_path = cli.get<std::string>(0);
 
   auto yaml = tools::load(config_path);
+
+  // 录像参数：主相机出帧 120~150 fps，录像只按 record_fps_main 抽帧（默认 30）；
+  // quality 对应 VAAPI global_quality / libx264 crf，取值 1~51，越小越清晰
+  const double main_record_fps =
+    yaml["record_fps_main"] ? yaml["record_fps_main"].as<double>() : 30.0;
+  const int record_quality = yaml["record_quality"] ? yaml["record_quality"].as<int>() : 25;
+  tools::Recorder main_recorder(main_record_fps, "main", record_quality);
 
   // 坐标变换树：所有几何量（每个相机相对旋转轴的位置/姿态）都来自配置 tf.frames，
   // 代码里不写死任何安装尺寸。大yaw 与小yaw 作为两个动态关节，每帧由 0x502 刷新。
@@ -118,7 +124,10 @@ int main(int argc, char * argv[])
   for (int i = 1; i <= omni_count; i++) {
     auto sursign = "omni" + std::to_string(i);
     auto cam = std::make_unique<io::Camera>(config_path, sursign);
-    auto recorder = std::make_unique<tools::Recorder>(30, sursign);
+    // 全向相机实际出帧率来自 frame_rate_omniN（配置里是 15），按 30 声明会让回放速度翻倍
+    const double omni_record_fps =
+      yaml["frame_rate_" + sursign] ? yaml["frame_rate_" + sursign].as<double>() : 15.0;
+    auto recorder = std::make_unique<tools::Recorder>(omni_record_fps, sursign, record_quality);
 
     //缓冲时间
     if (i < omni_count) {
@@ -180,14 +189,20 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
-  // 敌我颜色：以裁判 0x0201 的 robot_id 为准（红方 1~11，蓝方 101~111），敌人颜色取反。
-  // 还没收到裁判帧（或没接裁判系统）时 own_team_red() 为空，继续用配置里的 enemy_color。
+  const auto config_enemy_color =
+    yaml["enemy_color"].as<std::string>() == "red" ? auto_aim::Color::red
+                                                  : auto_aim::Color::blue;
+  auto omni_state = std::make_shared<omniperception::OmniSharedState>();
+  omni_state->set_enemy_color(config_enemy_color);
+
+  // 敌我颜色由新通信协议转发的裁判 0x0201 robot_id 判定，未收到时使用配置兜底。
   auto refresh_enemy_color = [&]() {
     const auto own_red = serial_board.own_team_red();
     if (!own_red) return;
     const auto enemy_color = *own_red ? auto_aim::blue : auto_aim::red;
     tracker.set_enemy_color(enemy_color);
     decider.set_enemy_color(enemy_color);
+    omni_state->set_enemy_color(enemy_color);
   };
 
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程
@@ -201,7 +216,7 @@ int main(int argc, char * argv[])
     main_job.single_thread_cpu = false;
     camera_jobs.push_back(std::move(main_job));
 
-    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
+    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path, omni_state);
     for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
   }
   auto_aim::multithread::YoloPipeline pipeline(config_path, std::move(camera_jobs), false);
@@ -233,6 +248,8 @@ int main(int argc, char * argv[])
 
   // rclcpp 接管 SIGTERM 时只置 shutdown 标志，需要一并检查 rclcpp::ok()
   while (!exiter.exit() && rclcpp::ok()) {
+    refresh_enemy_color();
+
     // 开赛前关闭推理，相机仍持续出图（主相机帧照常入队供录像）
     pipeline.set_inference_enabled(serial_board.is_game_started());
 
@@ -328,6 +345,14 @@ int main(int argc, char * argv[])
     io::Command command{false, false, 0, 0};
     aimer.debug_aim_point.valid = false;
 
+    // 0x0402 没有 control 位，pitch/yaw 会被固件无条件执行；视觉不接管时必须
+    // 下发当前姿态，否则默认的 0 会把云台拽回 pitch=0 / 世界系 yaw=0。
+    auto hold_current_pose = [&]() {
+      if (command.control) return;
+      command.yaw = gimbal_pos[0];
+      command.pitch = gimbal_pos[1];
+    };
+
     // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
     // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
     // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
@@ -349,6 +374,7 @@ int main(int argc, char * argv[])
       }
 
       main_recorder.record(img, q_main, timestamp);
+      hold_current_pose();
       serial_board.send(command);
 
       // 【新增】调试数据流：无检测框时的两种状态（spin / hold）
@@ -381,10 +407,17 @@ int main(int argc, char * argv[])
       // 必须加大yaw 当前的世界系 yaw 才是下位机要求的世界系绝对角。
       // 注意：这里不能用 gimbal_pos[0]——那是小yaw 的 yaw，两个轴是独立的。
       if (tracker.state() == "switching") {
-        command.control = switch_target.armors.empty() ? false : true;
+        // armors 为空时 switch_target 的 delta 是默认值 0，直接下发会让云台归零，
+        // 这里 control=false 时保持当前姿态（0x0402 的 pitch/yaw 无条件下发）。
         command.shoot = false;
-        command.pitch = tools::limit_rad(switch_target.delta_pitch);
-        command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
+        command.control = !switch_target.armors.empty();
+        if (command.control) {
+          command.pitch = tools::limit_rad(switch_target.delta_pitch);
+          command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
+        } else {
+          command.pitch = gimbal_pos[1];
+          command.yaw = gimbal_pos[0];
+        }
       }
 
       else if (tracker.state() == "lost") {
@@ -402,6 +435,12 @@ int main(int argc, char * argv[])
           command.shoot = false;
           command.yaw = cached_omni_yaw;
           command.pitch = cached_omni_pitch;
+        } else {
+          // 无新结果也无缓存：decide() 返回 {false,false,0,0}，显式保持当前姿态
+          command.control = false;
+          command.shoot = false;
+          command.yaw = gimbal_pos[0];
+          command.pitch = gimbal_pos[1];
         }
       }
 
@@ -490,6 +529,7 @@ int main(int argc, char * argv[])
 
   //     tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
   // command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);
+      hold_current_pose();
       serial_board.send(command);
 
       // //test//

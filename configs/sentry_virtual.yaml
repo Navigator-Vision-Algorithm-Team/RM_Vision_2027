@@ -13,6 +13,13 @@ com_port: '/dev/ttyACM0'            # 串口设备路径
 baud_rate: 921600                    # 波特率
 bullet_speed: 28.0                   # 默认弹速 (m/s), 会被下位机数据覆盖
 
+# ----- 录像 (tools::Recorder) -----
+# 产物：records/<相机名>/<启动时刻>.mkv（H.264）与同名 .txt（每行 "t w x y z"，秒 + 四元数）。
+# 编码优先 h264_vaapi（Intel iGPU 硬件编码），不可用时自动回退 libx264，两者都失败则不录像。
+# 全向相机的录像帧率不需要在这里配：直接用上面各路的 frame_rate_omniN（当前 15）。
+record_fps_main: 30.0        # 主相机录像帧率，Hz；范围 10 ~ 60；调大更连贯，但编码与磁盘线性增加
+record_quality: 25           # 编码质量，1 ~ 51，越小越清晰、体积越大；对应 VAAPI global_quality / libx264 crf
+
 # ----- 主相机 (sursign="main") -----
 # camera_name 决定相机类型: "hikrobot" | "mindvision" | "Usbcamera"
 camera_name_main: "fake"
@@ -223,13 +230,18 @@ t_camera2gimbal: [0.13089617453251859, 0.0038468007459533785, 0.0941399452220102
 # 游戏控制相关
 
 use_referee_system: false
-game_state_progress_threshold: 4
+game_start_progress_threshold: 4
+# test_nav：置 true 时对外发布「比赛开始 + 默认血量」，忽略下位机上报（只影响 referee/* 话题）
+test_nav: false
 source_mode: "fake"           # real | fake | replay
 fault_seed: 20261015
-serial_mode: "fake"           # 内置虚拟下位机，按真实协议发 0x0500~0x0504 + 裁判转发 0x0001/0x0201
+serial_mode: "fake"           # 新通信协议：0x0500~0x0504 host 帧 + 裁判转发 0x0001/0x0201/0x0202
 fake_serial_external: false
 fake_imu_hz: 500.0
 fake_robot_id: 7              # 0x0201 上报的 robot_id（红方 1~11，蓝方 101~111；用来验证敌我颜色自动判定）
+fake_hp: 400
+fake_max_hp: 400
+fake_heat: 30
 camera_mode: "fake"
 fake_camera_source: "synth"   # synth | sequence | video
 camera_width: 1440

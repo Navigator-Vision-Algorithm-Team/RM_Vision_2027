@@ -86,8 +86,13 @@ sudo apt update
 sudo apt install -y \
   build-essential cmake \
   libopencv-dev libfmt-dev libeigen3-dev libspdlog-dev \
-  libyaml-cpp-dev nlohmann-json3-dev libusb-1.0-0-dev
+  libyaml-cpp-dev nlohmann-json3-dev libusb-1.0-0-dev \
+  libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
 ```
+
+录像使用 FFmpeg 硬件 H.264 编码（`h264_vaapi`），需要 Intel 核显的 VAAPI 驱动作为**运行时**依赖；
+Ubuntu 上通常已随 `intel-media-va-driver` 或 `intel-media-va-driver-non-free` 提供，可用
+`vainfo` 确认。驱动缺失时录制器会自动回退 `libx264` 软编，不会影响程序运行，只是 CPU 占用上升。
 
 仓库包含海康与迈德威视相机 SDK 的 x86_64、aarch64 运行库。使用真实 USB 相机时，还需按设备安装 udev 规则并确认相机 SDK 与设备权限正常；海康规则示例位于 `io/hikrobot/udev/51-mvs.rules`。
 
@@ -192,6 +197,10 @@ python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts
 - [Kalman 调参文档](docs/kalman_tuning.md)
 - [相机标定流程](calibration/README.md)
 
+## 开发规范
+
+仓库的注释与编码要求见 [docs/coding_standards.md](docs/coding_standards.md)，属于强制规范：文件头说明整体作用、函数注释说明功能与输入输出、变量声明处说明含义、配置项逐个说明意义。该文档应作为固定上下文持续加载，新增或修改代码前请先阅读。
+
 ## 测试与验证
 
 默认构建中包含虚拟数据源运行器，可先运行：
@@ -205,9 +214,10 @@ python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts
 ## 参与开发
 
 1. 从对应入口及配置文件阅读当前实现，优先使用虚拟数据源复现问题。
-2. 修改后本地构建并运行相关目标；涉及通信或坐标系时同步核对相应协议和标定文档。
-3. 提交代码时说明目标程序、配置变化、测试方式和未覆盖的硬件条件。
-4. 不要提交运行日志、录制数据、个人设备路径、密钥或未经授权分发的模型/SDK 文件。
+2. 改动前先遵守 [docs/coding_standards.md](docs/coding_standards.md)：新增文件、函数、变量与配置项必须按规范写注释。
+3. 修改后本地构建并运行相关目标；涉及通信或坐标系时同步核对相应协议和标定文档。
+4. 提交代码时说明目标程序、配置变化、测试方式和未覆盖的硬件条件。
+5. 不要提交运行日志、录制数据、个人设备路径、密钥或未经授权分发的模型/SDK 文件。
 
 ## 致谢与许可
 

@@ -49,15 +49,6 @@ Tracker::Tracker(
 
 std::string Tracker::state() const { return state_; }
 
-void Tracker::set_enemy_color(Color color)
-{
-  if (color == enemy_color_) return;
-  enemy_color_ = color;
-  tools::logger()->info(
-    "[Tracker] 敌我颜色由裁判 robot_id 更新为敌人={}（配置 enemy_color 被覆盖）",
-    COLORS[static_cast<int>(color)]);
-}
-
 void Tracker::reset()
 {
   state_ = "lost";
@@ -66,6 +57,15 @@ void Tracker::reset()
   temp_lost_count_ = 0;
   max_temp_lost_count_ = normal_temp_lost_count_;
   tools::logger()->info("[Tracker] Reset by MCU signal.");
+}
+
+void Tracker::set_enemy_color(Color color)
+{
+  // 颜色没变就不动，避免每帧收到同一 ID 时反复清目标
+  if (color == enemy_color_) return;
+  enemy_color_ = color;
+  reset();  // 换色后旧目标属于另一方，清掉重跟
+  tools::logger()->info("[Tracker] enemy color -> {}", color == Color::red ? "red" : "blue");
 }
 
 const Target * Tracker::track(

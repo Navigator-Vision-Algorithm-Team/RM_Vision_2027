@@ -13,6 +13,17 @@ add_executable(serial_communication_test
     ${PROJECT_SOURCE_DIR}/io/serial/protocol/seasons/2027/protocol.cpp)
 target_link_libraries(serial_communication_test serial)
 
+# ============================================================================
+#  串口通信延迟测试（回环 RTT，协议见 time_delay_test.cpp 文件头）
+#    ./time_delay_test        # 无参数：/dev/ttyACM0 921600 100Hz 30s，写 delay.csv
+#  发 0x0410（带时间戳，帧格式不变），下位机把 data 段原样回传（cmd_id 不限），
+#  上位机统计 RTT / 单向延迟 / 抖动 / 丢包，同时记录发送频率与写串口耗时
+# ============================================================================
+add_executable(time_delay_test
+    time_delay_test.cpp
+    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
+target_link_libraries(time_delay_test serial)
+
 # 交互式云台响应测试：输入绝对 yaw/pitch（度），每行发送一条 0x0402 指令。
 add_executable(testgimbalspeed testgimbalspeed.cpp)
 target_link_libraries(
@@ -55,4 +66,13 @@ target_link_libraries(
 add_executable(yolodebug yolodebug.cpp)
 target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 
-install(TARGETS soldier_debug sentry_multithread_debug yolodebug RUNTIME DESTINATION bin)
+# ============================================================================
+#  裁判状态转发自测：虚拟下位机 0x0001/0x0201 -> SerialBoard -> ROS 话题
+#    ./referee_forward_test [config] [timeout_s]
+#  校验导航决策节点订阅的三个 referee 话题的名字、类型与字段值。
+# ============================================================================
+add_executable(referee_forward_test referee_forward_test.cpp)
+target_link_libraries(referee_forward_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
+
+install(TARGETS soldier_debug sentry_multithread_debug yolodebug referee_forward_test
+        RUNTIME DESTINATION bin)

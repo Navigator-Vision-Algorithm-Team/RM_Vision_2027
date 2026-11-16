@@ -212,6 +212,9 @@ struct SerialSourceConfig
   uint8_t robot_id = 0;
   // fake 模式下 0x0202 上报的 17mm 当前热量，用来验证热量保护（上限取自 0x0201）
   uint16_t heat = 30;
+  // fake 模式下 0x0201 上报的血量（用于联调导航返航阈值，例如把 fake_hp 调到 20% 以下）
+  uint16_t fake_hp = 400;
+  uint16_t fake_max_hp = 400;
   std::string replay_file;      // replay 模式：串口原始字节记录文件
 
   static SerialSourceConfig load(const YAML::Node & yaml, SourceMode fallback)
@@ -227,6 +230,8 @@ struct SerialSourceConfig
     c.reset_period_s = node_as<double>(yaml, "fake_reset_period_s", c.reset_period_s);
     c.robot_id = static_cast<uint8_t>(node_as<int>(yaml, "fake_robot_id", c.robot_id));
     c.heat = static_cast<uint16_t>(node_as<int>(yaml, "fake_heat", c.heat));
+    c.fake_hp = node_as<uint16_t>(yaml, "fake_hp", c.fake_hp);
+    c.fake_max_hp = node_as<uint16_t>(yaml, "fake_max_hp", c.fake_max_hp);
     c.replay_file = node_as<std::string>(
       yaml, "serial_replay_file", std::string("logs/virtual_session/serial.bin"));
     return c;

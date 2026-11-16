@@ -36,8 +36,16 @@ find_package(nlohmann_json REQUIRED)
 # 包含其头文件，故不在此 find_package，避免未装 ROS2 的开发机配置失败。
 find_package(OpenVINO REQUIRED)
 
+# ---------- FFmpeg（录像硬件 H.264 编码，tools/recorder.cpp） ----------
+# FFmpeg 官方不提供 CMake config 包，只能用 pkg-config 的 .pc 文件发现。
+# 这里用普通变量而不是 IMPORTED_TARGET：链接项要在顶层对所有可执行目标生效，
+# 而 pkg_check_modules 创建的导入目标只在当前目录及子目录可见，跨目录引用易失效。
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFMPEG REQUIRED libavcodec libavformat libavutil libswscale)
+include_directories(${FFMPEG_INCLUDE_DIRS})
+
 include_directories(${EIGEN3_INCLUDE_DIR})
-include_directories(${OpenCV_INCLUDE_DIRS})
+include_directories(SYSTEM ${OpenCV_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR})
 
 
@@ -51,14 +59,20 @@ add_subdirectory(tasks/auto_aim)
 add_subdirectory(tasks/omniperception)
 
 ####################src###################
+# 显式给后续所有目标补 FFmpeg 链接项。
+# 原因：tools 是 OBJECT 库，target_link_libraries(tools PUBLIC ...) 的链接接口不会
+# 传播到最终可执行文件，表现为链接期大量 "undefined reference to `av_*` / `sws_*`"。
+# link_libraries() 对本次调用之后创建的目标（含之后 add_subdirectory 进来的 tests）生效。
+link_libraries(${FFMPEG_LIBRARIES})
+
 # 多线程自瞄主程序（配置示例 configs/mtstandard.yaml）
-add_executable(mt_standard src/mt_standard.cpp)
+# add_executable(mt_standard src/mt_standard.cpp)
 # 步兵主程序：YOLO 检测 + PnP 位姿定位，默认配置 configs/soldier.yaml
 add_executable(soldier src/soldier.cpp)
 # 虚拟数据源运行器（无硬件可跑通 real / fake / replay）
 add_executable(virtual_run src/virtual_run.cpp)
 
-target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
+# target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 target_link_libraries(soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 

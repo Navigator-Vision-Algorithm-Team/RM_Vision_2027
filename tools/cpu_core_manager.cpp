@@ -196,9 +196,23 @@ CpuCoreManager::CpuCoreManager(const std::string & sysfs_cpu_root)
   allocated_.resize(cores_.size(), false);
 }
 
-std::optional<int> CpuCoreManager::allocate_cpu()
+std::optional<int> CpuCoreManager::allocate_cpu(CpuCoreType preferred)
 {
   std::lock_guard<std::mutex> lock(allocation_mutex_);
+
+  // 第一轮：只在偏好类型里找。全向相机要求 Efficiency 时，性能核全部留给
+  // 主相机，避免 OpenVINO 线程池把大核占满后把全向挤回小核。
+  if (preferred != CpuCoreType::Unknown) {
+    for (const auto index : allocation_order_) {
+      if (allocated_[index]) continue;
+      if (cores_[index].type != preferred) continue;
+      allocated_[index] = true;
+      if (cores_[index].available_logical_cpus.empty()) continue;
+      return cores_[index].available_logical_cpus.front();
+    }
+  }
+
+  // 第二轮（未指定偏好，或偏好类型已耗尽）：按默认顺序兜底。
   for (const auto index : allocation_order_) {
     if (allocated_[index]) continue;
     allocated_[index] = true;
@@ -206,6 +220,15 @@ std::optional<int> CpuCoreManager::allocate_cpu()
     return cores_[index].available_logical_cpus.front();
   }
   return std::nullopt;
+}
+
+CpuCoreType CpuCoreManager::core_type_of(int cpu) const
+{
+  for (const auto & core : cores_) {
+    const auto & cpus = core.available_logical_cpus;
+    if (std::find(cpus.begin(), cpus.end(), cpu) != cpus.end()) return core.type;
+  }
+  return CpuCoreType::Unknown;
 }
 
 bool CpuCoreManager::is_cpu_allowed(int cpu) const

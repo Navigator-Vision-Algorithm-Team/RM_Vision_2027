@@ -63,6 +63,7 @@ public:
   // Game / match state（来自下位机转发的裁判 0x0001 / 0x0201）
   GameStatus game_status() const;
   RobotStatus robot_status() const;
+  RefereeState referee_state() const;
   bool is_game_started() const;
 
   // 自己的机器人 ID（裁判 0x0201 的 robot_id，uint8_t）。
@@ -134,7 +135,11 @@ private:
   RobotStatus robot_status_{};
   std::atomic<bool> game_started_{false};
   std::atomic<bool> reset_pending_{false};
+  std::atomic<bool> game_status_received_{false};
+  std::atomic<bool> robot_status_received_{false};
   bool use_referee_system_ = false;
+  bool test_nav_ = false;
+  RefereeState test_nav_state_{};
   int game_start_progress_threshold_ = 4;
 
   // 裁判 0x0201 / 0x0202 的机器人身份与枪管热量（接收线程写，业务线程读 status_mutex_）

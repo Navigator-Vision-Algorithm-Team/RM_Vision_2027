@@ -57,6 +57,12 @@ struct CameraJob
   // 是否把当前线程绑定到独占 CPU 核。全向相机默认 true；主相机可关闭，
   // 让 OpenVINO 按自身策略使用更多核。
   bool pin_cpu = true;
+  // 绑核时优先申请的物理核类型（仅 pin_cpu=true 时生效）：
+  //   Unknown      -> 默认顺序，性能核优先
+  //   Efficiency   -> 只用能效核，把性能核让给不绑核的主相机
+  //   Performance  -> 只用性能核
+  // 该类型的核不够时回退到其它核，并在启动日志里逐个告警，不会静默降级。
+  tools::CpuCoreType core_preference = tools::CpuCoreType::Unknown;
   // CPU 推理是否限制为单线程。全向相机默认 true（每路独占一核），
   // 主相机可关闭，允许 OpenVINO 自主并行。
   bool single_thread_cpu = true;

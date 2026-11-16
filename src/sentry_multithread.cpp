@@ -1,3 +1,30 @@
+/*
+ * 哨兵（双yaw + 多全向相机）自瞄主程序：把「主相机精瞄 + 全向补盲」合成一路云台指令。
+ *
+ * 数据流：
+ *   相机：主相机 + omni_camera_count 路全向相机 → YoloPipeline（每路一个 YOLO 实例、
+ *         一个绑核线程）→ 主相机结果优先的统一队列 → 本文件主循环。
+ *   姿态：串口 0x0503（500Hz）→ SerialBoard 接收线程插值 → ImuState（大yaw / 小yaw）
+ *         → 刷新 io::tf::Tree 的两个动态关节 → Solver::set_R_gimbal2world。
+ *   决策：Decider（全向候选排序）与 Tracker（主相机优先）→ Aimer / Shooter
+ *         → io::Command → SerialBoard::send（0x0402）。
+ *   外设：导航 NavCommand 在 ROS 2 回调里直接下发 0x0405；0x0503 关节角发布为
+ *         JointState；0x0001 / 0x0201 裁判状态转发给导航决策节点。
+ *
+ * 线程：main() 主循环运行在进程主线程；推理在 YoloPipeline 的各相机线程；串口收发在
+ *       SerialBoard::receive_thread_；ROS 2 在 rclcpp executor 线程。本文件不跨线程
+ *       共享可写状态，并发保护由 YoloPipeline / SerialBoard 内部负责。
+ *
+ * 依赖：io::tf（外参来源优先级：tf 树 > yaml 的 omni_* 键 > 安装角近似，t 置 0）、
+ *       ROS 2（找不到依赖时本目标不参与构建），配置示例 configs/sentry_example.yaml。
+ *
+ * 注意：
+ *   1. 0x0402 报文没有 control 位，pitch / yaw 被固件无条件执行：任何「视觉不接管」的
+ *      分支都必须显式回填当前 gimbal_pos，漏填的默认 0 会把云台拽回世界系 0 度。
+ *   2. Aimer 输出的 yaw 已是世界系绝对角，不得再叠加 gimbal_pos[0]；Decider 输出的
+ *      delta_yaw 是「大yaw 系」角，必须叠加 omni_base_yaw 后才能下发。
+ *   3. Exiter 必须在 io::ROS2 之后构造，否则 rclcpp 抢走 SIGINT 处理，Ctrl+C 无法退出。
+ */
 #include <fmt/core.h>
 
 #include <chrono>
@@ -21,7 +48,6 @@
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
-#include "tools/plotter.hpp"
 #include "tools/recorder.hpp"
 #include "tools/yaml.hpp"
 
@@ -33,9 +59,6 @@ const std::string keys =
 
 int main(int argc, char * argv[])
 {
-  tools::Plotter plotter;
-  tools::Recorder main_recorder(30, "main");
-
   cv::CommandLineParser cli(argc, argv, keys);
   if (cli.has("help")) {
     cli.printMessage();
@@ -45,22 +68,24 @@ int main(int argc, char * argv[])
 
   auto yaml = tools::load(config_path);
 
+  // 录像参数：主相机出帧 120~150 fps，录像只按 record_fps_main 抽帧（默认 30），
+  // 复盘够用，编码与磁盘都省 4/5；quality 对应 VAAPI global_quality / libx264 crf，
+  // 取值 1~51，越小越清晰、体积越大
+  const double main_record_fps =
+    yaml["record_fps_main"] ? yaml["record_fps_main"].as<double>() : 30.0;
+  const int record_quality = yaml["record_quality"] ? yaml["record_quality"].as<int>() : 25;
+  tools::Recorder main_recorder(main_record_fps, "main", record_quality);
+
   // 坐标变换树：所有几何量（每个相机相对旋转轴的位置/姿态）都来自配置 tf.frames，
   // 代码里不写死任何安装尺寸。大yaw 与小yaw 作为两个动态关节，每帧由 0x0503 刷新。
   io::tf::Tree tf_tree = io::tf::load_tree(yaml);
   if (tf_tree.empty()) {
     tools::logger()->warn(
       "[Main] 配置里没有 tf.frames：主相机/全向相机将使用各自的回退外参（未标定则为安装角近似）");
-  } else {
-    std::string frames;
-    for (const auto & f : tf_tree.frames()) frames += f + " ";
-    tools::logger()->info("[Main] tf frames: {}", frames);
   }
 
-  tools::logger()->info("[Main] Initializing SerialBoard...");
   // 串口初始化
   io::SerialBoard serial_board(config_path);
-  tools::logger()->info("[Main] SerialBoard ready.");
 
   // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
   // 与主循环（视觉处理）解耦，避免被主链路延迟。
@@ -72,14 +97,19 @@ int main(int argc, char * argv[])
   // JointState，不额外启动程序、不重复占用串口。
   serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
 
+  // 裁判状态转发：导航决策节点（pb_nav_goal_decision）在 red_standard_robot1 命名空间下
+  // 订阅 referee/{game_progress,current_hp,maximum_hp}，数据源是串口 0x0001 / 0x0201 帧。
+  // 未接裁判系统（use_referee_system=false）且下位机不转发 0x0001 时收不到数据，这里什么都
+  // 不发布，导航侧停在 WAIT_GAME_START 不动作 —— 刻意保留，避免无裁判数据时自走。
+  // 配置 test_nav: true 时 referee_state() 直接返回「比赛已开始 + 默认血量」，与下位机无关。
+  ros2.set_referee_source([&serial_board]() { return serial_board.referee_state(); });
+
   // Exiter 必须在 io::ROS2 之后构造：rclcpp::init 会用自己的 handler 接管 SIGINT，
   // 后安装的 handler 才能让 Ctrl+C 重新置位退出标志。
   tools::Exiter exiter;
 
-  tools::logger()->info("[Main] Opening camera...");
   // 相机初始化
   io::Camera camera(config_path, "main");
-  tools::logger()->info("[Main] Camera ready: {}", camera.device_name());
 
   int omni_count = 0;
   if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
@@ -90,11 +120,6 @@ int main(int argc, char * argv[])
   // 缺省 true，保持旧行为；yaml 里写 spin_when_no_omni: false 即可关闭自旋
   const bool spin_when_no_omni =
     yaml["spin_when_no_omni"] ? yaml["spin_when_no_omni"].as<bool>() : true;
-  if (omni_count == 0) {
-    tools::logger()->info(
-      "[Main] single main camera, spin when lost: {}", spin_when_no_omni ? "on" : "off");
-  }
-
   // 缓冲时间， 确保全向相机初始化完成，避免出现空帧，但是我们的全向相机和主相机并不在同一个物理链路上，所以这个sleep并没有非常的必要
   // if (omni_count > 0) {
   //   std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -107,7 +132,11 @@ int main(int argc, char * argv[])
   for (int i = 1; i <= omni_count; i++) {
     auto sursign = "omni" + std::to_string(i);
     auto cam = std::make_unique<io::Camera>(config_path, sursign);
-    auto recorder = std::make_unique<tools::Recorder>(30, sursign);
+    // 全向相机的实际出帧率来自 frame_rate_omniN（配置里是 15）：录制器若按 30 声明，
+    // 15fps 的码流会被播放器按 30fps 播放，回放速度翻倍、时间轴对不上
+    const double omni_record_fps =
+      yaml["frame_rate_" + sursign] ? yaml["frame_rate_" + sursign].as<double>() : 15.0;
+    auto recorder = std::make_unique<tools::Recorder>(omni_record_fps, sursign, record_quality);
 
     //缓冲时间
     if (i < omni_count) {
@@ -142,9 +171,9 @@ int main(int argc, char * argv[])
     omniperception::load_omni_pnp_config(cfg, yaml, i);
 
     // 外参优先级：tf 树 > yaml 的 omni_R/t_camera2gimbal_N > 安装角近似。
-    // 三态日志（避免"明明用了 tf 却报警说要用安装角"的误导）：
-    //   ① tf 查到          -> debug：实车正常路径，不打扰
-    //   ② tf 无、yaml 有    -> info ：合法降级（例如仿真配置没写 tf）
+    // 按外参来源处理，避免"明明用了 tf 却报警说要用安装角"的误导：
+    //   ① tf 查到          -> 使用 tf 外参，不输出日志
+    //   ② tf 无、yaml 有    -> 使用 yaml 外参，不输出日志
     //   ③ tf 无、yaml 也无  -> warn ：真的在走安装角近似（t=0，近距离有视差误差）
     // 进入本块时 cfg.has_extrinsic 的含义是「yaml 是否给了有效外参」。
     {
@@ -157,18 +186,11 @@ int main(int argc, char * argv[])
         cfg.R_camera2gimbal = T_cam2yaw.R;
         cfg.t_camera2gimbal = T_cam2yaw.t;
         cfg.has_extrinsic = true;
-        tools::logger()->debug(
-          "[omni{}] 外参 <- tf ({} -> {})", i, frame, io::tf::Tree::YAW_AXIS);
       } else if (!cfg.has_extrinsic) {
         // ③ 两个来源都没有：decider 会退回 mount_to_R_camera2gimbal()，且 t 置 0。
         tools::logger()->warn(
           "[omni{}] tf 里没有 {} -> {}，且未配置 omni_R/t_camera2gimbal_{} "
           "-> 将用安装角 mount_yaw/mount_pitch 近似外参（t=0，近距离有视差误差）",
-          i, frame, io::tf::Tree::YAW_AXIS, i);
-      } else {
-        // ② tf 缺失但 yaml 给了有效 R/t：合法降级，不是错误。
-        tools::logger()->info(
-          "[omni{}] tf 里没有 {} -> {}，外参沿用 yaml 的 omni_R/t_camera2gimbal_{}",
           i, frame, io::tf::Tree::YAW_AXIS, i);
       }
     }
@@ -185,14 +207,20 @@ int main(int argc, char * argv[])
 
   omniperception::Decider decider(config_path);
 
-  // 敌我颜色：以裁判 0x0201 的 robot_id 为准（红方 1~11，蓝方 101~111），敌人颜色取反。
-  // 还没收到裁判帧（或没接裁判系统）时 own_team_red() 为空，继续用配置里的 enemy_color。
+  const auto config_enemy_color =
+    yaml["enemy_color"].as<std::string>() == "red" ? auto_aim::Color::red
+                                                  : auto_aim::Color::blue;
+  auto omni_state = std::make_shared<omniperception::OmniSharedState>();
+  omni_state->set_enemy_color(config_enemy_color);
+
+  // 敌我颜色以新通信协议转发的裁判 0x0201 robot_id 为准；未收到时使用配置兜底。
   auto refresh_enemy_color = [&]() {
     const auto own_red = serial_board.own_team_red();
     if (!own_red) return;
     const auto enemy_color = *own_red ? auto_aim::blue : auto_aim::red;
     tracker.set_enemy_color(enemy_color);
     decider.set_enemy_color(enemy_color);
+    omni_state->set_enemy_color(enemy_color);
   };
 
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程，
@@ -209,7 +237,7 @@ int main(int argc, char * argv[])
     main_job.single_thread_cpu = false;
     camera_jobs.push_back(std::move(main_job));
 
-    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path);
+    auto omni_jobs = omniperception::make_omni_jobs(omni_configs, config_path, omni_state);
     for (auto & job : omni_jobs) camera_jobs.push_back(std::move(job));
   }
   auto_aim::multithread::YoloPipeline pipeline(config_path, std::move(camera_jobs), false);
@@ -220,11 +248,8 @@ int main(int argc, char * argv[])
     io::tf::Transform T_cam2plate;
     if (tf_tree.lookup(io::tf::Tree::MAIN_CAM, io::tf::Tree::SMALL_YAW, T_cam2plate)) {
       solver.set_extrinsic(T_cam2plate.R, T_cam2plate.t);
-      tools::logger()->info("[Main] main_cam extrinsic <- tf tree");
     }
   }
-
-  bool game_started_logged = false;
 
     // 全向感知缓存：全向发现目标后的 yaw/pitch，主相机锁定前反复播报
   bool has_omni_cache = false;
@@ -233,7 +258,7 @@ int main(int argc, char * argv[])
 
   // 主相机最后出帧的时间：用于相机掉线时的告警（超时等待本身不会卡死主循环）
   auto last_main_frame = std::chrono::steady_clock::now();
-  auto last_stall_log = last_main_frame;
+  bool camera_stall_warning_logged = false;
 
   // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
   // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
@@ -251,15 +276,15 @@ int main(int argc, char * argv[])
     if (status == auto_aim::multithread::WaitStatus::Timeout) {
       const auto now = std::chrono::steady_clock::now();
       const double stalled = std::chrono::duration<double>(now - last_main_frame).count();
-      if (stalled >= 2.0 &&
-          std::chrono::duration<double>(now - last_stall_log).count() >= 2.0) {
-        last_stall_log = now;
+      if (stalled >= 2.0 && !camera_stall_warning_logged) {
+        camera_stall_warning_logged = true;
         tools::logger()->warn("[Main] 主相机已 {:.1f}s 没有新帧，继续等待...", stalled);
       }
       continue;
     }
 
     last_main_frame = std::chrono::steady_clock::now();
+    camera_stall_warning_logged = false;
     if (frame.img.empty()) {
       continue;
     }
@@ -302,19 +327,10 @@ int main(int argc, char * argv[])
 
     // 比赛未开始时跳过自瞄逻辑（裁判系统控制）
     if (!serial_board.is_game_started()) {
-      if (!game_started_logged) {
-        game_started_logged = true;
-        tools::logger()->info("[Main] Game not started yet, waiting...");
-      }
       //注意这个地方的功耗···检查之后似乎没有很多
       main_recorder.record(img, q_main, timestamp);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
-    }
-
-    if (!game_started_logged) {
-      game_started_logged = true;
-      tools::logger()->info("[Main] Game started! Entering detection & tracking loop");
     }
 
     // 主相机在小yaw 上，Solver 的 "gimbal" 就是小yaw 板
@@ -329,6 +345,16 @@ int main(int argc, char * argv[])
 
     io::Command command{false, false, 0, 0};
 
+    // 0x0402 报文里没有 control 位（见 io/serial/gimbal/packet.hpp），固件对
+    // pitch / yaw 无条件执行，control 只参与 shoot 的与运算。所以「视觉不接管」
+    // 也必须下发一个合法角度：这里统一改写成当前姿态，保持云台不动。
+    // 少任何一个分支漏填，都会把默认的 0 当成「转到 pitch=0 / 世界系 yaw=0」。
+    auto hold_current_pose = [&]() {
+      if (command.control) return;
+      command.yaw = gimbal_pos[0];
+      command.pitch = gimbal_pos[1];
+    };
+
     // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
     // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
     // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
@@ -341,6 +367,8 @@ int main(int argc, char * argv[])
         command.control = true;
         // gimbal_pos[0] 是当前世界系绝对 yaw，叠加增量后即为世界系绝对目标角
         command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
+        // 这里的 pitch=0 是**有意的**：自旋搜索时保持平视，不要抬头/低头扫地面。
+        // 与上面两种「漏填默认 0」的情况不同，control 在这里是 true。
         command.pitch = tools::limit_rad(0.0);
       } else {
         // 原地保持：gimbal_pos[0]/[1] 是世界系绝对 yaw/pitch，原样下发即为「保持当前角度」
@@ -350,6 +378,7 @@ int main(int argc, char * argv[])
       }
 
       main_recorder.record(img, q_main, timestamp);
+      hold_current_pose();
       serial_board.send(command);
     } else {
       //这是主相机的处理，立马处理的目标
@@ -376,10 +405,19 @@ int main(int argc, char * argv[])
       // 必须加大yaw 当前的世界系 yaw 才是下位机要求的世界系绝对角。
       // 注意：这里不能用 gimbal_pos[0]——那是小yaw 的 yaw，两个轴是独立的。
       if (tracker.state() == "switching") {
-        command.control = switch_target.armors.empty() ? false : true;
+        // switch_target.armors 为空 = 已决定切换、但新目标还没观测到，此时它的
+        // delta_yaw / delta_pitch 是 DetectionResult 的默认值 0。0x0402 报文里
+        // 没有 control 位、pitch/yaw 会被固件无条件执行，直接下发 0 等于命令云台
+        // 转到「pitch=0、世界系 yaw=0」。所以 control=false 时显式保持当前姿态。
         command.shoot = false;
-        command.pitch = tools::limit_rad(switch_target.delta_pitch);
-        command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
+        command.control = !switch_target.armors.empty();
+        if (command.control) {
+          command.pitch = tools::limit_rad(switch_target.delta_pitch);
+          command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
+        } else {
+          command.pitch = gimbal_pos[1];
+          command.yaw = gimbal_pos[0];
+        }
       }
 
       else if (tracker.state() == "lost") {
@@ -397,6 +435,14 @@ int main(int argc, char * argv[])
           command.shoot = false;
           command.yaw = cached_omni_yaw;
           command.pitch = cached_omni_pitch;
+        } else {
+          // 既没有新的全向结果、也没有缓存：decider.decide() 返回的是
+          // {false, false, 0, 0}，而 0x0402 的 pitch/yaw 会被固件无条件执行。
+          // 直接下发会把云台拽回世界系 0 度，这里显式保持当前姿态。
+          command.control = false;
+          command.shoot = false;
+          command.yaw = gimbal_pos[0];
+          command.pitch = gimbal_pos[1];
         }
       }
 
@@ -441,6 +487,7 @@ int main(int argc, char * argv[])
 
   //     tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
   // command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);
+      hold_current_pose();
       serial_board.send(command);
 
       // //test//
