@@ -12,7 +12,7 @@
 #include "buff_target.hpp"
 #include "buff_type.hpp"
 #include "io/command.hpp"
-#include "io/serial/gimbal/gimbal.hpp"
+#include "info_relay/link/protocol/gimbal/gimbal.hpp"
 
 namespace auto_buff
 {

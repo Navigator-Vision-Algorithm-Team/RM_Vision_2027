@@ -33,8 +33,7 @@
 #include <thread>
 
 #include "io/camera.hpp"
-#include "io/serial/serial_board.hpp"
-#include "io/ros2/ros2.hpp"
+#include "io/relay/relay_client.hpp"
 #include "io/tf/tf_tree.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/multithread/yolo_pipeline.hpp"
@@ -84,28 +83,10 @@ int main(int argc, char * argv[])
       "[Main] 配置里没有 tf.frames：主相机/全向相机将使用各自的回退外参（未标定则为安装角近似）");
   }
 
-  // 串口初始化
-  io::SerialBoard serial_board(config_path);
+  // 中转客户端：视觉进程不再打开串口，也不再持有 ROS 2 节点。
+  // 串口收发、导航速度订阅、云台关节与裁判状态发布全部由 info_relay 进程承担。
+  io::RelayClient serial_board(config_path);
 
-  // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
-  // 与主循环（视觉处理）解耦，避免被主链路延迟。
-  io::ROS2 ros2([&serial_board](const io::NavCommand & nav_command) {
-    serial_board.send(nav_command);
-  });
-
-  // 云台关节反馈：复用 SerialBoard 已有的串口接收线程，收到一帧 0x0503 就发布一次
-  // JointState，不额外启动程序、不重复占用串口。
-  serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
-
-  // 裁判状态转发：导航决策节点（pb_nav_goal_decision）在 red_standard_robot1 命名空间下
-  // 订阅 referee/{game_progress,current_hp,maximum_hp}，数据源是串口 0x0001 / 0x0201 帧。
-  // 未接裁判系统（use_referee_system=false）且下位机不转发 0x0001 时收不到数据，这里什么都
-  // 不发布，导航侧停在 WAIT_GAME_START 不动作 —— 刻意保留，避免无裁判数据时自走。
-  // 配置 test_nav: true 时 referee_state() 直接返回「比赛已开始 + 默认血量」，与下位机无关。
-  ros2.set_referee_source([&serial_board]() { return serial_board.referee_state(); });
-
-  // Exiter 必须在 io::ROS2 之后构造：rclcpp::init 会用自己的 handler 接管 SIGINT，
-  // 后安装的 handler 才能让 Ctrl+C 重新置位退出标志。
   tools::Exiter exiter;
 
   // 相机初始化
@@ -262,7 +243,7 @@ int main(int argc, char * argv[])
 
   // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
   // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
-  while (!exiter.exit() && rclcpp::ok()) {
+  while (!exiter.exit()) {
     // 开赛前关闭推理：相机仍持续出图（主相机帧照常入队，供录像使用），
     // 避免赛前 5 路 YOLO 空转占满 CPU。
     pipeline.set_inference_enabled(serial_board.is_game_started());

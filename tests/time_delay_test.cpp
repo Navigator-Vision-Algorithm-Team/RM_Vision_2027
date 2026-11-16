@@ -82,8 +82,8 @@
 #include <utility>
 #include <vector>
 
-#include "io/serial/gimbal/packet.hpp"
-#include "io/serial/gimbal/protocol_crc.hpp"
+#include "info_relay/link/protocol/gimbal/packet.hpp"
+#include "info_relay/link/protocol/gimbal/protocol_crc.hpp"
 
 namespace
 {

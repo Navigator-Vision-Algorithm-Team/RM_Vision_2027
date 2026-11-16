@@ -61,6 +61,10 @@ add_subdirectory(tasks/auto_aim)
 # add_executable / target_link_libraries 两行恢复即可。
 add_subdirectory(tasks/omniperception)
 
+# 串口与导航通信已迁至独立工程 info_relay（其自带顶层 CMakeLists 与构建目录），
+# 本工程不再编译、不再引用它的任何源码或产物，只通过 iceoryx2 主题与之通信。
+# 部署时需分别构建两个仓库，各自产出自己的可执行文件。
+
 ####################src###################
 # 显式给后续所有目标补 FFmpeg 链接项。
 # 原因：tools 是 OBJECT 库，target_link_libraries(tools PUBLIC ...) 的链接接口不会
@@ -76,8 +80,11 @@ link_libraries(${FFMPEG_LIBRARIES})
 if(TARGET io_soldier_can)
     add_executable(soldier src/soldier_main.cpp src/soldier.cpp)
 endif()
-# 虚拟数据源运行器（无硬件可跑通 real / fake / replay）
-add_executable(virtual_run src/virtual_run.cpp)
+# 虚拟数据源运行器已停用：它同时驱动串口与相机的 fake/replay，
+# 而串口侧（虚拟下位机、字节回放、协议解析）已随 info_relay 迁出本工程。
+# 无硬件联调现在需要同时启动 info_relay（serial 侧）与视觉入口（相机侧）。
+# 源码保留备查，不参与构建。
+# add_executable(virtual_run src/virtual_run.cpp)
 
 # target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
 if(TARGET soldier)
@@ -86,7 +93,7 @@ if(TARGET soldier)
         soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can
                 io_soldier_can)
 endif()
-target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
+# target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 
 ##################calibration################
 # 旧的标定工具（capture / calibrate_camera / calibrate_handeye /

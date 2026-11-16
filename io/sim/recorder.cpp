@@ -1,7 +1,18 @@
+/*
+ * 相机录像与回放的实现：camera.tsv 记录元信息，camera/*.png 存图。
+ *
+ * 数据流：CameraRecorder::record() → 深拷贝入队 → worker() 逐帧写 png 并追加 tsv 行；
+ *         CameraReplayReader::load() 解析 tsv，read_image() 按行内文件名读图。
+ *
+ * 注意：契约写在 io/sim/recorder.hpp，本文件只写实现要点。
+ *       串口字节记录已迁至 info_relay/link/transport/serial_recorder.cpp。
+ */
 #include "io/sim/recorder.hpp"
 
-#include <filesystem>
 #include <fmt/format.h>
+
+#include <chrono>
+#include <filesystem>
 #include <sstream>
 
 #include "tools/logger.hpp"
@@ -10,11 +21,13 @@ namespace fs = std::filesystem;
 
 namespace io::sim
 {
-
 namespace
 {
-constexpr char k_serial_magic[8] = {'R', 'M', 'S', 'E', 'R', 'I', 'A', 'L'};
-
+// 功能：创建目录，失败只告警
+// 输入：
+//   dir  目录路径
+// 输出：原样返回 dir
+// 备注：只创建不删除；权限不足时后续写文件会失败并告警
 std::string ensure_dir(const std::string & dir)
 {
   try {
@@ -26,118 +39,7 @@ std::string ensure_dir(const std::string & dir)
 }
 }  // namespace
 
-// ============================ SerialRecorder ============================
-SerialRecorder::SerialRecorder(const std::string & session_dir)
-{
-  ensure_dir(session_dir);
-  path_ = session_dir + "/serial.bin";
-  file_.open(path_, std::ios::binary | std::ios::trunc);
-  if (!file_.is_open()) {
-    tools::logger()->warn("[REC] Cannot open serial record file: {}", path_);
-    return;
-  }
-
-  const uint64_t start_unix_ns = static_cast<uint64_t>(
-    std::chrono::duration_cast<std::chrono::nanoseconds>(
-      std::chrono::system_clock::now().time_since_epoch())
-      .count());
-  uint32_t count = 0;
-  file_.write(k_serial_magic, sizeof(k_serial_magic));
-  file_.write(reinterpret_cast<const char *>(&start_unix_ns), sizeof(start_unix_ns));
-  file_.write(reinterpret_cast<const char *>(&count), sizeof(count));
-  file_.flush();
-
-  tools::logger()->info("[REC] Serial recording to {}", path_);
-}
-
-SerialRecorder::~SerialRecorder() { close(); }
-
-void SerialRecorder::record_rx(const uint8_t * data, size_t size) { write_record(0, data, size); }
-
-void SerialRecorder::record_tx(const uint8_t * data, size_t size) { write_record(1, data, size); }
-
-void SerialRecorder::write_record(uint8_t dir, const uint8_t * data, size_t size)
-{
-  if (!file_.is_open() || !data || size == 0) return;
-  std::lock_guard<std::mutex> lock(mutex_);
-
-  const uint64_t t_ns = SessionClock::now_rel_ns();
-  const uint32_t len = static_cast<uint32_t>(size);
-  file_.write(reinterpret_cast<const char *>(&t_ns), sizeof(t_ns));
-  file_.write(reinterpret_cast<const char *>(&dir), sizeof(dir));
-  file_.write(reinterpret_cast<const char *>(&len), sizeof(len));
-  file_.write(reinterpret_cast<const char *>(data), size);
-  count_++;
-
-  // 周期性落盘，避免崩溃时丢数据
-  if (count_ % 256 == 0) file_.flush();
-}
-
-void SerialRecorder::close()
-{
-  if (closed_) return;
-  closed_ = true;
-  if (!file_.is_open()) return;
-
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    // 回填记录条数
-    file_.seekp(static_cast<std::streamoff>(sizeof(k_serial_magic) + sizeof(uint64_t)),
-                std::ios::beg);
-    file_.write(reinterpret_cast<const char *>(&count_), sizeof(count_));
-    file_.flush();
-    file_.close();
-  }
-  tools::logger()->info("[REC] Serial recording closed ({} records): {}", count_, path_);
-}
-
-// ============================ SerialReplayReader ============================
-SerialReplayReader::SerialReplayReader(const std::string & path) : path_(path) {}
-
-bool SerialReplayReader::load(std::string & error)
-{
-  std::ifstream in(path_, std::ios::binary);
-  if (!in.is_open()) {
-    error = "cannot open " + path_;
-    return ok_ = false;
-  }
-
-  char magic[8] = {};
-  uint64_t start_unix_ns = 0;
-  uint32_t count = 0;
-  in.read(magic, sizeof(magic));
-  in.read(reinterpret_cast<char *>(&start_unix_ns), sizeof(start_unix_ns));
-  in.read(reinterpret_cast<char *>(&count), sizeof(count));
-
-  for (size_t i = 0; i < sizeof(k_serial_magic); ++i) {
-    if (magic[i] != k_serial_magic[i]) {
-      error = "bad magic in " + path_;
-      return ok_ = false;
-    }
-  }
-
-  records_.clear();
-  rx_bytes_ = 0;
-  while (in.good()) {
-    SerialRecord rec;
-    in.read(reinterpret_cast<char *>(&rec.t_ns), sizeof(rec.t_ns));
-    if (!in.good()) break;
-    in.read(reinterpret_cast<char *>(&rec.dir), sizeof(rec.dir));
-    uint32_t len = 0;
-    in.read(reinterpret_cast<char *>(&len), sizeof(len));
-    if (!in.good() || len == 0 || len > (1u << 20)) break;
-    rec.data.resize(len);
-    in.read(reinterpret_cast<char *>(rec.data.data()), len);
-    if (!in.good()) break;
-    if (rec.dir == 0) rx_bytes_ += len;
-    records_.push_back(std::move(rec));
-  }
-
-  ok_ = true;
-  return true;
-}
-
-// ============================ CameraRecorder ============================
+// 实现要点：先建目录与 tsv 再启动写盘线程，避免线程起来后 tsv_ 还是未打开状态。
 CameraRecorder::CameraRecorder(std::string session_dir, bool save_images)
 : session_dir_(std::move(session_dir)), save_images_(save_images)
 {
@@ -160,6 +62,7 @@ CameraRecorder::CameraRecorder(std::string session_dir, bool save_images)
 
 CameraRecorder::~CameraRecorder() { close(); }
 
+// 实现要点：这里必须深拷贝——上游相机可能是零拷贝缓冲池，浅拷贝会让写盘时读到已被覆盖的帧。
 void CameraRecorder::record(const cv::Mat & img, TimePoint ts, uint64_t frame_id, int format)
 {
   if (closed_ || img.empty()) return;
@@ -172,6 +75,7 @@ void CameraRecorder::record(const cv::Mat & img, TimePoint ts, uint64_t frame_id
   queue_.push(item);
 }
 
+// 实现要点：写图失败时把文件名记为 "none"，让回放侧生成占位图而不是崩在 imread。
 void CameraRecorder::write_item(const Item & item)
 {
   if (!tsv_.is_open()) return;
@@ -186,10 +90,12 @@ void CameraRecorder::write_item(const Item & item)
     }
   }
 
-  tsv_ << item.frame_id << '\t' << item.t_ns << '\t' << item.img.cols << '\t' << item.img.rows << '\t'
-       << item.format << '\t' << rel << '\n';
+  tsv_ << item.frame_id << '\t' << item.t_ns << '\t' << item.img.cols << '\t' << item.img.rows
+       << '\t' << item.format << '\t' << rel << '\n';
 }
 
+// 实现要点：用 100ms 超时轮询而不是阻塞 pop，析构置 quit_ 后最多等 100ms 就能退出；
+// 退出前把队列排空，避免丢最后一帧。
 void CameraRecorder::worker()
 {
   while (!quit_) {
@@ -216,9 +122,13 @@ void CameraRecorder::close()
   tools::logger()->info("[CAM-REC] Camera recording closed: {}", session_dir_);
 }
 
-// ============================ CameraReplayReader ============================
-CameraReplayReader::CameraReplayReader(const std::string & session_dir) : session_dir_(session_dir) {}
+CameraReplayReader::CameraReplayReader(const std::string & session_dir)
+: session_dir_(session_dir)
+{
+}
 
+// 实现要点：tsv 是制表符分隔，最后一段是相对路径；解析失败的行直接跳过而不是整体报错，
+// 这样半截损坏的会话仍能回放可用的部分。
 bool CameraReplayReader::load(std::string & error)
 {
   const std::string path = session_dir_ + "/camera.tsv";

@@ -8,7 +8,13 @@
 # 可选值: "red" 或 "blue"
 enemy_color: "red"
 
-# ----- 串口通信 (SerialBoard) -----
+# ----- 中转进程连接 (info_relay) -----
+# 视觉进程不再打开串口：串口收发、导航订阅、关节与裁判发布都在 info_relay 里完成。
+# 下面两项必须与 configs/info_relay.yaml 中的同名键完全一致，否则连不上。
+relay_prefix: "rm_vision"      # 主题名前缀；relay 与视觉两侧必须相同
+relay_timeout_ms: 200          # 链路失效阈值，ms；超过该时长无 IMU 样本则停火
+
+# ----- 串口通信（已迁至 info_relay，本文件不再读取）-----
 com_port: '/dev/ttyACM0'            # 串口设备路径
 baud_rate: 921600                    # 波特率
 bullet_speed: 28.0                   # 默认弹速 (m/s), 会被下位机数据覆盖

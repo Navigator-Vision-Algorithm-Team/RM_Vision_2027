@@ -18,8 +18,7 @@
 #include <thread>
 
 #include "io/camera.hpp"
-#include "io/serial/serial_board.hpp"
-#include "io/ros2/ros2.hpp"
+#include "io/relay/relay_client.hpp"
 #include "io/tf/tf_tree.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/debug_stream.hpp"
@@ -78,19 +77,10 @@ int main(int argc, char * argv[])
 
   tools::logger()->info("[Main] Initializing SerialBoard...");
   // 串口初始化
-  io::SerialBoard serial_board(config_path);
+  io::RelayClient serial_board(config_path);
   tools::logger()->info("[Main] SerialBoard ready.");
 
-  // ROS2 初始化：内部启动独立线程，收到导航数据后立即经串口下发，
-  // 与主循环（视觉处理）解耦，避免被主链路延迟。
-  io::ROS2 ros2([&serial_board](const io::NavCommand & nav_command) {
-    serial_board.send(nav_command);
-  });
-
-  // 云台关节反馈：复用 SerialBoard 已有的串口接收线程（不额外占串口）
-  serial_board.set_gimbal_joint_callback(ros2.gimbal_joint_sender());
-
-  // Exiter 必须在 io::ROS2 之后构造：rclcpp::init 接管 SIGINT，后装的 handler 才生效
+  // 导航与裁判桥接已迁入 info_relay 进程，本入口只保留图像调试流
   tools::Exiter exiter;
 
   tools::logger()->info("[Main] Opening camera...");
@@ -247,7 +237,7 @@ int main(int argc, char * argv[])
   auto last_stall_log = last_main_frame;
 
   // rclcpp 接管 SIGTERM 时只置 shutdown 标志，需要一并检查 rclcpp::ok()
-  while (!exiter.exit() && rclcpp::ok()) {
+  while (!exiter.exit()) {
     refresh_enemy_color();
 
     // 开赛前关闭推理，相机仍持续出图（主相机帧照常入队供录像）

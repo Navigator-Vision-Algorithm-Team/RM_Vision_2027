@@ -25,6 +25,12 @@ install/
 # 标定采集的图片与结果（体积大，且因机器而异）
 calibration/out/
 
+# iceoryx2 构建产物（本机 vendor，include 2.3MB + lib 52MB，其中 Rust 静态库 46MB）：
+# 先不纳入版本控制，待 info_relay 链路验证通过后再决定固化方式
+# （直接提交 / 只提交头文件与 .so / 改由部署脚本生成）。
+# 注意：该目录缺失时顶层 CMake 会自动跳过 info_relay 目标，不影响其余构建。
+3rd_part/iceoryx2/
+
 # mock-input 分支新增：Python 虚拟下位机的字节码缓存
 __pycache__/
 cmake-build-debug/

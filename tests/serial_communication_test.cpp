@@ -33,10 +33,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "io/serial/gimbal/packet.hpp"
-#include "io/serial/protocol/host_protocol.hpp"
-#include "io/serial/protocol/referee.hpp"
-#include "io/serial/protocol/seasons/2027/protocol.hpp"
+#include "info_relay/link/protocol/gimbal/packet.hpp"
+#include "info_relay/link/protocol/host_protocol.hpp"
+#include "info_relay/link/protocol/referee.hpp"
+#include "info_relay/link/protocol/seasons/2027/protocol.hpp"
 
 namespace
 {

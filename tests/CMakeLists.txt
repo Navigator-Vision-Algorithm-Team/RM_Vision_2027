@@ -1,28 +1,13 @@
 cmake_minimum_required(VERSION 3.16.3)
 
 # ============================================================================
-#  串口通信自检（不依赖 ROS2 / 相机 SDK，也不链接 io，避免拖入相机运行库）
-#    ./serial_communication_test [串口] [波特率] [yaw角速度 rad/s] [发送频率 Hz] [--nav]
-#  只复用协议定义与 CRC 实现，收到的帧按结构体字段打印，同时下发 0x0402 让云台缓转
+#  串口自检工具已迁出
+#
+#  serial_communication_test / time_delay_test 需要直接编译串口协议实现，
+#  而协议代码随串口链路一起迁到了独立工程 info_relay。视觉进程不再打开串口，
+#  也没有这些源文件，因此这两个目标从本工程移除；需要时在 info_relay 仓库构建。
+#  源码保留在本目录备查，不参与构建。
 # ============================================================================
-add_executable(serial_communication_test
-    serial_communication_test.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/protocol/referee.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/protocol/host_protocol.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/protocol/seasons/2027/protocol.cpp)
-target_link_libraries(serial_communication_test serial)
-
-# ============================================================================
-#  串口通信延迟测试（回环 RTT，协议见 time_delay_test.cpp 文件头）
-#    ./time_delay_test        # 无参数：/dev/ttyACM0 921600 100Hz 30s，写 delay.csv
-#  发 0x0410（带时间戳，帧格式不变），下位机把 data 段原样回传（cmd_id 不限），
-#  上位机统计 RTT / 单向延迟 / 抖动 / 丢包，同时记录发送频率与写串口耗时
-# ============================================================================
-add_executable(time_delay_test
-    time_delay_test.cpp
-    ${PROJECT_SOURCE_DIR}/io/serial/gimbal/protocol_crc.cpp)
-target_link_libraries(time_delay_test serial)
 
 # 交互式云台响应测试：输入绝对 yaw/pitch（度），每行发送一条 0x0402 指令。
 add_executable(testgimbalspeed testgimbalspeed.cpp)
@@ -78,9 +63,12 @@ target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools 
 #    ./referee_forward_test [config] [timeout_s]
 #  校验导航决策节点订阅的三个 referee 话题的名字、类型与字段值。
 # ============================================================================
-add_executable(referee_forward_test referee_forward_test.cpp)
-target_link_libraries(referee_forward_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
+# 裁判转发自测已停用：转发逻辑迁入 info_relay，校验方式改为订阅 relay 的裁判主题，
+# 待 relay 端到端联调后重写。源码保留备查，不参与构建。
+# add_executable(referee_forward_test referee_forward_test.cpp)
+# target_link_libraries(referee_forward_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 
 # soldier_debug 只在 io_soldier_can 存在时定义，其 install 写在上面那个 if 块里。
-install(TARGETS sentry_multithread_debug yolodebug referee_forward_test
+# 裁判转发自测停用后已从安装列表移除
+install(TARGETS sentry_multithread_debug yolodebug
         RUNTIME DESTINATION bin)

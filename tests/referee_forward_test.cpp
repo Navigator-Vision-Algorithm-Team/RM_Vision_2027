@@ -27,8 +27,8 @@
 #include "std_msgs/msg/int32.hpp"
 #include "std_msgs/msg/u_int8.hpp"
 
-#include "io/ros2/publish2nav.hpp"
-#include "io/serial/serial_board.hpp"
+#include "info_relay/bridge/ros2/publish2nav.hpp"
+#include "io/relay/relay_client.hpp"
 #include "tools/yaml.hpp"
 
 namespace
@@ -149,7 +149,7 @@ int main(int argc, char ** argv)
 
   // 1) 串口侧：虚拟下位机 -> SerialBoard 解析
   //    即使 test_nav 会覆盖对外结果，也要等真实帧到达，才能验证「覆盖前确实收到了真实值」
-  io::SerialBoard board(config);
+  io::RelayClient board(config);
   const auto parse_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   io::RefereeState state;
   io::RobotStatus raw{};

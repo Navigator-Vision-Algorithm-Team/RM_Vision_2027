@@ -17,6 +17,8 @@
 #    SP_OPENVINO_RUNTIME    项目内置 OpenVINO runtime 目录
 #    SP_OPENVINO_BUNDLED    TRUE 表示链接并打包项目内置 OpenVINO（3rd_part/）
 #    SP_OPENVINO_LIB_DIR    内置 OpenVINO 动态库目录（仅 BUNDLED 时有效）
+#    SP_ICEORYX2_ROOT       iceoryx2 产物根目录（3rd_part/iceoryx2/<arch>）
+#    SP_ICEORYX2_FOUND      TRUE 表示本机存在 iceoryx2 产物，可构建 info_relay
 # =====================================================================================
 
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _sp_proc)
@@ -112,6 +114,9 @@ endif()
 if(SP_OPENVINO_BUNDLED)
   message(STATUS "[platform] OpenVINO 运行库随安装包分发：${SP_OPENVINO_LIB_DIR}")
 endif()
+
+# iceoryx2 已改为系统级依赖（安装到 /usr/local），由 io/CMakeLists.txt 直接 find_package，
+# 本文件不再持有其路径，也不再判断其是否存在。
 
 unset(_sp_proc)
 unset(_sp_ov_lib_subdir)

@@ -17,7 +17,7 @@
 
 #include "io/sim/camera_source.hpp"
 #include "io/sim/common.hpp"
-#include "io/sim/quaternion_source.hpp"
+#include "info_relay/link/transport/quaternion_source.hpp"
 #include "io/sim/recorder.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"

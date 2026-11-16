@@ -65,6 +65,22 @@ struct RefereeState
   bool robot_status_valid = false;
 };
 
+/*
+ * 一帧云台姿态（弧度），全部是「上电时车头朝向为 0」的世界系绝对角：
+ *   大yaw(lower) 只有 yaw；pitch/roll 属于小yaw(upper)，即主相机所在的那块板。
+ * 数据来源是下位机 0x0503，双yaw 的关节角由 SMALL_YAW - LOWER_YAW 复合得到。
+ *
+ * 放在本文件是因为它同时是「串口解析的输出」与「跨进程转发的载荷」，
+ * 视觉侧（io::relay::RelayClient）与中转进程（info_relay）都只依赖这一个定义。
+ */
+struct ImuState
+{
+  double pitch = 0.0;      // 小yaw 板俯仰，低头为正
+  double roll = 0.0;       // 小yaw 板横滚
+  double upper_yaw = 0.0;  // 小yaw 世界系绝对 yaw，[0, 2π)
+  double lower_yaw = 0.0;  // 大yaw 世界系绝对 yaw，[0, 2π)
+};
+
 }  // namespace io
 
 #endif  // IO__COMMAND_HPP

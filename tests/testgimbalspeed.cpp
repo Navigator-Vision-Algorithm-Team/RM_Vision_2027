@@ -4,7 +4,7 @@
 #include <string>
 
 #include "io/command.hpp"
-#include "io/serial/serial_board.hpp"
+#include "io/relay/relay_client.hpp"
 
 namespace
 {
@@ -22,7 +22,7 @@ int main(int argc, char * argv[])
   }
 
   const std::string config_path = argc == 2 ? argv[1] : "configs/soldier.yaml";
-  io::SerialBoard serial_board(config_path);
+  io::RelayClient serial_board(config_path);
 
   std::cout << "云台响应测试：输入绝对 yaw 和 pitch（度），空格分隔；输入 q 退出。\n";
   std::string line;

@@ -184,7 +184,7 @@
 #include <vector>
 
 #include "io/camera.hpp"
-#include "io/serial/serial_board.hpp"
+#include "io/relay/relay_client.hpp"
 #include "tools/yaml.hpp"
 
 namespace
@@ -703,7 +703,7 @@ bool run_handeye(
   if (!load_intrinsics(config_path, camera, K, D)) return false;
 
   io::Camera cam(config_path, camera);
-  io::SerialBoard board(config_path);  // 提供关节角（必须 real，否则角度是假的）
+  io::RelayClient board(config_path);  // 提供关节角（必须 real，否则角度是假的）
 
   // 防呆：假下位机的角度是正弦生成的，标出来必然是错的
   {
