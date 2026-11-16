@@ -48,6 +48,9 @@ include_directories(${EIGEN3_INCLUDE_DIR})
 include_directories(SYSTEM ${OpenCV_INCLUDE_DIRS})
 include_directories(${PROJECT_SOURCE_DIR})
 
+# 步兵使用达妙 USB-CAN SDK（io/can 里的 io_soldier_can 目标）。
+# 没有 SDK 时把 -DSP_BUILD_SOLDIER=OFF 或设置 -DDMCAN_SDK_ROOT=... 即可跳过。
+option(SP_BUILD_SOLDIER "Build soldier with the Damiao USB-CAN SDK" ON)
 
 add_subdirectory(tools)
 add_subdirectory(io)
@@ -66,14 +69,23 @@ add_subdirectory(tasks/omniperception)
 link_libraries(${FFMPEG_LIBRARIES})
 
 # 多线程自瞄主程序（配置示例 configs/mtstandard.yaml）
+# develop 已停用 mt_standard（src/mt_standard.cpp 被清空），这里跟随 develop。
 # add_executable(mt_standard src/mt_standard.cpp)
-# 步兵主程序：YOLO 检测 + PnP 位姿定位，默认配置 configs/soldier.yaml
-add_executable(soldier src/soldier.cpp)
+# 步兵主程序使用达妙 USB-CAN SDK，默认配置 configs/soldier.yaml。
+# io_soldier_can 只在找到 DMCAN SDK 时存在；没有 SDK 时跳过步兵目标。
+if(TARGET io_soldier_can)
+    add_executable(soldier src/soldier_main.cpp src/soldier.cpp)
+endif()
 # 虚拟数据源运行器（无硬件可跑通 real / fake / replay）
 add_executable(virtual_run src/virtual_run.cpp)
 
 # target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
-target_link_libraries(soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
+if(TARGET soldier)
+    # io_can：auto_aim 的 commandgener.cpp 仍引用 io::CBoard::send，需一并链接。
+    target_link_libraries(
+        soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can
+                io_soldier_can)
+endif()
 target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 
 ##################calibration################

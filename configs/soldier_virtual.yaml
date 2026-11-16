@@ -1,0 +1,136 @@
+# =============================================================================
+#  soldier 虚拟输入配置：无相机、无下位机也能跑通整条自瞄链路
+#
+#  用法：
+#    ./build/soldier configs/soldier_virtual.yaml
+#
+#  与 configs/soldier.yaml 的唯一区别是数据源：相机换成伪相机、串口换成内置虚拟下位机，
+#  业务参数（YOLO / Tracker / Aimer / 标定）完全相同，所以这里跑通即等价于实车流程跑通。
+#
+#  三种虚拟相机：
+#    synth    合成图案（默认）。零依赖、帧率稳定，用来验证「程序能不能跑起来」。
+#    sequence 图片序列。填 fake_camera_dir，YOLO 会真的在这些图上检测，可验证跟踪。
+#    video    视频文件。填 fake_camera_video，同上。
+#
+#  回放真实录制的会话（相机 + 串口字节）：
+#    1) 先在实车上把 record.enable 改成 true 跑一次，得到 logs/<session>/
+#    2) 本文件改成：
+#         camera_name: "replay"
+#         camera_mode: "replay"
+#         camera_replay_dir: "logs/<session>"
+#         source_mode: "replay"
+#         serial_mode: "replay"
+#         serial_replay_file: "logs/<session>/serial.bin"
+#         record: { enable: false }
+# =============================================================================
+
+#####-----兵种与敌我-----#####
+enemy_color: "red"
+# enemy_color: "blue"
+
+#####-----数据源总开关（real | fake | replay）-----#####
+source_mode: "fake"          # 全局默认；下面的 serial_mode / camera_mode 可各自覆盖
+
+#####-----YOLO-----#####
+yolo_name: yolov5
+classify_model: assets/tiny_resnet.onnx  # YOLOV5 内部 Detector->Classifier 无条件加载，必填
+yolov5_model_path: assets/yolov5.xml
+device: auto                     # 推理设备：auto（优先 GPU，不可用则 CPU）
+min_confidence: 0.8                      # YOLO 后处理与传统 Detector 共用该键
+use_traditional: true                    # 传统方法二次矫正 YOLO 角点，影响 PnP 精度
+
+#####-----ROI-----#####
+# 即使 use_roi 为 false 也必须保留本块，代码无存在性判断
+roi:
+  x: 420
+  y: 50
+  width: 600
+  height: 600
+use_roi: false
+
+#####-----传统方法参数（Detector 构造函数无条件读取，全部必填）-----#####
+threshold: 150            # 二值化阈值，仅传统方法使用
+max_angle_error: 45       # degree
+min_lightbar_ratio: 1.5
+max_lightbar_ratio: 20
+min_lightbar_length: 8
+min_armor_ratio: 1
+max_armor_ratio: 5
+max_side_ratio: 1.5
+max_rectangular_error: 25 # degree
+
+#####-----相机（虚拟源）-----#####
+camera_name: "fake"              # fake = 伪相机；实车改回 "hikrobot"
+camera_mode: "fake"              # real | fake | replay
+fake_camera_source: "synth"      # synth | sequence | video
+fake_camera_dir: "imgs/fake_frames"   # sequence 模式：图片目录（不存在时自动退回 synth）
+fake_camera_video: "assets/test.avi"  # video 模式：视频文件（打不开时自动退回 synth）
+camera_width: 1440               # 与标定内参对应的分辨率，改小会导致 PnP 失真
+camera_height: 1080
+camera_frame_rate: 30.0
+# 伪相机不读下面两个键，实车（hikrobot）才需要：
+# exposure_ms: 2
+# gain: 16
+
+#####-----串口（内置虚拟下位机）-----#####
+com_port: "/dev/gimbal"          # fake 模式下不真正打开；external=true 时才使用
+baud_rate: 921600
+bullet_speed: 28.0
+use_referee_system: false        # false 时 is_game_started() 恒为 true，不用等比赛开始
+serial_mode: "fake"              # 内置 VirtualMcu，按真实协议发 0x502/0x503/0x0001
+fake_serial_external: false      # true = 用 Python 虚拟下位机创建的 pty
+fake_imu_hz: 500.0               # 0x502 姿态帧率
+fake_chassis_hz: 50.0            # 0x503 底盘帧率
+fake_status_hz: 1.0              # 0x0001 比赛状态帧率
+fake_reset_period_s: 0.0         # >0 时周期性注入复位信号，可用来验证 tracker.reset()
+
+#####-----步兵 Mini-PC ↔ C 板 CAN 协议-----#####
+can_channel: 0  # 仅相机等输入可模拟，步兵 CAN 仍使用达妙 USB-CAN 通道
+
+#####-----标定参数（当前采用 standard4 配置，决定 PnP 精度，务必替换为实车标定值）-----#####
+R_gimbal2imubody: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+# 重投影误差: 0.3145px
+camera_matrix: [1851.7070167840545, 0, 721.12585328714192, 0, 1851.8175594364079, 571.69879709276688, 0, 0, 1]
+distort_coeffs: [-0.093662536083526302, 0.18945726820633155, -0.00040424349861928674, -0.0040568403852123142, 0]
+
+# 与 soldier.yaml 一致：平行安装，执行机构系 x前/y左/z上，单位 m。
+# 相机位于执行轴左侧 77.64 mm、上方约 5 mm；前后偏移暂按 0。
+R_camera2gimbal: [0, 0, 1, -1, 0, 0, 0, -1, 0]
+t_camera2gimbal: [0.0, 0.07764, 0.005]
+# 无目标时准星参考深度 (m)，有预测目标时按实际前向深度更新。
+reticle_distance_m: 3.0
+
+#####-----目标跟踪（Tracker + EKF）-----#####
+min_detect_count: 5                 # 连续检测帧数达到此值后进入 tracking
+max_temp_lost_count: 25             # 普通目标短暂丢失容忍帧数
+outpost_max_temp_lost_count: 75     # 前哨站短暂丢失容忍帧数
+
+#####-----预测瞄准（Aimer）-----#####
+# 偏置先设为 0；确认预测链路和坐标方向后，再用实车标定调整。
+yaw_offset: 0.0                     # yaw 静态补偿 (degree)
+pitch_offset: 0.0                   # pitch 静态补偿 (degree)
+comming_angle: 60                   # Aimer 必需参数 (degree)
+leaving_angle: 20                   # Aimer 必需参数 (degree)
+decision_speed: 10                  # 角速度阈值 (rad/s)，选择高速/低速延迟
+high_speed_delay_time: 0.026        # 高速状态下额外延迟 (s)
+low_speed_delay_time: 0.010         # 低速状态下额外延迟 (s)
+
+#####-----会话录制（默认关闭；回放前先打开跑一次）-----#####
+record:
+  enable: false                     # true = 把相机帧和串口字节写到 dir，构成可回放会话
+  dir: "logs/soldier_virtual"
+  save_images: true
+
+#####-----ROS2 调试（Foxglove 实时画面，仅调试用）-----#####
+# src/soldier.cpp 读取本段；串口 fake 模式与 CAN 无关，真车仍走 SoldierCanBoard。
+# 正式 soldier 使用 CAN 状态，不因本文件的 serial_mode: fake 而切换到虚拟 CAN。
+# 虚拟跑时打开它，可以在没有车的情况下看检测框 / EKF 遥测 / 预测命中点。
+#debug_ros2:
+#  enable: true
+#  namespace: "/sp_debug"
+#  image_hz: 15
+#  jpeg_quality: 75
+#  publish_raw: false
+#  publish_yolo_input: true
+#  pnp_check: true

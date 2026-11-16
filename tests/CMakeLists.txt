@@ -52,9 +52,16 @@ if(NOT (ament_cmake_FOUND AND rclcpp_FOUND AND sensor_msgs_FOUND))
     return()
 endif()
 
-# 步兵调试入口：YOLO 检测 + PnP 位姿定位，默认配置 configs/soldier.yaml
-add_executable(soldier_debug soldier_debug.cpp)
-target_link_libraries(soldier_debug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io io_can)
+# 步兵调试入口默认读取 configs/soldier_debug.yaml，使用达妙 USB-CAN SDK。
+# 与 soldier 共用同一份业务代码（src/soldier.cpp 的 run_soldier）。
+if(TARGET io_soldier_can)
+    add_executable(soldier_debug soldier_debug.cpp "${PROJECT_SOURCE_DIR}/src/soldier.cpp")
+    # io_can：auto_aim 的 commandgener.cpp 仍引用 io::CBoard::send，需一并链接。
+    target_link_libraries(
+        soldier_debug
+        ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_can io_soldier_can)
+    install(TARGETS soldier_debug RUNTIME DESTINATION bin)
+endif()
 
 # 哨兵调试入口：多线程自瞄（主相机 + 全向），默认配置 configs/sentry.yaml
 add_executable(sentry_multithread_debug sentry_multithread_debug.cpp)
@@ -74,5 +81,6 @@ target_link_libraries(yolodebug ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools 
 add_executable(referee_forward_test referee_forward_test.cpp)
 target_link_libraries(referee_forward_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 
-install(TARGETS soldier_debug sentry_multithread_debug yolodebug referee_forward_test
+# soldier_debug 只在 io_soldier_can 存在时定义，其 install 写在上面那个 if 块里。
+install(TARGETS sentry_multithread_debug yolodebug referee_forward_test
         RUNTIME DESTINATION bin)
