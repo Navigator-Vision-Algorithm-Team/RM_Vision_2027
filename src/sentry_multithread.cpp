@@ -311,7 +311,6 @@ int main(int argc, char * argv[])
 
     // 比赛未开始时跳过自瞄逻辑（裁判系统控制）
     if (!serial_board.is_game_started()) {
-      //注意这个地方的功耗···检查之后似乎没有很多
       main_recorder.record(img, q_main, timestamp);
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
