@@ -365,6 +365,7 @@ int main(int argc, char * argv[])
 
     io::Command command = fctx.cmd;
     bool has_aim = fctx.has_aim;
+    tools::VideoOverlay overlay;  // 录像覆盖层，由状态机路径填充
 
     // 0x0402 没有"是否接管"的位，pitch/yaw 会被固件无条件执行；没有瞄准角时必须
     // 下发当前姿态，否则默认的 0 会把云台拽回 pitch=0 / 世界系 yaw=0。
@@ -436,21 +437,23 @@ int main(int argc, char * argv[])
 
       debug.publish(armors, status);
 
-      // 绘制检测框与 HUD（用于赛后录像复盘）
+      // 只组装覆盖层数据；限帧与像素绘制由 Recorder 保存线程完成。
+      // DebugStatus 仍在上面每帧发布，调试可观测性不降级。
       for (const auto & armor : armors) {
-        cv::rectangle(img, armor.box, cv::Scalar(0, 255, 0), 2);
-        std::string label = fmt::format("{} {} {:.2f}",
-          auto_aim::COLORS[armor.color], auto_aim::ARMOR_NAMES[armor.name], armor.confidence);
-        cv::putText(img, label, cv::Point(armor.box.x, armor.box.y - 5),
-          cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-        for (const auto & pt : armor.points) {
-          cv::circle(img, pt, 2, cv::Scalar(0, 0, 255), -1);
-        }
+        if (overlay.armor_count >= tools::VideoOverlay::kMaxArmors) break;
+        auto & item = overlay.armors[overlay.armor_count++];
+        item.box = armor.box;
+        const size_t points = std::min<size_t>(4, armor.points.size());
+        for (size_t k = 0; k < points; ++k) item.points[k] = armor.points[k];
+        item.color = armor.color == auto_aim::Color::red ? cv::Scalar(0, 0, 255)
+                                                        : cv::Scalar(255, 0, 0);
+        const auto label = fmt::format("{} {} {:.2f}", auto_aim::COLORS[armor.color],
+          auto_aim::ARMOR_NAMES[armor.name], armor.confidence);
+        tools::set_overlay_text(item.label, item.label_len, sizeof(item.label), label);
       }
-      cv::putText(img,
-        fmt::format("State: {} | FSM: {} | Targets: {}", tracker.state(), fsm.state_name(),
-          fctx.target == nullptr ? 0 : 1),
-        cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+      auto hud = fmt::format("State: {} | FSM: {} | Targets: {}", tracker.state(),
+        fsm.state_name(), fctx.target == nullptr ? 0 : 1);
+      tools::set_overlay_text(overlay.hud, overlay.hud_len, sizeof(overlay.hud), hud);
     } else {
       // 空闲态：仍要发调试信息，用于区分"自旋扫描"与"原地保持"
       debug.publish(
@@ -462,7 +465,7 @@ int main(int argc, char * argv[])
     // ================== 本轮唯一的收尾点 ==================
     if (!has_aim) command.shoot = false;
     hold_current_pose();
-    main_recorder.record(img, q_main, timestamp);
+    main_recorder.record(img, q_main, timestamp, overlay);
     serial_board.send(command);
   }
 

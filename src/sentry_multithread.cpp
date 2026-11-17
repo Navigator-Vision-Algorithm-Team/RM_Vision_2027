@@ -358,6 +358,7 @@ int main(int argc, char * argv[])
 
     io::Command command = fctx.cmd;
     bool has_aim = fctx.has_aim;
+    tools::VideoOverlay overlay;  // 录像覆盖层，由状态机路径填充
 
     // 0x0402 报文里没有"是否接管"的位，固件对 pitch / yaw 无条件执行，
     // 所以「视觉不瞄准」也必须下发一个合法角度：这里统一改写成当前姿态。
@@ -374,21 +375,22 @@ int main(int argc, char * argv[])
       command.shoot =
         shooter.shoot(command, aimer, fctx.target, gimbal_pos) && serial_board.can_shoot();
 
-      // 绘制检测框和跟踪信息（用于赛后录像复盘）
+      // 只组装"要画什么"的纯数据。限帧与绘制都在 Recorder 的保存线程内完成，
+      // 被丢弃的帧不会付出任何绘制成本，也不占用主循环 CPU。
       for (const auto & armor : armors) {
-        cv::rectangle(img, armor.box, cv::Scalar(0, 255, 0), 2);
-        std::string label = fmt::format("{} {} {:.2f}",
-          auto_aim::COLORS[armor.color], auto_aim::ARMOR_NAMES[armor.name], armor.confidence);
-        cv::putText(img, label, cv::Point(armor.box.x, armor.box.y - 5),
-          cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 1);
-        for (const auto & pt : armor.points) {
-          cv::circle(img, pt, 2, cv::Scalar(0, 0, 255), -1);
-        }
+        if (overlay.armor_count >= tools::VideoOverlay::kMaxArmors) break;
+        auto & item = overlay.armors[overlay.armor_count++];
+        item.box = armor.box;
+        const size_t points = std::min<size_t>(4, armor.points.size());
+        for (size_t k = 0; k < points; ++k) item.points[k] = armor.points[k];
+        item.color = armor.color == auto_aim::Color::red ? cv::Scalar(0, 0, 255)
+                                                      : cv::Scalar(255, 0, 0);
+        const auto label = fmt::format("{} {} {:.2f}", auto_aim::COLORS[armor.color],
+          auto_aim::ARMOR_NAMES[armor.name], armor.confidence);
+        tools::set_overlay_text(item.label, item.label_len, sizeof(item.label), label);
       }
-      // HUD：tracker 状态 + 状态机状态 + IMM 的预测信息
-      std::string hud = fmt::format(
-        "State: {} | FSM: {} | Targets: {}", tracker.state(), fsm.state_name(),
-        fctx.target == nullptr ? 0 : 1);
+      auto hud = fmt::format("State: {} | FSM: {} | Targets: {}", tracker.state(),
+        fsm.state_name(), fctx.target == nullptr ? 0 : 1);
       if (fctx.target != nullptr) {
         const Eigen::VectorXd x = fctx.target->ekf_x();
         if (x.size() >= 11) {
@@ -398,8 +400,7 @@ int main(int argc, char * argv[])
             x[7], mu[0], mu[1], mu[2], fctx.target->nis_ratio());
         }
       }
-      cv::putText(
-        img, hud, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+      tools::set_overlay_text(overlay.hud, overlay.hud_len, sizeof(overlay.hud), hud);
     }
 
     // ================== 本轮唯一的收尾点 ==================
@@ -413,7 +414,7 @@ int main(int argc, char * argv[])
     //     它们继续保持「只录像、不下发」的原有语义。
     if (!has_aim) command.shoot = false;
     hold_current_pose();
-    main_recorder.record(img, q_main, timestamp);
+    main_recorder.record(img, q_main, timestamp, overlay);
     serial_board.send(command);
   }
 

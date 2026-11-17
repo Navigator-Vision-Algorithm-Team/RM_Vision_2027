@@ -425,8 +425,8 @@ Recorder::~Recorder()
 {
   stop_thread_ = true;
   // 退出时给队列中额外推入一个空帧，避免 pop 一直等待
-  queue_.push(
-    {cv::Mat(), Eigen::Quaterniond::Identity(), std::chrono::steady_clock::now()});
+  FrameData wakeup;  // img 为空：保存线程 wake 后直接 continue 并退出
+  queue_.push(std::move(wakeup));
   if (saving_thread_.joinable()) saving_thread_.join();
 
   if (impl_) {
@@ -437,6 +437,34 @@ Recorder::~Recorder()
 }
 
 // 实现要点：只有写盘线程降优先级（nice +10），不拖累自瞄主线程；设置失败只告警。
+// 功能：把业务侧描述好的覆盖层画到图像上（保存线程内执行，紧邻编码之前）
+// 输入：
+//   img      目标图像，原地修改；与调用方共享像素，因此调用方在 record() 返回后不得再写它
+//   overlay  要画的框、角点、标签与 HUD，纯数据
+// 输出：无
+// 备注：只对已经被限帧接受的帧调用；这里的 std::string 是保存线程内的小临时对象，不占主循环
+void draw_video_overlay(cv::Mat & img, const VideoOverlay & overlay)
+{
+  const size_t count = std::min(overlay.armor_count, VideoOverlay::kMaxArmors);
+  for (size_t i = 0; i < count; ++i) {
+    const auto & armor = overlay.armors[i];
+    cv::rectangle(img, armor.box, armor.color, 2);
+    const std::string label(armor.label, armor.label_len);
+    cv::putText(
+      img, label, cv::Point(armor.box.x, armor.box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+      armor.color, 1);
+    for (const auto & point : armor.points) {
+      cv::circle(img, point, 2, cv::Scalar(0, 0, 255), -1);
+    }
+  }
+
+  if (overlay.hud_len > 0) {
+    const std::string hud(overlay.hud, overlay.hud_len);
+    cv::putText(
+      img, hud, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
+  }
+}
+
 // 编码与写盘整段加 g_encode_mutex，实现全进程串行编码；文本写入在锁外，不占用编码窗口。
 void Recorder::save_to_file()
 {
@@ -461,17 +489,25 @@ void Recorder::save_to_file()
     const double since_begin = tools::delta_time(frame.timestamp, start_time_);
     const auto pts_ms = static_cast<int64_t>(std::llround(since_begin * 1000.0));
 
+    // 埋点覆盖真实管线成本：覆盖层绘制 + 编码 + 写盘，全部在保存线程内
+    frame_timer_.start();
+    draw_video_overlay(frame.img, frame.overlay);
+
+    bool encoded = false;
     {
       std::lock_guard<std::mutex> lock(g_encode_mutex);
-      if (!impl_->encode(frame.img, pts_ms)) {
-        // 只打印前 3 次，之后每 300 次打一条，既能看见故障又不会刷屏
-        if (fail_count < 3 || fail_count % 300 == 0) {
-          tools::logger()->warn(
-            "[Recorder] {} 编码或写盘失败（累计 {} 帧），丢弃本帧", camera_name_, fail_count);
-        }
-        fail_count++;
-        continue;
+      encoded = impl_->encode(frame.img, pts_ms);
+    }
+    frame_timer_.stop();
+
+    if (!encoded) {
+      // 只打印前 3 次，之后每 300 次打一条，既能看见故障又不会刷屏
+      if (fail_count < 3 || fail_count % 300 == 0) {
+        tools::logger()->warn(
+          "[Recorder] {} 编码或写盘失败（累计 {} 帧），丢弃本帧", camera_name_, fail_count);
       }
+      fail_count++;
+      continue;
     }
 
     // Eigen 的 coeffs() 顺序为 (x, y, z, w)，这里重排成 txt 约定的 w x y z
@@ -486,18 +522,19 @@ void Recorder::save_to_file()
 // 限帧用 0.9 倍容忍：相机出帧周期本来就贴着 1/fps，严格比较会把 15fps 的流限成 7.5fps。
 void Recorder::record(
   const cv::Mat & img, const Eigen::Quaterniond & q,
-  const std::chrono::steady_clock::time_point & timestamp)
+  const std::chrono::steady_clock::time_point & timestamp, const VideoOverlay & overlay)
 {
   if (img.empty()) return;
   if (!init_) init(img);
   if (!impl_) return;  // 编码器初始化失败，本次不录像
 
-  const double since_last = tools::delta_time(timestamp, last_time_);  // 距上一帧的间隔，s
+  // 三道过滤里只有这里做限帧：被丢弃的帧根本不会进入绘制与编码管线
+  const double since_last = tools::delta_time(timestamp, last_time_);
   if (since_last < 0.9 / fps_) return;
 
   last_time_ = timestamp;
-  // 只做浅拷贝，与调用方共享像素缓冲；队列容量 1 且满时不等待，编码跟不上就丢这一帧
-  queue_.push({img, q, timestamp});
+  // 图像浅拷贝、覆盖层按值入队（定长 POD，零堆分配）；队列容量 1，满则丢弃本帧
+  queue_.push({img, q, timestamp, overlay});
 }
 
 // 实现要点：init_ 先置 true，保证编码器初始化失败也只尝试一次（重开 VAAPI 设备的代价

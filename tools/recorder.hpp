@@ -29,7 +29,9 @@
 #include <string>
 #include <thread>
 
+#include "tools/frame_timer.hpp"
 #include "tools/thread_safe_queue.hpp"
+#include "tools/video_overlay.hpp"
 
 namespace tools
 {
@@ -60,13 +62,16 @@ public:
   //   img        当前帧图像，BGR（CV_8UC3）或灰度（CV_8UC1），允许为空（空图直接忽略）；
   //              与调用方共享像素缓冲，不 clone
   //   q          该帧的 IMU 四元数（IMU 体坐标系 -> 世界系），只写入 txt
-  //   timestamp  该帧采集时刻，steady_clock 时间点，单位 s；用于限帧与视频/文本时间轴
+  //   timestamp  该帧采集时刻，steady_clock 时间点；用于限帧与视频/文本时间轴
+  //   overlay    要画到画面上的覆盖层，按值随帧入队；默认空表示不画
   // 输出：无
-  // 备注：首次调用会初始化编码器并启动保存线程；队列满时本帧被丢弃，不阻塞调用方；
+  // 备注：首次调用会初始化编码器并启动保存线程；限帧后仍会覆盖层绘制，画完立即编码；
+  //       img 是浅拷贝入队，**返回后调用方不得再修改 img**；队列满时本帧被丢弃，不阻塞；
   //       非线程安全，同一实例只允许单线程调用
   void record(
     const cv::Mat & img, const Eigen::Quaterniond & q,
-    const std::chrono::steady_clock::time_point & timestamp);
+    const std::chrono::steady_clock::time_point & timestamp,
+    const VideoOverlay & overlay = VideoOverlay{});
 
 private:
   // 一帧待写盘数据
@@ -74,7 +79,8 @@ private:
   {
     cv::Mat img;                                      // BGR 图像；浅拷贝，与调用方共享像素缓冲
     Eigen::Quaterniond q;                             // IMU 体坐标系 -> 世界系的四元数
-    std::chrono::steady_clock::time_point timestamp;  // 该帧采集时刻，单位 s
+    std::chrono::steady_clock::time_point timestamp;  // 该帧采集时刻
+    VideoOverlay overlay;                             // 随帧传递的覆盖层，按值拷贝（定长 POD）
   };
 
   // 编码器 + 封装器（VAAPI / libx264 + Matroska），定义在 recorder.cpp，外部不可见
@@ -93,6 +99,7 @@ private:
   std::chrono::steady_clock::time_point last_time_;   // 上一帧被接受的时间戳，s；用于限帧
   tools::ThreadSafeQueue<FrameData> queue_;  // 帧队列，容量固定 1；满时丢弃新帧
   std::thread saving_thread_;                // 负责编码与保存的线程，由 init() 启动
+  tools::FrameTimer frame_timer_;            // 保存线程内的绘制+编码耗时埋点
 
   // 功能：用首帧尺寸打开编码器与封装器，并启动保存线程
   // 输入：
