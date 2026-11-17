@@ -17,7 +17,8 @@
  * 使用注意：
  *   1) 命中任何有效目标后必须调用 reset()，否则下次自旋会接着上次的点头相位；
  *   2) yaw 基于"当前世界系 yaw + 固定增量"，与下位机无条件执行角度的语义一致；
- *   3) pitch 用正弦波绕平视上下点头，幅度与频率是本文件的常量，调参改这里。
+ *   3) pitch 用正弦波绕平视上下点头，幅度与频率是本文件的常量，调参改这里；
+ *   4) 5 帧短滞回是本模块内的常量，不设开关、不进配置。
  */
 
 #include <chrono>
@@ -31,32 +32,31 @@ namespace spin_decision
 // 一次自旋决策的输出：世界系绝对角，单位 rad
 struct SpinOutput
 {
-  double yaw = 0;    // 世界系绝对 yaw，rad
-  double pitch = 0;  // 世界系绝对 pitch，rad；向上为负
+  double yaw = 0;    // 世界系绝对 yaw，rad；确认期内保持当前值不更新
+  double pitch = 0;  // 世界系绝对 pitch，rad；确认期内保持当前值不更新
 };
 
 class SpinDecision
 {
 public:
-  // 功能：推进一帧自旋，产出搜索姿态
+  // 功能：推进一帧自旋决策，内含 5 帧短滞回
   // 输入：
   //   now         当前帧采集时刻，steady_clock；用于驱动 pitch 波形相位
   //   gimbal_pos  当前世界系绝对姿态 yaw/pitch/roll，rad
-  // 输出：本帧要下发的 {yaw, pitch}
-  // 备注：首次调用以 now 为波形起点； yaw 每帧在前一帧实际角度上叠加固定增量
+  //   has_aim     本帧状态机是否产出了有效瞄准角
+  // 输出：本帧应使用的 {yaw, pitch}；连续丢失不足 5 帧时原样返回 gimbal_pos 的角度
+  // 备注：连续 5 帧 has_aim=false 才启动自旋更新；一旦 has_aim=true 立即退出并清零计数。
+  //       **所有关于"是否更新"的判定都在本函数内完成**，调用方不做帧数检查。
+  //       非对称设计：进入慢、退出快，避免目标出现后仍混入自旋角造成抖动。
   SpinOutput update(
-    std::chrono::steady_clock::time_point now, const Eigen::Vector3d & gimbal_pos);
-
-  // 功能：结束本轮自旋，复位波形相位
-  // 输入：无
-  // 输出：无
-  // 备注：命中有效目标时由状态机调用；下次 update() 会从 pitch=0 重新开始
-  void reset() { start_ = TimePoint{}; }
+    std::chrono::steady_clock::time_point now, const Eigen::Vector3d & gimbal_pos, bool has_aim);
 
 private:
   using TimePoint = std::chrono::steady_clock::time_point;  // 单调时钟
 
-  TimePoint start_{};  // 本轮自旋起点；默认构造表示尚未开始
+  TimePoint start_{};    // 本轮自旋起点；默认构造表示尚未开始
+  int miss_count_ = 0;   // 连续无有效瞄准角的帧数，达到 kConfirmFrames 才启动自旋
+  bool spinning_ = false;  // 当前是否处于自旋状态
 };
 
 }  // namespace spin_decision

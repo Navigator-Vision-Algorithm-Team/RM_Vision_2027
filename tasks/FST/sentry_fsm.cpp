@@ -211,14 +211,12 @@ void Fsm::on_tracking(Context & ctx)
 void Fsm::finalize(Context & ctx)
 {
   // 唯一出口：所有状态函数只负责设置 has_aim，最终姿态在这里一次结算。
-  if (ctx.has_aim) {
-    // 命中有效目标：复位自旋相位，下次丢失时从头开始点头
-    spin_.reset();
-    return;
-  }
+  // 连续丢失帧的检查、确认期是否更新角度，全部由 SpinDecision 内部完成；
+  // 这里只决定"用自旋决策的角度"还是"保留状态函数算出的目标角"。
+  // 无论本帧是否有目标都要调用：spin_decision 依赖 has_aim 事件清零确认计数
+  const auto spin = spin_.update(ctx.timestamp, ctx.gimbal_pos, ctx.has_aim);
+  if (ctx.has_aim) return;  // 保留状态函数算出的目标角，不覆盖
 
-  // 无有效瞄准角：无条件自旋（不区分有无全向相机），并禁止开火
-  const auto spin = spin_.update(ctx.timestamp, ctx.gimbal_pos);
   ctx.cmd.yaw = spin.yaw;
   ctx.cmd.pitch = spin.pitch;
   ctx.cmd.shoot = false;

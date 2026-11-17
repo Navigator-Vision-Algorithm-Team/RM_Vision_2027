@@ -25,16 +25,43 @@ constexpr double kPitchAmplitude = 0.12;
 constexpr double kPitchFrequencyHz = 0.5;
 
 constexpr double kTwoPi = 6.28318530717958647692;
+
+// 进入自旋前的确认帧数：连续这么多帧没有有效瞄准角才启动
+constexpr int kConfirmFrames = 5;
 }  // namespace
 
-SpinOutput SpinDecision::update(TimePoint now, const Eigen::Vector3d & gimbal_pos)
+SpinOutput SpinDecision::update(TimePoint now, const Eigen::Vector3d & gimbal_pos, bool has_aim)
 {
-  if (start_ == TimePoint{}) start_ = now;
+  SpinOutput out;
+
+  if (has_aim) {
+    // 命中有效目标：立即退出自旋并清空确认计数，不把"停不下来"的滞回留给调用方
+    miss_count_ = 0;
+    spinning_ = false;
+    start_ = TimePoint{};
+    // 本帧角度由状态机的目标角决定，这里只返回当前姿态占位
+    out.yaw = gimbal_pos[0];
+    out.pitch = gimbal_pos[1];
+    return out;
+  }
+
+  // 无有效瞄准角：累计确认帧。不足 5 帧时**不更新角度**，原样返回当前姿态，
+  // 调用方拿到的 yaw/pitch 与上一拍一致，不会看到任何自旋增量或波形推进。
+  ++miss_count_;
+  if (miss_count_ < kConfirmFrames) {
+    out.yaw = gimbal_pos[0];
+    out.pitch = gimbal_pos[1];
+    return out;
+  }
+
+  if (!spinning_) {
+    spinning_ = true;
+    start_ = now;  // 波形从第 5 帧开始，避免确认期内相位空转
+  }
 
   const double elapsed = std::chrono::duration<double>(now - start_).count();
   const double phase = kTwoPi * kPitchFrequencyHz * elapsed;
 
-  SpinOutput out;
   // 基于当前实际 yaw 叠加增量：下位机无条件执行角度，因此下一帧的 gimbal_pos 已经跟上
   out.yaw = tools::limit_rad(kSpinYawStep + gimbal_pos[0]);
   // 绕平视上下点头；pitch=0 附近摆动，避免扫地面或抬头看天
