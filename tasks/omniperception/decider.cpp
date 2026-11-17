@@ -195,19 +195,21 @@ bool Decider::armor_filter(std::list<auto_aim::Armor> & armors)
   // 过滤非敌方装甲板
   armors.remove_if([&](const auto_aim::Armor & a) { return a.color != enemy_color_; });
 
-  // 25赛季没有5号装甲板
-  armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::five; });
-  // 不打工程
-  // armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::two; });
-  // 不打前哨站
-  armors.remove_if(
-    [&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::outpost; });
+  // 3V3中不管这些
 
-  // 过滤掉刚复活无敌的装甲板
-  armors.remove_if([&](const auto_aim::Armor & a) {
-    return std::find(invincible_armor_.begin(), invincible_armor_.end(), a.name) !=
-           invincible_armor_.end();
-  });
+  // // 25赛季没有5号装甲板
+  // armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::five; });
+  // // 不打工程
+  // // armors.remove_if([&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::two; });
+  // // 不打前哨站
+  // armors.remove_if(
+  //   [&](const auto_aim::Armor & a) { return a.name == auto_aim::ArmorName::outpost; });
+
+  // // 过滤掉刚复活无敌的装甲板
+  // armors.remove_if([&](const auto_aim::Armor & a) {
+  //   return std::find(invincible_armor_.begin(), invincible_armor_.end(), a.name) !=
+  //          invincible_armor_.end();
+  // });
 
   return armors.empty();
 }
