@@ -17,9 +17,6 @@ add_library(io STATIC
     camera.cpp
     # ---- 坐标变换树（io/tf/）：标定值 -> 各坐标系之间的刚体变换 ----
     tf/tf_tree.cpp
-    # ---- 相机侧记录与数据源（串口部分已迁走）----
-    sim/recorder.cpp
-    sim/camera_source.cpp
     # ---- 中转客户端：视觉侧只通过它与 info_relay 交换串口数据 ----
     relay/relay_client.cpp
     relay/relay_codec.cpp

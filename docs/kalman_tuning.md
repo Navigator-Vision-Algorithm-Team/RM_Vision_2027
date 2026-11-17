@@ -219,7 +219,7 @@ graph LR
 
 1. **固定场景**
    - 至少准备 4 段：静止目标、匀速平移、小陀螺（正/反转）、前哨站。
-   - 用回放（`src/virtual_run.cpp` + `configs/virtual_replay.yaml`）保证每次输入一致。
+   - 用同一段实车录像保证每次输入一致，再对比改参前后的跟踪表现。
 2. **采集基线**
    - 打开 `debug_ros2`，Foxglove 里同时开 `image` 和 `ekf`。
    - 记录 `data[0..9]` 的曲线与命中情况。

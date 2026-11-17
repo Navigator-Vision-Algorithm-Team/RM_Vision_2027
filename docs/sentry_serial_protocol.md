@@ -253,7 +253,7 @@ R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
 | 2 | 发射机构供电 `mains_power_shooter` |
 
 > 该帧的 `remain_hp` / `max_hp` 是导航决策节点 `referee/current_hp`、`referee/maximum_hp`
-> 的数据源（转发细节见 **5.3**）。fake 模式下虚拟下位机会按 `fake_status_hz` 发送本帧，
+> 的数据源（转发细节见 **5.3**）。下位机按 1Hz 周期发送本帧，
 > 血量由 `fake_hp` / `fake_max_hp` 指定（默认 400 / 400）。
 
 ### 3.7 未识别包
@@ -423,7 +423,7 @@ ros2.set_referee_source([&serial_board]() { return serial_board.referee_state();
 - 自测程序校验解析结果、三个话题的名字/类型/字段值以及"是否周期发布"：
 
 ```bash
-./build/tests/referee_forward_test configs/virtual_referee.yaml 5
+# 该自测已随串口链路迁出，改由 info_relay 侧验证
 ```
 
 - 现场核对：
@@ -450,7 +450,7 @@ ros2 topic hz   /red_standard_robot1/referee/game_progress    # 应约 5 Hz
   用 `use_referee_system: false`（启动即视为已开始）。
 - 打开时启动日志会打一条 WARN：
   `test_nav enabled: referee state forced to game_progress=4 hp=400/400 (incoming 0x0001/0x0201 ignored)`。
-- 验证：`./build/tests/referee_forward_test configs/virtual_referee_test_nav.yaml`
+- 验证：裁判转发由 info_relay 侧自行校验
   —— 该配置让虚拟下位机上报 `50/400` 的低血量，测试断言对外仍是 `400/400`（即开关确实覆盖了真实帧）。
 
 #### 5.3.7 对接前提（需与固件一致）

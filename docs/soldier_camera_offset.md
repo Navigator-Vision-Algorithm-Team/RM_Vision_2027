@@ -4,7 +4,7 @@
 前后距离尚未提供，当前按 0 m 处理；执行轴原点作为瞄准计算原点。
 
 相机坐标为 x 向右、y 向下、z 向前；执行机构（gimbal）坐标为 x 向前、y 向左、z 向上。
-`configs/soldier.yaml` 和 `configs/soldier_virtual.yaml` 使用相同外参：
+`configs/soldier.yaml` 使用以下外参：
 
 ```yaml
 R_camera2gimbal: [0, 0, 1, -1, 0, 0, 0, -1, 0]

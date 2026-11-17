@@ -6,11 +6,6 @@
 #include <opencv2/opencv.hpp>
 #include <string>
 
-namespace io::sim
-{
-class CameraRecorder;
-}
-
 namespace io
 {
 class CameraBase
@@ -35,9 +30,6 @@ public:
 
 private:
   std::unique_ptr<CameraBase> camera_;
-  // 记录相机帧与时间戳（record.enable=true 时），供 replay 模式复现
-  std::unique_ptr<sim::CameraRecorder> recorder_;
-  uint64_t frame_id_ = 0;
 };
 
 }  // namespace io

@@ -81,18 +81,15 @@ link_libraries(${FFMPEG_LIBRARIES})
 if(TARGET io_soldier_can)
     add_executable(soldier src/soldier_main.cpp src/soldier.cpp)
 endif()
-# 虚拟数据源运行器已停用：它同时驱动串口与相机的 fake/replay，
 # 而串口侧（虚拟下位机、字节回放、协议解析）已随 info_relay 迁出本工程。
 # 无硬件联调现在需要同时启动 info_relay（serial 侧）与视觉入口（相机侧）。
 # 源码保留备查，不参与构建。
-# add_executable(virtual_run src/virtual_run.cpp)
 
 # target_link_libraries(mt_standard ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
 if(TARGET soldier)
     target_link_libraries(
         soldier ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
 endif()
-# target_link_libraries(virtual_run ${OpenCV_LIBS} fmt::fmt yaml-cpp io tools)
 
 ##################calibration################
 # 旧的标定工具（capture / calibrate_camera / calibrate_handeye /

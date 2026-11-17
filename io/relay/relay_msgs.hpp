@@ -34,12 +34,11 @@ inline constexpr const char * kTopicHealth = "health";    // 链路健康，10Hz
 inline constexpr const char * kTopicCmdAim = "cmd_aim";   // 云台瞄准指令
 inline constexpr const char * kTopicCmdNav = "cmd_nav";   // 导航速度指令
 
-// 数据源类型，与 io::sim::SourceMode 一一对应，用于 Health 里对外说明当前链路形态
+// 通信链路类型，用于 Health 对外说明当前链路形态
 enum class SourceKind : uint8_t
 {
-  Real = 0,    // 真实串口
-  Fake = 1,    // 内置虚拟下位机或外部 pty
-  Replay = 2,  // 原始字节回放
+  Serial = 0,  // 串口链路
+  Can = 1,     // CAN 链路
 };
 
 // 云台姿态与自瞄裁决：源 0x0503（500Hz），gimbal_type / uptime_ms 取自 0x0500（1Hz）缓存

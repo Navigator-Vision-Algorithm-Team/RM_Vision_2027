@@ -20,4 +20,4 @@ add_executable(trajectory_direction_test
 target_include_directories(trajectory_direction_test PRIVATE ${REPO_ROOT})
 add_test(NAME trajectory_direction COMMAND trajectory_direction_test)
 add_test(NAME soldier_geometry COMMAND camera_geometry_test ${REPO_ROOT}/configs/soldier.yaml)
-add_test(NAME soldier_virtual_geometry COMMAND camera_geometry_test ${REPO_ROOT}/configs/soldier_virtual.yaml)
+add_test(NAME soldier_virtual_geometry COMMAND camera_geometry_test ${REPO_ROOT}/configs/soldier.yaml)

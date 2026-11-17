@@ -31,7 +31,7 @@ RM_Vision_2027/
 ├── benchmarks/             # EKF 离线评估代码（当前未加入默认构建）
 ├── calibration/            # 相机内参、外参标定程序及说明
 ├── cmake/                  # 平台选择与 aarch64 交叉编译工具链
-├── configs/                # 实车、虚拟运行及跟踪器 YAML 配置
+├── configs/                # 实车与跟踪器 YAML 配置
 ├── docs/                   # 通信协议、滤波器调参等文档
 ├── io/
 │   ├── can/                # CAN 通信
@@ -39,10 +39,8 @@ RM_Vision_2027/
 │   ├── mindvision/         # 迈德威视相机适配及 SDK
 │   ├── ros2/               # ROS 2 接口（可选）
 │   ├── serial/             # 串口、云台协议与 CRC
-│   ├── sim/                # real/fake/replay 数据源和记录回放
 │   ├── tf/                 # 坐标变换树
 │   └── usbcamera/          # USB 相机适配
-├── sim/                    # Python 虚拟下位机
 ├── src/                    # 程序入口
 ├── tasks/
 │   ├── auto_aim/           # 装甲检测、PnP、跟踪、自瞄与射击
@@ -58,16 +56,15 @@ RM_Vision_2027/
 
 | 路径 | 用途 |
 | --- | --- |
-| `src/` | 程序入口：标准自瞄、步兵、哨兵和虚拟数据源运行器 |
+| `src/` | 程序入口：标准自瞄、步兵与哨兵 |
 | `tasks/auto_aim/` | 装甲板检测、YOLO、PnP、跟踪、自瞄与射击逻辑 |
 | `tasks/omniperception/` | 哨兵全向感知及多相机相关任务 |
 | `tasks/auto_buff/` | 打符相关代码，当前不加入默认构建 |
 | `io/` | 相机、串口、CAN、坐标变换、ROS 2 和仿真数据源 |
 | `tools/` | 日志、数学、滤波、线程及其他通用工具 |
-| `configs/` | 实车、虚拟运行及跟踪器配置 |
+| `configs/` | 实车与跟踪器配置 |
 | `assets/` | 神经网络模型及其他运行资源 |
 | `calibration/` | 相机内参与外参标定程序；流程见 [calibration/README.md](calibration/README.md) |
-| `sim/` | Python 虚拟下位机工具 |
 | `docs/` | 通信协议、滤波器调参等技术文档 |
 
 ## 构建环境
@@ -77,7 +74,7 @@ RM_Vision_2027/
 - 支持 C++20 的 C++ 编译器（如 GCC）
 - OpenCV、fmt、Eigen3、spdlog、yaml-cpp、nlohmann-json、libusb-1.0 开发包
 - OpenVINO：默认优先使用仓库提供的 2024.6.0 运行库；也可以通过 `OpenVINO_DIR` 指定本机安装版本
-- ROS 2 为可选依赖：未找到 ROS 2 时，标准自瞄、步兵及虚拟运行目标仍可构建；哨兵 ROS 2 目标会跳过
+- ROS 2 为可选依赖：未找到 ROS 2 时，标准自瞄与步兵目标仍可构建；哨兵 ROS 2 目标会跳过
 
 在 Ubuntu/Debian 系统上，常用系统依赖可通过以下命令安装：
 
@@ -126,7 +123,6 @@ cmake -S . -B build -DOpenVINO_DIR=/path/to/openvino/runtime/cmake
 | --- | --- | --- |
 | `mt_standard` | 标准自瞄主程序，检测、跟踪、瞄准并通过串口发送指令 | `configs/mtstandard.yaml` |
 | `soldier` | 步兵目标检测和 PnP 解算入口 | `configs/soldier.yaml` |
-| `virtual_run` | 独立验证串口与相机 real/fake/replay 数据源 | `configs/virtual_example.yaml` |
 | `calibrate_intrinsics` | 相机内参标定工具 | 运行 `--help` 查看参数 |
 | `calibrate_extrinsic` | 相机外参标定工具 | 运行 `--help` 查看参数 |
 | `sentry_multithread` | 哨兵多线程及全向感知入口；仅在配置时找到 ROS 2 依赖后生成 | `configs/sentry_example.yaml` |
@@ -134,22 +130,6 @@ cmake -S . -B build -DOpenVINO_DIR=/path/to/openvino/runtime/cmake
 `auto_buff`、无人机入口和 MPC planner 代码目前不属于默认构建目标。它们仍在仓库中的状态不代表已完成集成或可直接用于比赛。
 
 ## 运行
-
-### 无硬件运行虚拟数据源
-
-构建后可用内置 fake 串口和合成相机图像验证数据源链路：
-
-```bash
-./build/virtual_run configs/virtual_example.yaml --duration=8
-```
-
-如当前环境支持图形显示，可添加 `--show` 查看图像窗口；无显示器或远程无桌面环境不要添加该参数。虚拟运行配置还支持图片序列、视频、会话回放及串口/相机异常注入，详情见 `configs/virtual_example.yaml`、`configs/virtual_fault.yaml` 和 `configs/virtual_replay.yaml`。
-
-也可以用虚拟数据源启动标准自瞄入口：
-
-```bash
-./build/mt_standard configs/mtstandard_virtual.yaml
-```
 
 ### 连接真实设备
 
@@ -168,24 +148,11 @@ cmake -S . -B build -DOpenVINO_DIR=/path/to/openvino/runtime/cmake
 
 步兵入口负责检测和位姿解算并发送云台指令，不接管发射。哨兵入口还依赖对应 ROS 2 环境与相机/通信配置。请在连接实车前检查所有输出指令和急停措施，并在安全场地完成验证。
 
-### 录制与回放
-
-`virtual_run` 支持将串口数据和相机帧记录到配置指定的目录。将数据源配置切换为 `replay` 并指向该目录，可复现录制会话。推荐先用虚拟数据源和录制数据验证改动，再连接真实设备。
-
-Python 虚拟下位机（可选）：
-
-```bash
-python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts
-```
-
-脚本会报告伪串口路径；如需让程序通过普通串口接口读取该数据源，请在配置中使用这个路径，并按虚拟配置文档开启外部虚拟串口模式。
-
 ## 配置与标定
 
 - **标准自瞄**：从 `configs/mtstandard.yaml` 开始，按车辆修改模型路径、相机、串口、相机内参和相机到云台的外参。
 - **步兵**：使用 `configs/soldier.yaml`。它包含 YOLO、PnP、串口、CAN 和 ROS 2 调试等配置项。
 - **哨兵**：使用 `configs/sentry_example.yaml`；全向相机数量、各相机参数和外参均需匹配实车。
-- **虚拟运行**：使用 `configs/virtual_example.yaml`、`configs/virtual_fault.yaml` 或 `configs/virtual_replay.yaml`。
 - **跟踪器**：IMM/EKF 参数位于 `configs/IMM.yaml`；调参建议见 [docs/ekf_imm_tuning.md](docs/ekf_imm_tuning.md) 和 [docs/kalman_tuning.md](docs/kalman_tuning.md)。
 
 标定程序和标定步骤见 [calibration/README.md](calibration/README.md)。不要直接把仓库内的示例矩阵作为实车标定值；拆装相机或改变支架后应重新测量相应外参。
@@ -203,17 +170,11 @@ python3 sim/virtual_mcu.py --port-file /tmp/vmcu.pts
 
 ## 测试与验证
 
-默认构建中包含虚拟数据源运行器，可先运行：
-
-```bash
-./build/virtual_run configs/virtual_example.yaml --duration=8
-```
-
 根目录 CMake 当前未启用 `benchmarks/ekf` 离线基准子目录。`tests/` 中的部分程序是硬件或 ROS 2 调试入口，不等同于可在所有环境中直接运行的自动化单元测试。涉及相机、串口、CAN 或 ROS 2 的改动，应在对应硬件与软件环境中补充验证。
 
 ## 参与开发
 
-1. 从对应入口及配置文件阅读当前实现，优先使用虚拟数据源复现问题。
+1. 从对应入口及配置文件阅读当前实现，先确认中转进程与视觉进程的主题契约一致，再复现算法问题。
 2. 改动前先遵守 [docs/coding_standards.md](docs/coding_standards.md)：新增文件、函数、变量与配置项必须按规范写注释。
 3. 修改后本地构建并运行相关目标；涉及通信或坐标系时同步核对相应协议和标定文档。
 4. 提交代码时说明目标程序、配置变化、测试方式和未覆盖的硬件条件。

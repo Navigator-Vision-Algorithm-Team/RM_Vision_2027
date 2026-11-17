@@ -3,7 +3,6 @@
 #include <stdexcept>
 
 #include "hikrobot/hikrobot.hpp"
-#include "io/sim/camera_source.hpp"
 #include "mindvision/mindvision.hpp"
 #include "tools/logger.hpp"
 #include "tools/yaml.hpp"
@@ -55,23 +54,10 @@ Camera::Camera(const std::string & config_path, std::string sursign)
     camera_ = std::make_unique<USBCamera>(open_name, config_path);
   }
 
-  // 伪相机 / 回放相机：业务代码只认 io::Camera，切换 real/fake/replay 无需改动
-  else if (camera_name == "fake" || camera_name == "replay") {
-    const auto mode =
-      (camera_name == "replay") ? sim::SourceMode::Replay : sim::SourceMode::Fake;
-    auto source = sim::make_camera_source(yaml, config_path, sursign, mode, true);
-    camera_ = std::make_unique<sim::CameraSourceAdapter>(std::move(source), device_name);
-  }
-
   else {
     throw std::runtime_error("Unknow camera_name: " + camera_name + "!");
   }
 
-  // 帧记录（可选）：与中转进程的串口记录写入同一会话目录，构成完整可回放会话
-  auto record = sim::RecordConfig::load(yaml);
-  if (record.enable) {
-    recorder_ = std::make_unique<sim::CameraRecorder>(record.dir, record.save_images);
-  }
 }
 
 Camera::~Camera() = default;
@@ -79,9 +65,6 @@ Camera::~Camera() = default;
 void Camera::read(cv::Mat & img, std::chrono::steady_clock::time_point & timestamp)
 {
   camera_->read(img, timestamp);
-  if (recorder_ && !img.empty()) {
-    recorder_->record(img, timestamp, frame_id_++, img.type());
-  }
 }
 
 std::string Camera::device_name() const { return camera_->device_name(); }
