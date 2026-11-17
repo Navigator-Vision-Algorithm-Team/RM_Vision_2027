@@ -38,9 +38,9 @@ if(NOT (ament_cmake_FOUND AND rclcpp_FOUND AND sensor_msgs_FOUND))
 endif()
 
 # 步兵调试入口默认读取 configs/soldier_debug.yaml，使用达妙 USB-CAN SDK。
-# 与 soldier 共用同一份业务代码（src/soldier.cpp 的 run_soldier）。
+# 与 soldier 共用同一份业务代码（tasks/soldier/soldier.cpp 的 run_soldier）。
 if(TARGET io_soldier_can)
-    add_executable(soldier_debug soldier_debug.cpp "${PROJECT_SOURCE_DIR}/src/soldier.cpp")
+    add_executable(soldier_debug soldier_debug.cpp "${PROJECT_SOURCE_DIR}/tasks/soldier/soldier.cpp")
     target_link_libraries(
         soldier_debug
         ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io io_soldier_can)
@@ -48,7 +48,9 @@ if(TARGET io_soldier_can)
 endif()
 
 # 哨兵调试入口：多线程自瞄（主相机 + 全向），默认配置 configs/sentry.yaml
-add_executable(sentry_multithread_debug sentry_multithread_debug.cpp)
+add_executable(sentry_multithread_debug sentry_multithread_debug.cpp
+    # 与主入口共用同一个状态机实现，避免两条入口的行为分叉
+    ${PROJECT_SOURCE_DIR}/tasks/FST/sentry_fsm.cpp)
 target_link_libraries(
     sentry_multithread_debug
     ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)

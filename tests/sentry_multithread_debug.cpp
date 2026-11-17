@@ -13,6 +13,7 @@
 #include <fmt/core.h>
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <thread>
@@ -30,6 +31,7 @@
 // 【改动】load_omni_pnp_config（读取全向相机 PnP 标定参数）声明在这里
 #include "tasks/omniperception/omni_jobs.hpp"
 #include "tasks/omniperception/omni_pnp.hpp"
+#include "tasks/FST/sentry_fsm.hpp"
 #include "tasks/omniperception/omni_selection.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
@@ -198,6 +200,10 @@ int main(int argc, char * argv[])
     omni_state->set_enemy_color(enemy_color);
   };
 
+  // 状态机实例与主入口共用同一实现，保证两条入口的行为不会分叉
+  sentry_fsm::Fsm fsm;
+  std::function<void()> refresh_fn = refresh_enemy_color;
+
   // 多相机推理池：每个相机一个独立 YOLO 实例 + 一个绑定固定 CPU 核的线程
   std::vector<auto_aim::multithread::CameraJob> camera_jobs;
   {
@@ -335,10 +341,30 @@ int main(int argc, char * argv[])
       tracker.reset();
     }
 
-    // 本帧是否产出了可用瞄准角；为 false 时收尾点回填当前姿态并禁火
-    bool has_aim = false;
-    io::Command command{false, 0, 0};
+    // ---- 状态机：与主入口共用 sentry_fsm ----
     aimer.debug_aim_point.valid = false;
+    sentry_fsm::Context fctx{
+      img,                    // 主相机帧，只读
+      timestamp,              // 采集时刻
+      armors,                 // 主相机检测，状态机内部会按敌我颜色过滤
+      gimbal_pos,             // 世界系绝对 yaw/pitch/roll，rad
+      omni_base_yaw,          // 大yaw 世界系 yaw，rad
+      !omni_ids.empty(),      // 是否启用全向相机
+      spin_when_no_omni,      // 空闲时自旋还是保持
+      pipeline,               // 取全向推理结果
+      tracker,                // 目标跟踪
+      decider,                // 全向候选排序与角度
+      aimer,                  // 主相机弹道解算
+      shooter,                // 开火判据
+      serial_board,           // 取弹速与热量门限
+      has_omni_cache,         // 全向缓存有效标志（跨帧）
+      cached_omni_yaw,        // 缓存 yaw，rad（跨帧）
+      cached_omni_pitch,      // 缓存 pitch，rad（跨帧）
+      refresh_fn};            // 刷新敌我颜色的回调
+    const bool main_path = fsm.tick(fctx);
+
+    io::Command command = fctx.cmd;
+    bool has_aim = fctx.has_aim;
 
     // 0x0402 没有"是否接管"的位，pitch/yaw 会被固件无条件执行；没有瞄准角时必须
     // 下发当前姿态，否则默认的 0 会把云台拽回 pitch=0 / 世界系 yaw=0。
@@ -348,114 +374,16 @@ int main(int argc, char * argv[])
       command.pitch = gimbal_pos[1];
     };
 
-    // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
-    // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回空值，
-    // 而 0x0402 的 yaw/pitch 是无条件下发的，
-    // 直接走 else 会把云台拽回世界系 0 度。
-    if (omni_ids.empty() && armors.empty() && tracker.state() == "lost") {
-      command.shoot = false;
-      if (spin_when_no_omni) {
-        // 自旋扫描：云台自旋的角度增量（不是角速度），实际转速 ≈ 该增量 × 帧率
-        const double spin_yaw_step = 0.2;
-        has_aim = true;
-        // gimbal_pos[0] 是当前世界系绝对 yaw，叠加增量后即为世界系绝对目标角
-        command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
-        command.pitch = tools::limit_rad(0.0);
-      } else {
-        // 原地保持：gimbal_pos[0]/[1] 是世界系绝对 yaw/pitch，原样下发即为「保持当前角度」
-        has_aim = false;
-      }
+    if (main_path) {
+      // 热量保护：到上限前 heat_stop_margin 就停火，云台继续跟瞄
+      command.shoot =
+        shooter.shoot(command, aimer, fctx.target, gimbal_pos) && serial_board.can_shoot();
 
-      main_recorder.record(img, q_main, timestamp);
-      if (!has_aim) command.shoot = false;
-      hold_current_pose();
-      serial_board.send(command);
-
-      // 【新增】调试数据流：无检测框时的两种状态（spin / hold）
-      debug.publish(
-        armors, auto_aim::DebugStatus{
-                  gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0),                  command.shoot, spin_when_no_omni ? "spin" : "hold", ""});
-    } else {
-      //这是主相机的处理，立马处理的目标
-      // 先按裁判给的身份刷新敌我颜色，再做过滤
-      refresh_enemy_color();
-      // 过滤敌人
-      decider.armor_filter(armors);
-
-      // 【已停用】无法可靠判断兵种，暂停按兵种设置优先级（与 sentry_multithread 保持一致）
-      // decider.set_priority(armors);
-
-      //全向相机中拿出装甲板的候选（各相机独立 YOLO 推理，已按优先级排过序）
-      auto detection_queue = omniperception::take_detection_results(pipeline);
-
-      decider.sort(detection_queue);
-
-      // 传入的是全向相机中的装甲板候选，和主相机中的装甲板候选，为什么两个不放在同一个queue中传入给tracker呢？
-      // 因为我们认为在主相机发现的相机的优先级会天然的大于全向相机中发现的
-      // 【想象一下，主相机发现了一个可以轻易瞄准的目标，这个时候全向相机发现了一个理论上重要的目标，这个时候让云台转动去寻找那个目标，先不说准确性的问题，这样无疑是浪费时间的】
-      auto [switch_target, target] = tracker.track(detection_queue, armors, timestamp, true, img.size());
-      
-      // 全向相机的 delta_yaw 是「大yaw 系」角（零点 = 大yaw 正前方、向左为正，
-      // 由 Decider::delta_angle 用 tf 给的「相机 -> 大yaw」位姿算出），
-      // 必须加大yaw 当前的世界系 yaw 才是下位机要求的世界系绝对角。
-      // 注意：这里不能用 gimbal_pos[0]——那是小yaw 的 yaw，两个轴是独立的。
-      if (tracker.state() == "switching") {
-        // armors 为空时 switch_target 的 delta 是默认值 0，直接下发会让云台归零，
-        // 这里没有观测时保持当前姿态（0x0402 的 pitch/yaw 无条件下发）。
-        command.shoot = false;
-        has_aim = !switch_target.armors.empty();
-        if (has_aim) {
-          command.pitch = tools::limit_rad(switch_target.delta_pitch);
-          command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
-        } else {
-          command.pitch = gimbal_pos[1];
-          command.yaw = gimbal_pos[0];
-        }
-      }
-
-      else if (tracker.state() == "lost") {
-        auto decided = decider.decide(detection_queue);
-        if (decided) {
-          command = *decided;
-          has_aim = true;
-          // 全向有新检测：更新缓存，发送新值
-          // decide() 返回的同样是大yaw 系角，需转成世界系绝对角后再下发
-          command.yaw = tools::limit_rad(command.yaw + omni_base_yaw);
-          cached_omni_yaw = command.yaw;
-          cached_omni_pitch = command.pitch;
-          has_omni_cache = true;
-        } else if (has_omni_cache) {
-          // 全向暂时丢失：回放缓存值，保持云台继续转向目标
-          has_aim = true;
-          command.shoot = false;
-          command.yaw = cached_omni_yaw;
-          command.pitch = cached_omni_pitch;
-        } else {
-          // 无新结果也无缓存：decide() 返回 {false,false,0,0}，显式保持当前姿态
-          has_aim = false;
-          command.shoot = false;
-        }
-      }
-
-      else {
-        // aimer 输出的 yaw 已是 IMU 世界系绝对角（Aimer 内部对世界系 armor_xyza_list 取 atan2），
-        // 与下位机的要求一致，直接下发，绝不能再叠加 gimbal_pos[0]。
-        auto aimed = aimer.aim(target, timestamp, serial_board.bullet_speed);
-        if (aimed) {
-          command = *aimed;
-          has_aim = true;
-        } else {
-          has_aim = false;
-        }
-        has_omni_cache = false;
-      }
-
-      // 热量保护：枪管热量到 0x0201 上限前 heat_stop_margin 就停止开火
-      command.shoot = shooter.shoot(command, aimer, target, gimbal_pos) && serial_board.can_shoot();
-
-      // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
+      // 【调试数据流】检测框 + YOLO FPS + 云台位姿 + 下发目标位姿
+      // state 保留 tracker 状态（与原有面板一致），note 里补状态机状态便于对照
       auto_aim::DebugStatus status{
-        gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0),        command.shoot, tracker.state(), ""};
+        gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.shoot,
+        tracker.state(), fsm.state_name()};
 
       if (debug_frame_requested) {
         for (auto & armor : armors) {
@@ -479,17 +407,17 @@ int main(int argc, char * argv[])
       }
 
       // IMM/EKF 预测信息：目标中心、速度、角速度、半径、模型概率、NIS 一致性
-      if (target != nullptr) {
-        const Eigen::VectorXd x = target->ekf_x();
+      if (fctx.target != nullptr) {
+        const Eigen::VectorXd x = fctx.target->ekf_x();
         if (x.size() >= 11) {
           status.has_ekf = true;
           status.target_center = Eigen::Vector3d(x[0], x[2], x[4]);
           status.target_vel = Eigen::Vector2d(x[1], x[3]);
           status.target_w = x[7];
           status.target_r = x[8];
-          status.model_prob = target->model_probabilities();
-          status.nis_ratio = target->nis_ratio();
-          const auto convergence = target->debug_convergence_metrics();
+          status.model_prob = fctx.target->model_probabilities();
+          status.nis_ratio = fctx.target->nis_ratio();
+          const auto convergence = fctx.target->debug_convergence_metrics();
           status.has_ekf_convergence = true;
           status.ekf_converged = convergence.converged;
           status.ekf_convergence_score = convergence.score;
@@ -508,7 +436,7 @@ int main(int argc, char * argv[])
 
       debug.publish(armors, status);
 
-      // 绘制检测框和跟踪信息（用于赛后录像复盘）
+      // 绘制检测框与 HUD（用于赛后录像复盘）
       for (const auto & armor : armors) {
         cv::rectangle(img, armor.box, cv::Scalar(0, 255, 0), 2);
         std::string label = fmt::format("{} {} {:.2f}",
@@ -520,23 +448,22 @@ int main(int argc, char * argv[])
         }
       }
       cv::putText(img,
-        fmt::format("State: {} | Targets: {}", tracker.state(), target == nullptr ? 0 : 1),
+        fmt::format("State: {} | FSM: {} | Targets: {}", tracker.state(), fsm.state_name(),
+          fctx.target == nullptr ? 0 : 1),
         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
-
-      main_recorder.record(img, q_main, timestamp);
-
-  //     tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
-  // command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);
-      hold_current_pose();
-      serial_board.send(command);
-
-      // //test//
-
-      // sleep(5);
-      // tools::logger()->info("sleeping```````");
-
-      // //test//
+    } else {
+      // 空闲态：仍要发调试信息，用于区分"自旋扫描"与"原地保持"
+      debug.publish(
+        armors, auto_aim::DebugStatus{
+                  gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.shoot,
+                  spin_when_no_omni ? "spin" : "hold", fsm.state_name()});
     }
+
+    // ================== 本轮唯一的收尾点 ==================
+    if (!has_aim) command.shoot = false;
+    hold_current_pose();
+    main_recorder.record(img, q_main, timestamp);
+    serial_board.send(command);
   }
 
   return 0;

@@ -8,7 +8,7 @@
 #
 #  恢复条件（三者缺一不可）：
 #    1) 配置时打开 -DSP_BUILD_SOLDIER=ON，并给 -DDMCAN_SDK_ROOT=/path/to/dm-device-sdk；
-#    2) src/soldier.cpp 的收发改为 RelayClient：上行取 IMU / 机器人状态，下行发 AimCmd；
+#    2) tasks/soldier/soldier.cpp 的收发改为 RelayClient：上行取 IMU / 机器人状态，下行发 AimCmd；
 #    3) 恢复根 CMakeLists 中 soldier / soldier_debug 目标的链接项。
 #  在此之前，SocketCAN 的 CBoard 实现已按规范删除，本目录只保留达妙驱动源码备查。
 # =====================================================================================

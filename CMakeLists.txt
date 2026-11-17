@@ -87,7 +87,7 @@ link_libraries(${FFMPEG_LIBRARIES})
 # 步兵主程序使用达妙 USB-CAN SDK，默认配置 configs/soldier.yaml。
 # io_soldier_can 只在找到 DMCAN SDK 时存在；没有 SDK 时跳过步兵目标。
 if(TARGET io_soldier_can)
-    add_executable(soldier src/soldier_main.cpp src/soldier.cpp)
+    add_executable(soldier src/soldier_main.cpp tasks/soldier/soldier.cpp)
 endif()
 # 而串口侧（虚拟下位机、字节回放、协议解析）已随 info_relay 迁出本工程。
 # 无硬件联调现在需要同时启动 info_relay（serial 侧）与视觉入口（相机侧）。
@@ -119,7 +119,7 @@ find_package(rosidl_typesupport_cpp QUIET)
 # 只有在找到 ROS 环境时才会添加 sentry
 if(ament_cmake_FOUND AND rclcpp_FOUND AND std_msgs_FOUND AND rosidl_typesupport_cpp_FOUND)
     # 编译 sentry
-    add_executable(sentry_multithread src/sentry_multithread.cpp)
+    add_executable(sentry_multithread src/sentry_multithread.cpp tasks/FST/sentry_fsm.cpp)
 
     target_link_libraries(sentry_multithread ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)
 else()
