@@ -97,13 +97,7 @@ int main(int argc, char * argv[])
   // 单主相机（omni_ids 为空）时，丢失目标后的云台行为开关：
   //   true  = 自旋扫描（旧行为，按固定步长持续转动）
   //   false = 原地保持当前朝向
-  // 缺省 true，保持旧行为；yaml 里写 spin_when_no_omni: false 即可关闭自旋
-  const bool spin_when_no_omni =
-    yaml["spin_when_no_omni"] ? yaml["spin_when_no_omni"].as<bool>() : true;
-  if (omni_ids.empty()) {
-    tools::logger()->info(
-      "[Main] single main camera, spin when lost: {}", spin_when_no_omni ? "on" : "off");
-  }
+  tools::logger()->info("[Main] 自旋搜索已启用（无条件兜底，含 pitch 点头）");
 
   // 缓冲时间， 确保全向相机初始化完成，避免出现空帧，但是我们的全向相机和主相机并不在同一个物理链路上，所以这个sleep并没有非常的必要
   // if (!omni_ids.empty()) {
@@ -350,7 +344,6 @@ int main(int argc, char * argv[])
       gimbal_pos,             // 世界系绝对 yaw/pitch/roll，rad
       omni_base_yaw,          // 大yaw 世界系 yaw，rad
       !omni_ids.empty(),      // 是否启用全向相机
-      spin_when_no_omni,      // 空闲时自旋还是保持
       pipeline,               // 取全向推理结果
       tracker,                // 目标跟踪
       decider,                // 全向候选排序与角度
@@ -364,16 +357,7 @@ int main(int argc, char * argv[])
     const bool main_path = fsm.tick(fctx);
 
     io::Command command = fctx.cmd;
-    bool has_aim = fctx.has_aim;
     tools::VideoOverlay overlay;  // 录像覆盖层，由状态机路径填充
-
-    // 0x0402 没有"是否接管"的位，pitch/yaw 会被固件无条件执行；没有瞄准角时必须
-    // 下发当前姿态，否则默认的 0 会把云台拽回 pitch=0 / 世界系 yaw=0。
-    auto hold_current_pose = [&]() {
-      if (has_aim) return;
-      command.yaw = gimbal_pos[0];
-      command.pitch = gimbal_pos[1];
-    };
 
     if (main_path) {
       // 热量保护：到上限前 heat_stop_margin 就停火，云台继续跟瞄
@@ -459,12 +443,10 @@ int main(int argc, char * argv[])
       debug.publish(
         armors, auto_aim::DebugStatus{
                   gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.shoot,
-                  spin_when_no_omni ? "spin" : "hold", fsm.state_name()});
+                  "spin", fsm.state_name()});
     }
 
     // ================== 本轮唯一的收尾点 ==================
-    if (!has_aim) command.shoot = false;
-    hold_current_pose();
     main_recorder.record(img, q_main, timestamp, overlay);
     serial_board.send(command);
   }

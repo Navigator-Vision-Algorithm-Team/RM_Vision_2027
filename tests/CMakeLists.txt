@@ -50,7 +50,8 @@ endif()
 # 哨兵调试入口：多线程自瞄（主相机 + 全向），默认配置 configs/sentry.yaml
 add_executable(sentry_multithread_debug sentry_multithread_debug.cpp
     # 与主入口共用同一个状态机实现，避免两条入口的行为分叉
-    ${PROJECT_SOURCE_DIR}/tasks/FST/sentry_fsm.cpp)
+    ${PROJECT_SOURCE_DIR}/tasks/FST/sentry_fsm.cpp
+    ${PROJECT_SOURCE_DIR}/tasks/spin_decision/spin_decision.cpp)
 target_link_libraries(
     sentry_multithread_debug
     ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)

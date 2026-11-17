@@ -18,9 +18,6 @@ namespace sentry_fsm
 {
 namespace
 {
-// 自旋扫描的角度增量（不是角速度）：实际转速 ≈ 该增量 × 帧率
-constexpr double kSpinYawStep = 0.2;
-
 // 状态数量与事件数量：用于把枚举下标算进一维转移表
 constexpr size_t kStateCount = static_cast<size_t>(State::kCount);
 constexpr size_t kEventCount = static_cast<size_t>(Event::kCount);
@@ -131,17 +128,10 @@ void Fsm::prepare(Context & ctx)
 
 void Fsm::on_idle(Context & ctx)
 {
+  // 无全向且主相机丢失：本帧不产出瞄准角，统一交给 finalize() 调用自旋决策。
+  // 不再有"自旋开关"——自旋是无条件兜底行为。
+  ctx.has_aim = false;
   ctx.cmd.shoot = false;
-  if (ctx.spin_when_no_omni) {
-    // 自旋是主动下发目标角，与"保持"不同
-    ctx.has_aim = true;
-    ctx.cmd.yaw = tools::limit_rad(kSpinYawStep + ctx.gimbal_pos[0]);
-    // pitch=0 是**有意的**：自旋搜索时保持平视，不抬头/低头扫地面
-    ctx.cmd.pitch = tools::limit_rad(0.0);
-  } else {
-    // 不产出瞄准角，由主循环收尾点回填当前姿态
-    ctx.has_aim = false;
-  }
   check(Event::kIdle);
 }
 
@@ -169,9 +159,8 @@ void Fsm::on_search(Context & ctx)
     ctx.cmd.yaw = ctx.cached_omni_yaw;
     ctx.cmd.pitch = ctx.cached_omni_pitch;
   } else {
-    // 既无新结果也无缓存：不产出瞄准角，回填当前姿态
+    // 既无新结果也无缓存：不产出瞄准角，由 finalize() 统一执行自旋点头
     ctx.has_aim = false;
-    ctx.cmd.shoot = false;
   }
 
   check(observe_event(ctx));
@@ -219,6 +208,22 @@ void Fsm::on_tracking(Context & ctx)
   check(observe_event(ctx));
 }
 
+void Fsm::finalize(Context & ctx)
+{
+  // 唯一出口：所有状态函数只负责设置 has_aim，最终姿态在这里一次结算。
+  if (ctx.has_aim) {
+    // 命中有效目标：复位自旋相位，下次丢失时从头开始点头
+    spin_.reset();
+    return;
+  }
+
+  // 无有效瞄准角：无条件自旋（不区分有无全向相机），并禁止开火
+  const auto spin = spin_.update(ctx.timestamp, ctx.gimbal_pos);
+  ctx.cmd.yaw = spin.yaw;
+  ctx.cmd.pitch = spin.pitch;
+  ctx.cmd.shoot = false;
+}
+
 bool Fsm::tick(Context & ctx)
 {
   ctx.cmd = io::Command{false, 0, 0};
@@ -228,6 +233,7 @@ bool Fsm::tick(Context & ctx)
   const bool idle = !ctx.has_omni && ctx.armors.empty() && ctx.tracker.state() == "lost";
   if (idle) {
     on_idle(ctx);
+    finalize(ctx);
     return false;
   }
 
@@ -258,6 +264,7 @@ bool Fsm::tick(Context & ctx)
       break;
   }
 
+  finalize(ctx);
   return true;
 }
 

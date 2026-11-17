@@ -35,6 +35,7 @@
 
 #include "io/command.hpp"
 #include "io/relay/relay_client.hpp"
+#include "tasks/spin_decision/spin_decision.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/tracker.hpp"
@@ -88,7 +89,6 @@ struct Context
   Eigen::Vector3d gimbal_pos;                                // 世界系绝对 yaw/pitch/roll，rad
   double omni_base_yaw = 0;                                  // 大yaw 世界系 yaw，rad
   bool has_omni = false;                                     // 是否启用全向相机
-  bool spin_when_no_omni = true;                             // 无全向且丢失时是否自旋
 
   // ---- 算法组件 ----
   auto_aim::multithread::YoloPipeline & pipeline;            // 取全向推理结果
@@ -173,6 +173,13 @@ private:
   // 备注：表的格子为 kCount 时视为非法转移，计数并保持原状态，不抛异常
   void check(Event ev);
 
+  // 功能：把本帧指令结算成最终可下发形态（唯一出口，所有路径都必须经过）
+  // 输入：
+  //   ctx  本帧上下文，读取 has_aim 并修正 ctx.cmd
+  // 输出：无；没有有效瞄准角时回填当前姿态并清开火位
+  // 备注：由 tick() 的两个返回路径统一调用；调用方拿到的 cmd 不再需要二次加工
+  void finalize(Context & ctx);
+
   // 功能：由 tracker 状态推导事件
   // 输入：ctx 本帧上下文
   // 输出：事件
@@ -181,6 +188,8 @@ private:
 
   State state_ = State::kIdleNoOmni;  // 当前状态
   uint64_t illegal_ = 0;              // 非法转移累计次数，用于限流报错与自检
+
+  spin_decision::SpinDecision spin_;  // 无有效瞄准角时的统一自旋决策
 };
 
 }  // namespace sentry_fsm

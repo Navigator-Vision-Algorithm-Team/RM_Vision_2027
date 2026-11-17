@@ -102,13 +102,9 @@ int main(int argc, char * argv[])
   const std::vector<int> omni_ids = omniperception::resolve_omni_camera_ids(yaml);
 
   // 单主相机（omni_ids 为空）时，丢失目标后的云台行为开关：
-  //   true  = 自旋扫描（旧行为，按固定步长持续转动）
-  //   false = 原地保持当前朝向
-  // 缺省 true，保持旧行为；yaml 里写 spin_when_no_omni: false 即可关闭自旋
+  // 没有有效瞄准角时由 tasks/spin_decision 统一执行 yaw 扫描 + pitch 点头，无开关
   // 状态机实例：跨帧保存当前状态，是本文件唯一的模式记忆
   sentry_fsm::Fsm fsm;
-  const bool spin_when_no_omni =
-    yaml["spin_when_no_omni"] ? yaml["spin_when_no_omni"].as<bool>() : true;
   // 缓冲时间， 确保全向相机初始化完成，避免出现空帧，但是我们的全向相机和主相机并不在同一个物理链路上，所以这个sleep并没有非常的必要
   // if (!omni_ids.empty()) {
   //   std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -343,7 +339,6 @@ int main(int argc, char * argv[])
       gimbal_pos,             // 世界系绝对 yaw/pitch/roll，rad
       omni_base_yaw,          // 大yaw 世界系 yaw，rad
       !omni_ids.empty(),      // 是否启用全向相机
-      spin_when_no_omni,      // 空闲时自旋还是保持
       pipeline,               // 取全向推理结果
       tracker,                // 目标跟踪
       decider,                // 全向候选排序与角度
@@ -357,17 +352,7 @@ int main(int argc, char * argv[])
     const bool main_path = fsm.tick(fctx);
 
     io::Command command = fctx.cmd;
-    bool has_aim = fctx.has_aim;
     tools::VideoOverlay overlay;  // 录像覆盖层，由状态机路径填充
-
-    // 0x0402 报文里没有"是否接管"的位，固件对 pitch / yaw 无条件执行，
-    // 所以「视觉不瞄准」也必须下发一个合法角度：这里统一改写成当前姿态。
-    // 少任何一个分支漏填，都会把默认的 0 当成「转到 pitch=0 / 世界系 yaw=0」。
-    auto hold_current_pose = [&]() {
-      if (has_aim) return;
-      command.yaw = gimbal_pos[0];
-      command.pitch = gimbal_pos[1];
-    };
 
     if (main_path) {
       // 热量保护：枪管热量到 0x0201 上限前 heat_stop_margin 就停止开火
@@ -405,15 +390,10 @@ int main(int argc, char * argv[])
 
     // ================== 本轮唯一的收尾点 ==================
     // 所有分支只负责算出 command，不在这里之外下发：
-    //   · 没有可用瞄准角就一定不开火：此时下发的是"保持姿态"，若 shoot 为真会对着
-    //     旧角度发弹；这条约束放在收尾点是结构性保证，不依赖每个分支自觉清零；
-    //   · hold_current_pose() 是「没有瞄准角时回填当前姿态」的兜底，报文没有"是否接管"
-    //     的位，漏填会把云台拽回世界系 0°；
+    //   · 指令已由状态机 finalize() 统一结算：无有效瞄准角时回填当前姿态并禁火；
     //   · 录像与下发集中在此，保证每轮循环最多一次，不会因分支重排而重复发送；
     //   · 上面的 continue（推理池超时/空帧/比赛未开始）在到达这里之前就跳出了，
     //     它们继续保持「只录像、不下发」的原有语义。
-    if (!has_aim) command.shoot = false;
-    hold_current_pose();
     main_recorder.record(img, q_main, timestamp, overlay);
     serial_board.send(command);
   }

@@ -119,7 +119,8 @@ find_package(rosidl_typesupport_cpp QUIET)
 # 只有在找到 ROS 环境时才会添加 sentry
 if(ament_cmake_FOUND AND rclcpp_FOUND AND std_msgs_FOUND AND rosidl_typesupport_cpp_FOUND)
     # 编译 sentry
-    add_executable(sentry_multithread src/sentry_multithread.cpp tasks/FST/sentry_fsm.cpp)
+    add_executable(sentry_multithread src/sentry_multithread.cpp tasks/FST/sentry_fsm.cpp
+        tasks/spin_decision/spin_decision.cpp)
 
     target_link_libraries(sentry_multithread ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim omniperception tools io)
 else()
