@@ -5,7 +5,6 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
-#include <filesystem>
 #include <random>
 
 #include "tasks/auto_aim/classifier.hpp"
@@ -34,8 +33,6 @@ YOLOV8::YOLOV8(const std::string & config_path, bool debug, bool single_thread_c
   roi_ = cv::Rect(x, y, width, height);
   offset_ = cv::Point2f(x, y);
 
-  save_path_ = "imgs";
-  std::filesystem::create_directory(save_path_);
 
   auto model = core_.read_model(model_path_);
   ov::preprocess::PrePostProcessor ppp(model);
@@ -193,9 +190,6 @@ bool YOLOV8::check_name(const Armor & armor) const
   auto name_ok = armor.name != ArmorName::not_armor;
   auto confidence_ok = armor.confidence > min_confidence_;
 
-  // 保存不确定的图案，用于分类器的迭代
-  // if (name_ok && !confidence_ok) save(armor);
-
   return name_ok && confidence_ok;
 }
 
@@ -205,9 +199,6 @@ bool YOLOV8::check_type(const Armor & armor) const
                    ? (armor.name != ArmorName::one && armor.name != ArmorName::base)
                    : (armor.name != ArmorName::two && armor.name != ArmorName::sentry &&
                       armor.name != ArmorName::outpost);
-
-  // 保存异常的图案，用于分类器的迭代
-  // if (!name_ok) save(armor);
 
   return name_ok;
 }
@@ -270,13 +261,6 @@ cv::Mat YOLOV8::get_pattern(const cv::Mat & bgr_img, const Armor & armor) const
   }
 
   return bgr_img(roi);
-}
-
-void YOLOV8::save(const Armor & armor) const
-{
-  auto file_name = fmt::format("{:%Y-%m-%d_%H-%M-%S}", std::chrono::system_clock::now());
-  auto img_path = fmt::format("{}/{}_{}.jpg", save_path_, ARMOR_NAMES[armor.name], file_name);
-  cv::imwrite(img_path, armor.pattern);
 }
 
 void YOLOV8::draw_detections(

@@ -30,7 +30,6 @@ private:
   Detector detector_;
 
   std::string device_, model_path_;
-  std::string save_path_, debug_path_;
   bool debug_, use_roi_;
   bool single_thread_cpu_ = false;
 
@@ -57,7 +56,6 @@ private:
 
   std::list<Armor> parse(double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count);
 
-  void save(const Armor & armor) const;
   void draw_detections(const cv::Mat & img, const std::list<Armor> & armors, int frame_count) const;
   void sort_keypoints(std::vector<cv::Point2f> & keypoints);
 };

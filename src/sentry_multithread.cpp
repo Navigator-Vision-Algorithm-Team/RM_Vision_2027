@@ -247,11 +247,8 @@ int main(int argc, char * argv[])
   auto last_main_frame = std::chrono::steady_clock::now();
   bool camera_stall_warning_logged = false;
 
-  // rclcpp::init 还接管了 SIGTERM（只置 rclcpp 的 shutdown 标志），
-  // 因此除 Exiter 的 SIGINT 外再检查 rclcpp::ok()，保证 Ctrl+C / kill 都能退出。
   while (!exiter.exit()) {
-    // 开赛前关闭推理：相机仍持续出图（主相机帧照常入队，供录像使用），
-    // 避免赛前 5 路 YOLO 空转占满 CPU。
+    // 开赛前关闭推理：相机仍持续出图（主相机帧照常入队，供录像使用）
     pipeline.set_inference_enabled(serial_board.is_game_started());
 
     // 限时等待主相机结果：统一结果队列里主相机的优先级最高。

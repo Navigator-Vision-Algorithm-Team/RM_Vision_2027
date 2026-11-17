@@ -25,7 +25,6 @@ public:
 
 private:
   std::string device_, model_path_;
-  std::string save_path_, debug_path_;
   bool debug_, use_roi_;
   bool single_thread_cpu_ = false;
 
@@ -39,15 +38,14 @@ private:
   // 复用推理请求与输入缓冲：create_infer_request() 每次都要分配内部张量/队列，
   // 640x640x3 的输入缓冲每次重新分配同样多余。
   // 【前提】同一实例同一时刻只有一个线程调用 detect()：
-  //   YoloPipeline 每路相机一个实例；若走 YOLO 包装类，yolo_lock（默认 true）
-  //   会串行化。详见 tasks/auto_aim/yolo.hpp 的并发契约。
+  //   YoloPipeline 每路相机在各自线程内构造独立实例，满足该前提。
+  //   YOLO 包装类不再内建互斥，详见 tasks/auto_aim/yolo.hpp 的并发契约。
   // 若将来需要多线程共用同一实例，请改回每帧 create_infer_request()。
   ov::InferRequest infer_request_;
   cv::Mat input_;
 
   cv::Rect roi_;
   cv::Point2f offset_;
-  cv::Mat tmp_img_;
 
   Detector detector_;
 
@@ -58,7 +56,6 @@ private:
 
   std::list<Armor> parse(double scale, cv::Mat & output, const cv::Mat & bgr_img, int frame_count);
 
-  void save(const Armor & armor) const;
   void draw_detections(const cv::Mat & img, const std::list<Armor> & armors, int frame_count) const;
   void sort_keypoints(std::vector<cv::Point2f> & keypoints);
 };
