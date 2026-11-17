@@ -17,7 +17,9 @@ class Detector
 public:
   Detector(const std::string & config_path, bool debug = true);
 
-  std::list<Armor> detect(const cv::Mat & bgr_img, int frame_count = -1);
+  // 整图传统检测入口：当前无调用者，且内部含 cv::imshow（无头环境会抛），已停用。
+  // 定义在 detector.cpp 的 #if 0 块里，恢复时两处一起打开。
+  // std::list<Armor> detect(const cv::Mat & bgr_img, int frame_count = -1);
 
   bool detect(Armor & armor, const cv::Mat & bgr_img);
 
@@ -36,7 +38,8 @@ private:
   double max_rectangular_error_;
 
   bool debug_;
-  std::string save_path_;
+  // 保存路径只服务于已停用的 save()，随它一起停用
+  // std::string save_path_;
 
   // 利用PCA回归角点，参考自https://github.com/CSU-FYT-Vision/FYT2024_vision
   void lightbar_points_corrector(Lightbar & lightbar, const cv::Mat & gray_img) const;
@@ -51,10 +54,11 @@ private:
   ArmorType get_type(const Armor & armor);
   cv::Point2f get_center_norm(const cv::Mat & bgr_img, const cv::Point2f & center) const;
 
-  void save(const Armor & armor) const;
-  void show_result(
-    const cv::Mat & binary_img, const cv::Mat & bgr_img, const std::list<Lightbar> & lightbars,
-    const std::list<Armor> & armors, int frame_count) const;
+  // 诊断用保存与可视化：只被已停用的整图检测调用，实现同样在 #if 0 块里
+  // void save(const Armor & armor) const;
+  // void show_result(
+  //   const cv::Mat & binary_img, const cv::Mat & bgr_img, const std::list<Lightbar> & lightbars,
+  //   const std::list<Armor> & armors, int frame_count) const;
 };
 
 }  // namespace auto_aim

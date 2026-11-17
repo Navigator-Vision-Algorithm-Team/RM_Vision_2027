@@ -27,10 +27,21 @@ Detector::Detector(const std::string & config_path, bool debug)
   min_confidence_ = yaml["min_confidence"].as<double>();
   max_rectangular_error_ = yaml["max_rectangular_error"].as<double>() / 57.3;  // degree to rad
 
-  save_path_ = "patterns";
-  std::filesystem::create_directory(save_path_);
+  // save_path_ 与 "patterns" 目录只服务于上面已停用的保存功能，一并停用
+  // save_path_ = "patterns";
+  // std::filesystem::create_directory(save_path_);
 }
 
+// =====================================================================================
+//  整图传统检测入口（已停用，代码保留备查）
+//
+//  停用原因：
+//    1. 当前没有任何调用者——三个 YOLO 后端只用下面按装甲板 ROI 的二次矫正重载，
+//       测试入口与 decider 用的都是 YOLO::detect；
+//    2. 它内部调用 cv::imshow，无头环境下会抛异常，是潜在的启动崩溃点。
+//  恢复方式：删除本段 #if 0 / #endif，并同步恢复 detector.hpp 里被注释的三个声明。
+// =====================================================================================
+#if 0
 std::list<Armor> Detector::detect(const cv::Mat & bgr_img, int frame_count)
 {
   // 彩色图转灰度图
@@ -119,6 +130,7 @@ std::list<Armor> Detector::detect(const cv::Mat & bgr_img, int frame_count)
 
   return armors;
 }
+#endif  // Detector::detect(整图，当前无调用者)
 
 bool Detector::detect(Armor & armor, const cv::Mat & bgr_img)
 {
@@ -252,8 +264,8 @@ bool Detector::check_name(const Armor & armor) const
   auto name_ok = armor.name != ArmorName::not_armor;
   auto confidence_ok = armor.confidence > min_confidence_;
 
-  // 保存不确定的图案，用于分类器的迭代
-  if (name_ok && !confidence_ok) save(armor);
+  // 保存功能已停用（见文件末尾的 #if 0 块），这里只保留判断本身的行为
+  // if (name_ok && !confidence_ok) save(armor);
 
   // 出现 5号 则显示 debug 信息。但不过滤。
   if (armor.name == ArmorName::five) tools::logger()->debug("See pattern 5");
@@ -271,7 +283,7 @@ bool Detector::check_type(const Armor & armor) const
   if (!name_ok) {
     tools::logger()->debug(
       "see strange armor: {} {}", ARMOR_TYPES[armor.type], ARMOR_NAMES[armor.name]);
-    save(armor);
+    // save(armor);  // 保存功能已停用
   }
 
   return name_ok;
@@ -347,6 +359,9 @@ cv::Point2f Detector::get_center_norm(const cv::Mat & bgr_img, const cv::Point2f
     std::clamp(center.y / h, 0.0f, 1.0f)};
 }
 
+#if 0
+// 诊断用保存与可视化：只被上面停用的整图检测调用，一并停用。
+// 其中 show_result 末尾的 cv::imshow 是无头环境的崩溃点。
 void Detector::save(const Armor & armor) const
 {
   auto file_name = fmt::format("{:%Y-%m-%d_%H-%M-%S}", std::chrono::system_clock::now());
@@ -385,6 +400,7 @@ void Detector::show_result(
   // cv::imshow("threshold", binary_img2);
   cv::imshow("detection", detection);
 }
+#endif  // Detector::save / Detector::show_result
 
 void Detector::lightbar_points_corrector(Lightbar & lightbar, const cv::Mat & gray_img) const
 {
