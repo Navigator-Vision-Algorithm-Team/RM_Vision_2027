@@ -25,14 +25,22 @@ add_library(auto_aim OBJECT
     debug_stream.cpp
     # 设备选择与降级（x86 GPU / arm64 CPU 共用同一份配置）
     ov_device.cpp
-    yolos/yolov5.cpp
-    yolos/yolov8.cpp
-    yolos/yolo11.cpp
     multithread/mt_detector.cpp
     # 多相机推理池：一路相机一个 YOLO 实例 + 固定核线程 + 主相机优先的结果队列
     multithread/yolo_pipeline.cpp
     # planner/planner.cpp            # MPC，暂不编译，见 docs/unused_code.md
 )
+
+# ---------------------------------------------------------------------------
+# YOLO 后端按配置裁剪：只编译 yolo_name 引用到的那个包。
+# 未启用的后端同时关闭 SP_WITH_* 宏，yolo.cpp 里的分支被预处理器裁掉，
+# 工厂函数只剩下已编译的分支，不产生任何运行期开销。
+# ---------------------------------------------------------------------------
+foreach(_yolo IN LISTS SP_YOLOS_ENABLED)
+    target_sources(auto_aim PRIVATE yolos/${_yolo}.cpp)
+    string(TOUPPER "${_yolo}" _yolo_macro)
+    target_compile_definitions(auto_aim PUBLIC SP_WITH_${_yolo_macro}=1)
+endforeach()
 
 target_link_libraries(auto_aim io openvino::runtime)
 # target_link_libraries(auto_aim io openvino::runtime tinympcstatic)  # 随 planner 恢复

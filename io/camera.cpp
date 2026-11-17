@@ -2,11 +2,17 @@
 
 #include <stdexcept>
 
+#ifdef SP_WITH_HIKROBOT
 #include "hikrobot/hikrobot.hpp"
+#endif
+#ifdef SP_WITH_MINDVISION
 #include "mindvision/mindvision.hpp"
+#endif
 #include "tools/logger.hpp"
 #include "tools/yaml.hpp"
+#ifdef SP_WITH_USBCAMERA
 #include "usbcamera/usbcamera.hpp"
+#endif
 
 namespace io
 {
@@ -30,32 +36,43 @@ Camera::Camera(const std::string & config_path, std::string sursign)
   else if (!sursign.empty())
     device_name = sursign;
 
+  // 各分支由 CMake 依据配置里的 camera_name* 决定是否编译：未启用的后端在预处理阶段
+  // 整段消失，运行期只剩一次字符串比较。每个 #ifdef 块以 else 收尾，保证任意子集组合
+  // 下 if/else 链都完整——缺哪个后端都不会留下悬空的 else。
+#ifdef SP_WITH_MINDVISION
   if (camera_name == "mindvision") {
     auto gamma = tools::read<double>(yaml, key("gamma"));
     auto vid_pid = tools::read<std::string>(yaml, key("vid_pid"));
     auto exposure_ms = tools::read<double>(yaml, key("exposure_ms"));
     camera_ = std::make_unique<MindVision>(exposure_ms, gamma, vid_pid, device_name);
-  }
+  } else
+#endif
 
-  else if (camera_name == "hikrobot") {
+#ifdef SP_WITH_HIKROBOT
+  if (camera_name == "hikrobot") {
     auto gain = tools::read<double>(yaml, key("gain"));
     auto exposure_ms = tools::read<double>(yaml, key("exposure_ms"));
-    std::string serial_number = yaml[key("serial_number")] ? yaml[key("serial_number")].as<std::string>() : "";
-    double frame_rate = yaml[key("frame_rate")] ? yaml[key("frame_rate")].as<double>() : 30.0;
-    unsigned int transfer_size =
+    auto serial_number =
+      yaml[key("serial_number")] ? yaml[key("serial_number")].as<std::string>() : std::string();
+    auto frame_rate = yaml[key("frame_rate")] ? yaml[key("frame_rate")].as<double>() : 30.0;
+    auto transfer_size =
       yaml[key("transfer_size")] ? yaml[key("transfer_size")].as<unsigned int>() : 0;
     camera_ = std::make_unique<HikRobot>(
-      exposure_ms, gain, device_name, serial_number, frame_rate,
-      transfer_size);
-  }
+      exposure_ms, gain, device_name, serial_number, frame_rate, transfer_size);
+  } else
+#endif
 
-  else if (camera_name == "Usbcamera") {
+#ifdef SP_WITH_USBCAMERA
+  if (camera_name == "Usbcamera") {
     auto open_name = tools::read<std::string>(yaml, key("open_name"));
     camera_ = std::make_unique<USBCamera>(open_name, config_path);
-  }
+  } else
+#endif
 
-  else {
-    throw std::runtime_error("Unknow camera_name: " + camera_name + "!");
+  {
+    // 走到这里说明运行期配置与编译期裁剪不一致（构建用的不是这份配置），直接报错
+    throw std::runtime_error(
+      "camera_name 未在本次构建中编译：" + camera_name + "。请用 -DSP_CONFIG= 指向该配置后重新构建。");
   }
 
 }

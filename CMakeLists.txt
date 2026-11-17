@@ -6,6 +6,14 @@ project(sp_vision)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 include(platform)
 
+# ---------- 配置驱动的编译裁剪 ----------
+# 从部署配置里读 camera_name* / yolo_name，只编译实际用到的相机与 YOLO 包。
+# 换车/换配置时用 -DSP_CONFIG=configs/xxx.yaml 重新配置即可，不产生任何运行时开销。
+set(SP_CONFIG "configs/sentry_example.yaml" CACHE FILEPATH
+    "驱动编译裁剪的部署配置（提供 camera_name* 与 yolo_name）")
+include(config_features)
+sp_resolve_build_features("${SP_CONFIG}")
+
 # ---------- 安装目录与 RPATH ----------
 # 默认安装到项目根目录下的 install/（可用 -DCMAKE_INSTALL_PREFIX=... 覆盖）
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)

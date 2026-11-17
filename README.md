@@ -117,6 +117,42 @@ cmake --build build --parallel
 cmake -S . -B build -DOpenVINO_DIR=/path/to/openvino/runtime/cmake
 ```
 
+### 配置驱动的编译裁剪
+
+构建时会读取一份部署配置，把其中的相机关键词（`camera_name*`）与 YOLO 关键词（`yolo_name`）
+映射成需要编译的后端包，未引用的后端连同其 SDK 头文件与链接库一并跳过：
+
+```bash
+# 默认使用哨兵配置（hikrobot + yolov5）
+cmake -S . -B build
+
+# 换车时指定对应配置即可
+cmake -S . -B build -DSP_CONFIG=configs/soldier.yaml
+```
+
+| 关键词 | 可编译的后端 |
+| --- | --- |
+| `camera_name*` | `hikrobot` / `mindvision` / `usbcamera` |
+| `yolo_name*` | `yolov5` / `yolov8` / `yolo11` |
+
+解析结果会在配置阶段打印：
+
+```
+-- [features] 配置 configs/sentry_example.yaml
+-- [features]   相机包：hikrobot
+-- [features]   YOLO 包：yolov5
+```
+
+边界行为：
+
+- **多选**：主相机与全向相机可指向不同后端，取并集编译；关键词大小写不敏感（`Usbcamera` 等同 `usbcamera`）。
+- **缺失**：配置里没有 `camera_name*` 或 `yolo_name` 时，该项回退为「全部编译」并打印告警，保证标定工具等精简配置仍可构建。
+- **未知关键词**（拼写错误等）：配置阶段直接失败并列出合法取值，避免打出缺少后端的二进制。
+- **配置与运行不一致**：若运行期传入的配置引用了未编译的后端，程序在构造相机/检测器时抛出明确错误。
+
+裁剪完全发生在编译期：未启用的后端分支被预处理器整段移除，运行期不增加任何判断开销。
+因此 `SP_CONFIG` 必须指向**这台车实际使用的那份配置**；换配置需要重新配置并编译。
+
 ### 默认构建目标
 
 | 可执行文件 | 说明 | 配置示例 |
