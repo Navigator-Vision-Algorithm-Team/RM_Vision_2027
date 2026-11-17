@@ -29,36 +29,36 @@ Aimer::Aimer(const std::string & config_path)
   }
 }
 
-io::Command Aimer::aim(
+std::optional<io::Command> Aimer::aim(
   const std::list<Target> & targets, std::chrono::steady_clock::time_point timestamp,
   double bullet_speed, bool to_now)
 {
-  if (targets.empty()) return {false, false, 0, 0};
+  if (targets.empty()) return std::nullopt;
   return aim(targets.front(), timestamp, bullet_speed, to_now);
 }
 
-io::Command Aimer::aim(
+std::optional<io::Command> Aimer::aim(
   const Target * target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   bool to_now)
 {
-  if (target == nullptr) return {false, false, 0, 0};
+  if (target == nullptr) return std::nullopt;
   return aim(*target, timestamp, bullet_speed, to_now);
 }
 
-io::Command Aimer::aim(
+std::optional<io::Command> Aimer::aim(
   const Target * target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   io::ShootMode shoot_mode, bool to_now)
 {
-  if (target == nullptr) return {false, false, 0, 0};
+  if (target == nullptr) return std::nullopt;
   return aim(*target, timestamp, bullet_speed, shoot_mode, to_now);
 }
 
-io::Command Aimer::aim(
+std::optional<io::Command> Aimer::aim(
   const Target & target_in, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   bool to_now)
 {
   const Eigen::VectorXd ekf_x_in = target_in.ekf_x();
-  if (ekf_x_in.size() < 9) return {false, false, 0, 0};
+  if (ekf_x_in.size() < 9) return std::nullopt;
 
   // 本地副本：下面要对它连续做 predict，EKF 状态必须可写
   Target target = target_in;
@@ -88,7 +88,7 @@ io::Command Aimer::aim(
   debug_aim_point = aim_point0;
   if (!aim_point0.valid) {
     // tools::logger()->debug("Invalid aim_point0.");
-    return {false, false, 0, 0};
+    return std::nullopt;
   }
 
   Eigen::Vector3d xyz0 = aim_point0.xyza.head(3);
@@ -98,7 +98,7 @@ io::Command Aimer::aim(
     // tools::logger()->debug(
     //   "[Aimer] Unsolvable trajectory0: {:.2f} {:.2f} {:.2f}", bullet_speed, d0, xyz0[2]);
     debug_aim_point.valid = false;
-    return {false, false, 0, 0};
+    return std::nullopt;
   }
 
   // 迭代求解飞行时间 (最多10次，收敛条件：相邻两次fly_time差 <0.001)
@@ -118,7 +118,7 @@ io::Command Aimer::aim(
     auto aim_point = choose_aim_point(iteration_target);
     debug_aim_point = aim_point;
     if (!aim_point.valid) {
-      return {false, false, 0, 0};
+      return std::nullopt;
     }
 
     // 计算新弹道
@@ -132,7 +132,7 @@ io::Command Aimer::aim(
       //   "[Aimer] Unsolvable trajectory in iter {}: speed={:.2f}, d={:.2f}, z={:.2f}", iter + 1,
       //   bullet_speed, d, xyz.z());
       debug_aim_point.valid = false;
-      return {false, false, 0, 0};
+      return std::nullopt;
     }
 
     // 检查收敛条件
@@ -153,18 +153,18 @@ io::Command Aimer::aim(
     std::sqrt(final_xyz.x() * final_xyz.x() + final_xyz.y() * final_xyz.y()),
     std::atan2(final_xyz.y(), final_xyz.x()) * 57.3, yaw * 57.3);
 
-  return {true, false, yaw, pitch};
+  return io::Command{false, yaw, pitch};
 }
 
-io::Command Aimer::aim(
+std::optional<io::Command> Aimer::aim(
   const std::list<Target> & targets, std::chrono::steady_clock::time_point timestamp,
   double bullet_speed, io::ShootMode shoot_mode, bool to_now)
 {
-  if (targets.empty()) return {false, false, 0, 0};
+  if (targets.empty()) return std::nullopt;
   return aim(targets.front(), timestamp, bullet_speed, shoot_mode, to_now);
 }
 
-io::Command Aimer::aim(
+std::optional<io::Command> Aimer::aim(
   const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   io::ShootMode shoot_mode, bool to_now)
 {
@@ -178,7 +178,8 @@ io::Command Aimer::aim(
   }
 
   auto command = aim(target, timestamp, bullet_speed, to_now);
-  command.yaw = command.yaw - yaw_offset_ + yaw_offset;
+  if (!command) return std::nullopt;
+  command->yaw = command->yaw - yaw_offset_ + yaw_offset;
 
   return command;
 }

@@ -26,7 +26,6 @@ info_relay::msg::AimCmd to_wire(const Command & cmd, int64_t now_ns)
   wire.t_ns = static_cast<uint64_t>(now_ns);
   wire.yaw_rad = static_cast<float>(cmd.yaw);
   wire.pitch_rad = static_cast<float>(cmd.pitch);
-  wire.control = cmd.control ? 1 : 0;
   wire.shoot = cmd.shoot ? 1 : 0;
   return wire;
 }

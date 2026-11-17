@@ -18,7 +18,6 @@ using Trajectory = Eigen::Matrix<double, 4, HORIZON>;  // yaw, yaw_vel, pitch, p
 
 struct Plan
 {
-  bool control;
   bool fire;
   float target_yaw;
   float target_pitch;

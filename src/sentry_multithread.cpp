@@ -326,43 +326,37 @@ int main(int argc, char * argv[])
       tracker.reset();
     }
 
-    io::Command command{false, false, 0, 0};
+    // 本帧是否产出了可用的瞄准角。为 false 时收尾点回填当前姿态并禁止开火，
+    // 取代原先 Command::control 的职责（字段已删除，因为它从未出现在报文里）。
+    bool has_aim = false;
+    io::Command command{false, 0, 0};
 
-    // 0x0402 报文里没有 control 位（见 io/serial/gimbal/packet.hpp），固件对
-    // pitch / yaw 无条件执行，control 只参与 shoot 的与运算。所以「视觉不接管」
-    // 也必须下发一个合法角度：这里统一改写成当前姿态，保持云台不动。
+    // 0x0402 报文里没有"是否接管"的位，固件对 pitch / yaw 无条件执行，
+    // 所以「视觉不瞄准」也必须下发一个合法角度：这里统一改写成当前姿态。
     // 少任何一个分支漏填，都会把默认的 0 当成「转到 pitch=0 / 世界系 yaw=0」。
     auto hold_current_pose = [&]() {
-      if (command.control) return;
+      if (has_aim) return;
       command.yaw = gimbal_pos[0];
       command.pitch = gimbal_pos[1];
     };
 
     // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
-    // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
-    // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
-    // 直接走 else 会把云台拽回世界系 0 度。
+    // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回空值，
+    // 而 0x0402 的 yaw/pitch 是无条件下发的，直接走 else 会把云台拽回世界系 0 度。
     if (omni_ids.empty() && armors.empty() && tracker.state() == "lost") {
       command.shoot = false;
       if (spin_when_no_omni) {
         // 自旋扫描：云台自旋的角度增量（不是角速度），实际转速 ≈ 该增量 × 帧率
         const double spin_yaw_step = 0.2;
-        command.control = true;
+        has_aim = true;  // 自旋是主动下发目标角，不是"保持"
         // gimbal_pos[0] 是当前世界系绝对 yaw，叠加增量后即为世界系绝对目标角
         command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
         // 这里的 pitch=0 是**有意的**：自旋搜索时保持平视，不要抬头/低头扫地面。
-        // 与上面两种「漏填默认 0」的情况不同，control 在这里是 true。
         command.pitch = tools::limit_rad(0.0);
       } else {
-        // 原地保持：gimbal_pos[0]/[1] 是世界系绝对 yaw/pitch，原样下发即为「保持当前角度」
-        command.control = false;
-        command.yaw = gimbal_pos[0];
-        command.pitch = gimbal_pos[1];
+        // 原地保持：不产出瞄准角，交给收尾点的 hold_current_pose() 回填当前姿态
+        has_aim = false;
       }
-
-      main_recorder.record(img, q_main, timestamp);
-      hold_current_pose();
-      serial_board.send(command);
     } else {
       //这是主相机的处理，立马处理的目标
       // 先按裁判给的身份刷新敌我颜色，再做过滤
@@ -389,50 +383,54 @@ int main(int argc, char * argv[])
       // 注意：这里不能用 gimbal_pos[0]——那是小yaw 的 yaw，两个轴是独立的。
       if (tracker.state() == "switching") {
         // switch_target.armors 为空 = 已决定切换、但新目标还没观测到，此时它的
-        // delta_yaw / delta_pitch 是 DetectionResult 的默认值 0。0x0402 报文里
-        // 没有 control 位、pitch/yaw 会被固件无条件执行，直接下发 0 等于命令云台
-        // 转到「pitch=0、世界系 yaw=0」。所以 control=false 时显式保持当前姿态。
+        // delta_yaw / delta_pitch 是 DetectionResult 的默认值 0。0x0402 的 pitch/yaw
+        // 会被固件无条件执行，直接下发 0 等于命令云台转到「pitch=0、世界系 yaw=0」。
+        // 所以没有观测时不产出瞄准角，交给收尾点保持当前姿态。
         command.shoot = false;
-        command.control = !switch_target.armors.empty();
-        if (command.control) {
+        has_aim = !switch_target.armors.empty();
+        if (has_aim) {
           command.pitch = tools::limit_rad(switch_target.delta_pitch);
           command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
-        } else {
-          command.pitch = gimbal_pos[1];
-          command.yaw = gimbal_pos[0];
         }
       }
 
       else if (tracker.state() == "lost") {
-        command = decider.decide(detection_queue);
-        if (command.control) {
+        // decide() 返回空值表示"全向没有可用目标"，与"角度恰好为 0"是两回事
+        auto decided = decider.decide(detection_queue);
+        if (decided) {
           // 全向有新检测：更新缓存，发送新值
           // decide() 返回的同样是大yaw 系角，需转成世界系绝对角后再下发
+          command = *decided;
+          has_aim = true;
           command.yaw = tools::limit_rad(command.yaw + omni_base_yaw);
           cached_omni_yaw = command.yaw;
           cached_omni_pitch = command.pitch;
           has_omni_cache = true;
         } else if (has_omni_cache) {
           // 全向暂时丢失：回放缓存值，保持云台继续转向目标
-          command.control = true;
+          has_aim = true;
           command.shoot = false;
           command.yaw = cached_omni_yaw;
           command.pitch = cached_omni_pitch;
         } else {
-          // 既没有新的全向结果、也没有缓存：decider.decide() 返回的是
-          // {false, false, 0, 0}，而 0x0402 的 pitch/yaw 会被固件无条件执行。
-          // 直接下发会把云台拽回世界系 0 度，这里显式保持当前姿态。
-          command.control = false;
+          // 既没有新的全向结果、也没有缓存：不产出瞄准角，收尾点保持当前姿态。
+          // 若在此下发默认的 0，0x0402 会把云台拽回世界系 0 度。
+          has_aim = false;
           command.shoot = false;
-          command.yaw = gimbal_pos[0];
-          command.pitch = gimbal_pos[1];
         }
       }
 
       else {
         // aimer 输出的 yaw 已是 IMU 世界系绝对角（Aimer 内部对世界系 armor_xyza_list 取 atan2），
         // 与下位机的要求一致，直接下发，绝不能再叠加 gimbal_pos[0]。
-        command = aimer.aim(target, timestamp, serial_board.bullet_speed);
+        // 返回空值表示这一帧解不出有效弹道（EKF 未就绪 / 弹道无解），此时不产出瞄准角。
+        auto aimed = aimer.aim(target, timestamp, serial_board.bullet_speed);
+        if (aimed) {
+          command = *aimed;
+          has_aim = true;
+        } else {
+          has_aim = false;
+        }
         has_omni_cache = false;
       }
 
@@ -466,20 +464,21 @@ int main(int argc, char * argv[])
       cv::putText(
         img, hud, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 255), 2);
 
-      main_recorder.record(img, q_main, timestamp);
-
-  //     tools::logger()->info("yaw={:.1f}° gimbal={:.1f}° target={:.1f}°",
-  // command.yaw * 57.3, gimbal_pos[0] * 57.3, (command.yaw - gimbal_pos[0]) * 57.3);
-      hold_current_pose();
-      serial_board.send(command);
-
-      // //test//
-
-      // sleep(5);
-      // tools::logger()->info("sleeping```````");
-
-      // //test//
     }
+
+    // ================== 本轮唯一的收尾点 ==================
+    // 所有分支只负责算出 command，不在这里之外下发：
+    //   · 没有可用瞄准角就一定不开火：此时下发的是"保持姿态"，若 shoot 为真会对着
+    //     旧角度发弹；这条约束放在收尾点是结构性保证，不依赖每个分支自觉清零；
+    //   · hold_current_pose() 是「没有瞄准角时回填当前姿态」的兜底，报文没有"是否接管"
+    //     的位，漏填会把云台拽回世界系 0°；
+    //   · 录像与下发集中在此，保证每轮循环最多一次，不会因分支重排而重复发送；
+    //   · 上面的 continue（推理池超时/空帧/比赛未开始）在到达这里之前就跳出了，
+    //     它们继续保持「只录像、不下发」的原有语义。
+    if (!has_aim) command.shoot = false;
+    hold_current_pose();
+    main_recorder.record(img, q_main, timestamp);
+    serial_board.send(command);
   }
 
   return 0;

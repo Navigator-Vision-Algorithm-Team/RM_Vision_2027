@@ -26,7 +26,6 @@ struct DebugStatus
 {
   Eigen::Vector3d gimbal_ypr = Eigen::Vector3d::Zero();  // 当前云台姿态 yaw/pitch/roll
   Eigen::Vector3d target_ypr = Eigen::Vector3d::Zero();  // 本帧下发给云台的目标 yaw/pitch
-  bool control = false;                                  // 本帧是否真的下发了控制指令
   bool shoot = false;                                    // 本帧是否允许开火
   std::string state;                                     // 业务状态文本（tracker 状态等）
   std::string note;                                      // 额外一行文本，可留空

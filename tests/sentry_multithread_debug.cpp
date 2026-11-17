@@ -335,46 +335,46 @@ int main(int argc, char * argv[])
       tracker.reset();
     }
 
-    io::Command command{false, false, 0, 0};
+    // 本帧是否产出了可用瞄准角；为 false 时收尾点回填当前姿态并禁火
+    bool has_aim = false;
+    io::Command command{false, 0, 0};
     aimer.debug_aim_point.valid = false;
 
-    // 0x0402 没有 control 位，pitch/yaw 会被固件无条件执行；视觉不接管时必须
+    // 0x0402 没有"是否接管"的位，pitch/yaw 会被固件无条件执行；没有瞄准角时必须
     // 下发当前姿态，否则默认的 0 会把云台拽回 pitch=0 / 世界系 yaw=0。
     auto hold_current_pose = [&]() {
-      if (command.control) return;
+      if (has_aim) return;
       command.yaw = gimbal_pos[0];
       command.pitch = gimbal_pos[1];
     };
 
     // 无全向相机且主相机丢失目标：由 spin_when_no_omni 决定「自旋扫描」还是「原地保持」。
-    // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
-    // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
+    // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回空值，
+    // 而 0x0402 的 yaw/pitch 是无条件下发的，
     // 直接走 else 会把云台拽回世界系 0 度。
     if (omni_ids.empty() && armors.empty() && tracker.state() == "lost") {
       command.shoot = false;
       if (spin_when_no_omni) {
         // 自旋扫描：云台自旋的角度增量（不是角速度），实际转速 ≈ 该增量 × 帧率
         const double spin_yaw_step = 0.2;
-        command.control = true;
+        has_aim = true;
         // gimbal_pos[0] 是当前世界系绝对 yaw，叠加增量后即为世界系绝对目标角
         command.yaw = tools::limit_rad(spin_yaw_step + gimbal_pos[0]);
         command.pitch = tools::limit_rad(0.0);
       } else {
         // 原地保持：gimbal_pos[0]/[1] 是世界系绝对 yaw/pitch，原样下发即为「保持当前角度」
-        command.control = false;
-        command.yaw = gimbal_pos[0];
-        command.pitch = gimbal_pos[1];
+        has_aim = false;
       }
 
       main_recorder.record(img, q_main, timestamp);
+      if (!has_aim) command.shoot = false;
       hold_current_pose();
       serial_board.send(command);
 
       // 【新增】调试数据流：无检测框时的两种状态（spin / hold）
       debug.publish(
         armors, auto_aim::DebugStatus{
-                  gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
-                  command.shoot, spin_when_no_omni ? "spin" : "hold", ""});
+                  gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0),                  command.shoot, spin_when_no_omni ? "spin" : "hold", ""});
     } else {
       //这是主相机的处理，立马处理的目标
       // 先按裁判给的身份刷新敌我颜色，再做过滤
@@ -401,10 +401,10 @@ int main(int argc, char * argv[])
       // 注意：这里不能用 gimbal_pos[0]——那是小yaw 的 yaw，两个轴是独立的。
       if (tracker.state() == "switching") {
         // armors 为空时 switch_target 的 delta 是默认值 0，直接下发会让云台归零，
-        // 这里 control=false 时保持当前姿态（0x0402 的 pitch/yaw 无条件下发）。
+        // 这里没有观测时保持当前姿态（0x0402 的 pitch/yaw 无条件下发）。
         command.shoot = false;
-        command.control = !switch_target.armors.empty();
-        if (command.control) {
+        has_aim = !switch_target.armors.empty();
+        if (has_aim) {
           command.pitch = tools::limit_rad(switch_target.delta_pitch);
           command.yaw = tools::limit_rad(switch_target.delta_yaw + omni_base_yaw);
         } else {
@@ -414,8 +414,10 @@ int main(int argc, char * argv[])
       }
 
       else if (tracker.state() == "lost") {
-        command = decider.decide(detection_queue);
-        if (command.control) {
+        auto decided = decider.decide(detection_queue);
+        if (decided) {
+          command = *decided;
+          has_aim = true;
           // 全向有新检测：更新缓存，发送新值
           // decide() 返回的同样是大yaw 系角，需转成世界系绝对角后再下发
           command.yaw = tools::limit_rad(command.yaw + omni_base_yaw);
@@ -424,23 +426,27 @@ int main(int argc, char * argv[])
           has_omni_cache = true;
         } else if (has_omni_cache) {
           // 全向暂时丢失：回放缓存值，保持云台继续转向目标
-          command.control = true;
+          has_aim = true;
           command.shoot = false;
           command.yaw = cached_omni_yaw;
           command.pitch = cached_omni_pitch;
         } else {
           // 无新结果也无缓存：decide() 返回 {false,false,0,0}，显式保持当前姿态
-          command.control = false;
+          has_aim = false;
           command.shoot = false;
-          command.yaw = gimbal_pos[0];
-          command.pitch = gimbal_pos[1];
         }
       }
 
       else {
         // aimer 输出的 yaw 已是 IMU 世界系绝对角（Aimer 内部对世界系 armor_xyza_list 取 atan2），
         // 与下位机的要求一致，直接下发，绝不能再叠加 gimbal_pos[0]。
-        command = aimer.aim(target, timestamp, serial_board.bullet_speed);
+        auto aimed = aimer.aim(target, timestamp, serial_board.bullet_speed);
+        if (aimed) {
+          command = *aimed;
+          has_aim = true;
+        } else {
+          has_aim = false;
+        }
         has_omni_cache = false;
       }
 
@@ -449,8 +455,7 @@ int main(int argc, char * argv[])
 
       // 【新增】调试数据流：检测框 + YOLO FPS + 当前云台位姿 + 下发目标位姿
       auto_aim::DebugStatus status{
-        gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0), command.control,
-        command.shoot, tracker.state(), ""};
+        gimbal_pos, Eigen::Vector3d(command.yaw, command.pitch, 0.0),        command.shoot, tracker.state(), ""};
 
       if (debug_frame_requested) {
         for (auto & armor : armors) {

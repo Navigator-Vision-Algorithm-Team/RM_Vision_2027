@@ -210,21 +210,29 @@ int run_soldier(int argc, char * argv[], const std::string & default_config) try
           bool ballistic_aim =
             !geometry_only && robot->bullet_speed_valid && robot->bullet_speed_m_s > 0.0;
           io::Command aim{};
+          bool has_aim = false;  // 本帧是否解出了可用瞄准角（取代已删除的 Command::control）
           if (ballistic_aim) {
             // develop 的 Aimer 只有一个入口：内部同时做时间补偿、选板与弹道解算。
-            aim = aimer.aim(*target, t, robot->bullet_speed_m_s);
-            ballistic_aim = aim.control && std::isfinite(aim.yaw) && std::isfinite(aim.pitch);
+            // 返回空值表示 EKF 未就绪或弹道无解，此时退回几何指向。
+            auto aimed = aimer.aim(*target, t, robot->bullet_speed_m_s);
+            if (aimed) {
+              aim = *aimed;
+              has_aim = true;
+              ballistic_aim = std::isfinite(aim.yaw) && std::isfinite(aim.pitch);
+            } else {
+              ballistic_aim = false;
+            }
           }
           // 弹道无解（或强制几何模式）时，退化为直接指向目标旋转中心。
           if (!ballistic_aim) {
             const Eigen::VectorXd x = target->ekf_x();
             const double horizon = std::hypot(x[0], x[2]);
-            aim.control = true;
+            has_aim = true;
             aim.yaw = std::atan2(x[2], x[0]);
             aim.pitch = -std::atan2(x[4], horizon);
           }
           note = ballistic_aim ? "ballistic" : "geometric";
-          if (aim.control && std::isfinite(aim.yaw) && std::isfinite(aim.pitch)) {
+          if (has_aim && std::isfinite(aim.yaw) && std::isfinite(aim.pitch)) {
             command.tracking = true;
             command.yaw_rad = tools::limit_rad(aim.yaw);
             // Aimer 的 pitch 向上为负，和 Solver 姿态的 Ry 方向相同。

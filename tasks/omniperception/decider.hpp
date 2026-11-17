@@ -9,6 +9,8 @@
 
 #include "detection.hpp"
 #include "io/camera.hpp"
+#include <optional>
+
 #include "io/command.hpp"
 #include "tasks/auto_aim/armor.hpp"
 #include "tasks/auto_aim/target.hpp"
@@ -21,11 +23,11 @@ class Decider
 public:
   Decider(const std::string & config_path);
 
-  io::Command decide(
+  std::optional<io::Command> decide(
     auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos,
     const std::vector<OmniCameraConfig> & omni_configs);
 
-  io::Command decide(const std::vector<DetectionResult> & detection_queue);
+  std::optional<io::Command> decide(const std::vector<DetectionResult> & detection_queue);
 
   // 【改动】新增 image_size 参数：PnP 需要知道图像尺寸才能在没有标定内参时
   //         用 FOV 估算内参（cx/cy 与焦距）。默认空 Size 时只影响近似内参的

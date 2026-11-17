@@ -30,7 +30,7 @@ bool Shooter::shoot(
   const io::Command & command, const auto_aim::Aimer & aimer, const auto_aim::Target * target,
   const Eigen::Vector3d & gimbal_pos)
 {
-  if (!command.control || target == nullptr || !auto_fire_) return false;
+  if (target == nullptr || !auto_fire_) return false;
 
   // 只取一次：ekf_x() 每次调用都会新建一个 VectorXd（堆分配）
   const Eigen::VectorXd x = target->ekf_x();

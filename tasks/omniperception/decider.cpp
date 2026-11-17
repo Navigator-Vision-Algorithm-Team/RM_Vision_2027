@@ -32,11 +32,11 @@ void Decider::set_enemy_color(auto_aim::Color color)
     auto_aim::COLORS[static_cast<int>(color)]);
 }
 
-io::Command Decider::decide(
+std::optional<io::Command> Decider::decide(
   auto_aim::YOLO & yolo, const Eigen::Vector3d & gimbal_pos,
   const std::vector<OmniCameraConfig> & omni_configs)
 {
-  if (omni_configs.empty()) return {false, false, 0, 0};
+  if (omni_configs.empty()) return std::nullopt;
 
   int n = static_cast<int>(omni_configs.size());
   if (count_ < 0 || count_ >= n) count_ = 0;
@@ -47,7 +47,7 @@ io::Command Decider::decide(
   std::chrono::steady_clock::time_point timestamp;
   cfg.camera->read(img, timestamp);
 
-  if (img.empty()) return io::Command{false, false, 0, 0};
+  if (img.empty()) return std::nullopt;
 
   auto armors = yolo.detect(img);
   auto empty = armor_filter(armors);
@@ -63,17 +63,16 @@ io::Command Decider::decide(
     count_ = (count_ + 1) % n;
 
     return io::Command{
-      true, false, tools::limit_rad(gimbal_pos[0] + da[0] / 57.3),
-      tools::limit_rad(da[1] / 57.3)};
+      false, tools::limit_rad(gimbal_pos[0] + da[0] / 57.3), tools::limit_rad(da[1] / 57.3)};
   }
 
   count_ = (count_ + 1) % n;
-  return io::Command{false, false, 0, 0};
+  return std::nullopt;
 }
 
-io::Command Decider::decide(const std::vector<DetectionResult> & detection_queue)
+std::optional<io::Command> Decider::decide(const std::vector<DetectionResult> & detection_queue)
 {
-  if (detection_queue.empty()) return io::Command{false, false, 0, 0};
+  if (detection_queue.empty()) return std::nullopt;
 
   for (const auto & dr : detection_queue) {
     if (dr.armors.empty()) continue;
@@ -83,10 +82,10 @@ io::Command Decider::decide(const std::vector<DetectionResult> & detection_queue
     tools::logger()->debug(
       "omniperceptron find {}, delta yaw {:.2f}°",
       auto_aim::ARMOR_NAMES[dr.armors.front().name], dr.delta_yaw * 57.3);
-    return io::Command{true, false, dr.delta_yaw, dr.delta_pitch};
+    return io::Command{false, dr.delta_yaw, dr.delta_pitch};
   }
 
-  return io::Command{false, false, 0, 0};
+  return std::nullopt;
 }
 
 void Decider::clear_angle_stack()

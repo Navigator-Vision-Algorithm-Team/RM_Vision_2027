@@ -5,6 +5,8 @@
 #include <chrono>
 #include <list>
 
+#include <optional>
+
 #include "io/command.hpp"
 #include "io/mode.hpp"
 #include "target.hpp"
@@ -26,29 +28,29 @@ public:
 
   // 单目标版本：只读引用，内部按需拷贝一份用于预测迭代。
   // 主链路（Tracker 返回 const Target*）走这个重载，避免每帧先组一个 list<Target> 再深拷贝。
-  io::Command aim(
+  std::optional<io::Command> aim(
     const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
     bool to_now = true);
 
-  io::Command aim(
+  std::optional<io::Command> aim(
     const Target & target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
     io::ShootMode shoot_mode, bool to_now = true);
 
   // 指针重载：直接接 Tracker::track() 的返回值，nullptr 时返回空命令
-  io::Command aim(
+  std::optional<io::Command> aim(
     const Target * target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
     bool to_now = true);
 
-  io::Command aim(
+  std::optional<io::Command> aim(
     const Target * target, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
     io::ShootMode shoot_mode, bool to_now = true);
 
   // 兼容接口：空列表返回空命令，否则转调单目标版本
-  io::Command aim(
+  std::optional<io::Command> aim(
     const std::list<Target> & targets, std::chrono::steady_clock::time_point timestamp,
     double bullet_speed, bool to_now = true);
 
-  io::Command aim(
+  std::optional<io::Command> aim(
     const std::list<Target> & targets, std::chrono::steady_clock::time_point timestamp,
     double bullet_speed, io::ShootMode shoot_mode, bool to_now = true);
 

@@ -390,8 +390,8 @@ void annotate(
     status.gimbal_ypr[1] * kRad2Deg, status.gimbal_ypr[2] * kRad2Deg));
 
   lines.push_back(fmt::format(
-    "target  yaw {:+.1f}  pitch {:+.1f}  (deg){}", status.target_ypr[0] * kRad2Deg,
-    status.target_ypr[1] * kRad2Deg, status.control ? "" : "  [hold]"));
+    "target  yaw {:+.1f}  pitch {:+.1f}  (deg)", status.target_ypr[0] * kRad2Deg,
+    status.target_ypr[1] * kRad2Deg));
 
   lines.push_back(fmt::format(
     "delta   yaw {:+.1f}  pitch {:+.1f}  (deg)   {}",
@@ -717,12 +717,12 @@ void DebugStream::Impl::emit(Job & job)
     std_msgs::msg::String msg;
     msg.data = fmt::format(
       "{{\"tag\":\"{}\",\"loop_fps\":{:.1f},\"yolo_fps\":{:.1f},\"infer_ms\":{:.1f},\"boxes\":{},"
-      "\"state\":\"{}\",\"control\":{},\"shoot\":{},"
+      "\"state\":\"{}\",\"shoot\":{},"
       "\"gimbal\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f},\"roll_deg\":{:.2f}}},"
       "\"target\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}},"
       "\"error\":{{\"yaw_deg\":{:.2f},\"pitch_deg\":{:.2f}}}}}",
       tag, job.loop_fps, job.yolo_fps, job.yolo_ms, job.armors.size(), job.status.state,
-      job.status.control, job.status.shoot, job.status.gimbal_ypr[0] * kRad2Deg,
+      job.status.shoot, job.status.gimbal_ypr[0] * kRad2Deg,
       job.status.gimbal_ypr[1] * kRad2Deg, job.status.gimbal_ypr[2] * kRad2Deg,
       job.status.target_ypr[0] * kRad2Deg, job.status.target_ypr[1] * kRad2Deg,
       (job.status.target_ypr[0] - job.status.gimbal_ypr[0]) * kRad2Deg,

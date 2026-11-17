@@ -40,15 +40,12 @@ io::Command Aimer::aim(
     if (mistake_count_ > 3) {
       switch_fanblade_ = true;
       mistake_count_ = 0;
-      command.control = true;
     } else if (std::abs(last_yaw_ - yaw) > 5 / 57.3 || std::abs(last_pitch_ - pitch) > 5 / 57.3) {
       switch_fanblade_ = true;
       mistake_count_++;
-      command.control = false;
     } else {
       switch_fanblade_ = false;
       mistake_count_ = 0;
-      command.control = true;
     }
     last_yaw_ = yaw;
     last_pitch_ = pitch;
@@ -92,23 +89,20 @@ auto_aim::Plan Aimer::mpc_aim(
     if (mistake_count_ > 3) {
       switch_fanblade_ = true;
       mistake_count_ = 0;
-      plan.control = true;
       first_in_aimer_ = true;
     } else if (std::abs(last_yaw_ - yaw) > 5 / 57.3 || std::abs(last_pitch_ - pitch) > 5 / 57.3) {
       switch_fanblade_ = true;
       mistake_count_++;
-      plan.control = false;
 
       first_in_aimer_ = true;
     } else {
       switch_fanblade_ = false;
       mistake_count_ = 0;
-      plan.control = true;
     }
     last_yaw_ = yaw;
     last_pitch_ = pitch;
 
-    if (plan.control) {
+    if (plan.shoot) {
       if (first_in_aimer_) {
         plan.yaw_vel = 0;
         plan.yaw_acc = 0;

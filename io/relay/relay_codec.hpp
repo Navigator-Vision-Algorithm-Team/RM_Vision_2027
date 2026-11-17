@@ -38,7 +38,7 @@ ImuState from_wire(const info_relay::msg::Imu & sample);
 //   cmd     云台指令，yaw/pitch 单位 rad（世界系绝对角）
 //   now_ns  本侧发出时刻，ns；写入 t_ns 供中转统计端到端延迟
 // 输出：AimCmd 线格式载荷
-// 备注：control/shoot 由调用方给定，本函数不修改其语义
+// 备注：shoot 由调用方给定，本函数不修改其语义
 info_relay::msg::AimCmd to_wire(const Command & cmd, int64_t now_ns);
 
 }  // namespace io::relay

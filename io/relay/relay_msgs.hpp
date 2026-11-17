@@ -129,9 +129,8 @@ struct alignas(8) AimCmd
   uint64_t t_ns;         // 视觉侧发出时刻，ns；relay 用它计算端到端延迟
   float yaw_rad;         // 世界系绝对 yaw，rad
   float pitch_rad;       // 世界系绝对 pitch，rad，向上为负
-  uint8_t control;       // 0 表示下位机忽略 yaw/pitch；1 表示接管
   uint8_t shoot;         // 1 表示请求发弹
-  uint8_t reserved0[2];  // 对齐填充，恒为 0
+  uint8_t reserved0[3];  // 对齐填充，恒为 0；保证 AimCmd 仍为 24 字节
 };
 
 // 导航速度指令：打包成 0x0405 写入串口

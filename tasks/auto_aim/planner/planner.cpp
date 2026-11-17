@@ -71,7 +71,6 @@ Plan Planner::plan(Target target, double bullet_speed)
   tiny_solve(pitch_solver_);
 
   Plan plan;
-  plan.control = true;
 
   plan.target_yaw = tools::limit_rad(traj(0, HALF_HORIZON) + yaw0);
   plan.target_pitch = traj(2, HALF_HORIZON);

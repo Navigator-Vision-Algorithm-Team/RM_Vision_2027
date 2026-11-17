@@ -80,7 +80,6 @@ inline constexpr bool kPublishNavCmd = false;
 //   t_ns        ns   本工程发出时刻，中转用它计算端到端延迟
 //   yaw_rad     rad  世界系绝对 yaw，不再叠加任何关节偏移
 //   pitch_rad   rad  世界系绝对 pitch，向上为负
-//   control     0/1  0 表示下位机忽略角度，1 表示接管云台
 //   shoot       0/1  开火请求；链路失效或热量超限时强制置 0
 //
 // 下发策略：不做排队，每次只保留最新一条——旧指令没有意义，重发只会让云台晚到。
