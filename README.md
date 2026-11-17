@@ -188,8 +188,29 @@ cmake -S . -B build -DSP_CONFIG=configs/soldier.yaml
 
 - **标准自瞄**：从 `configs/mtstandard.yaml` 开始，按车辆修改模型路径、相机、串口、相机内参和相机到云台的外参。
 - **步兵**：使用 `configs/soldier.yaml`。它包含 YOLO、PnP、串口、CAN 和 ROS 2 调试等配置项。
-- **哨兵**：使用 `configs/sentry_example.yaml`；全向相机数量、各相机参数和外参均需匹配实车。
+- **哨兵**：使用 `configs/sentry_example.yaml`；全向相机的启用集合、各相机参数和外参均需匹配实车。
 - **跟踪器**：IMM/EKF 参数位于 `configs/IMM.yaml`；调参建议见 [docs/ekf_imm_tuning.md](docs/ekf_imm_tuning.md) 和 [docs/kalman_tuning.md](docs/kalman_tuning.md)。
+
+#### 全向相机启用集合
+
+推荐用 `omni_camera_ids` 显式指定要开哪几路，支持任意组合：
+
+```yaml
+omni_camera_ids: [1, 3]     # 只开 omni1 与 omni3
+omni_camera_ids: [3, 4]     # 只用主相机 + 两路后置全向
+omni_camera_ids: []         # 只用主相机
+```
+
+| 情况 | 行为 |
+| --- | --- |
+| 键缺省 | 回落到旧键 `omni_camera_count`（0~4，按 1..N 连续启用） |
+| 两个键同时出现 | 以 `omni_camera_ids` 为准，打印一次告警 |
+| 编号重复 / 乱序 | 自动去重并按升序初始化 |
+| `[]` 与键缺省 | `[]` 明确表示一路都不开；缺省表示交给 `omni_camera_count` |
+| 编号越界、非整数、写成标量 | 启动时报错并指明合法范围，不会静默少开一路 |
+
+编号决定 `sursign`（`omniN`）与全部 `omni_*_N` 配置键，因此四路模板无需改动即可用于
+「主相机 + 两路后置全向」——直接把编号列表改成 `[3, 4]` 即可。
 
 标定程序和标定步骤见 [calibration/README.md](calibration/README.md)。不要直接把仓库内的示例矩阵作为实车标定值；拆装相机或改变支架后应重新测量相应外参。
 

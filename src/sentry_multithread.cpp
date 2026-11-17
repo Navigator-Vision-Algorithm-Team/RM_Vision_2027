@@ -2,7 +2,8 @@
  * 哨兵（双yaw + 多全向相机）自瞄主程序：把「主相机精瞄 + 全向补盲」合成一路云台指令。
  *
  * 数据流：
- *   相机：主相机 + omni_camera_count 路全向相机 → YoloPipeline（每路一个 YOLO 实例、
+ *   相机：主相机 + 配置启用的全向相机（omni_camera_ids，旧键 omni_camera_count）
+ *         → YoloPipeline（每路一个 YOLO 实例、
  *         一个绑核线程）→ 主相机结果优先的统一队列 → 本文件主循环。
  *   姿态：中转进程经 iceoryx2 共享内存发布 imu（500Hz）→ io::RelayClient 接收线程
  *         取样并插值 → ImuState（大yaw / 小yaw）→ 刷新 io::tf::Tree 的两个动态关节
@@ -45,6 +46,7 @@
 // 【改动】load_omni_pnp_config（读取全向相机 PnP 标定参数）声明在这里
 #include "tasks/omniperception/omni_jobs.hpp"
 #include "tasks/omniperception/omni_pnp.hpp"
+#include "tasks/omniperception/omni_selection.hpp"
 #include "tools/exiter.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -93,17 +95,18 @@ int main(int argc, char * argv[])
   // 相机初始化
   io::Camera camera(config_path, "main");
 
-  int omni_count = 0;
-  if (yaml["omni_camera_count"]) omni_count = yaml["omni_camera_count"].as<int>();
+  // 启用的全向相机编号：优先 omni_camera_ids，缺省回落到旧键 omni_camera_count。
+  // 返回升序去重列表，支持 [1, 3] 这类任意组合，不再要求从 1 连续递增。
+  const std::vector<int> omni_ids = omniperception::resolve_omni_camera_ids(yaml);
 
-  // 单主相机（omni_count == 0）时，丢失目标后的云台行为开关：
+  // 单主相机（omni_ids 为空）时，丢失目标后的云台行为开关：
   //   true  = 自旋扫描（旧行为，按固定步长持续转动）
   //   false = 原地保持当前朝向
   // 缺省 true，保持旧行为；yaml 里写 spin_when_no_omni: false 即可关闭自旋
   const bool spin_when_no_omni =
     yaml["spin_when_no_omni"] ? yaml["spin_when_no_omni"].as<bool>() : true;
   // 缓冲时间， 确保全向相机初始化完成，避免出现空帧，但是我们的全向相机和主相机并不在同一个物理链路上，所以这个sleep并没有非常的必要
-  // if (omni_count > 0) {
+  // if (!omni_ids.empty()) {
   //   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   // }
 
@@ -111,7 +114,9 @@ int main(int argc, char * argv[])
   std::vector<std::unique_ptr<io::Camera>> omni_cameras;
   std::vector<omniperception::OmniCameraConfig> omni_configs;
 
-  for (int i = 1; i <= omni_count; i++) {
+  for (size_t slot = 0; slot < omni_ids.size(); ++slot) {
+    // i 是物理编号（决定 sursign 与全部 omni_*_i 配置键），slot 只是本次循环的下标
+    const int i = omni_ids[slot];
     auto sursign = "omni" + std::to_string(i);
     auto cam = std::make_unique<io::Camera>(config_path, sursign);
     // 全向相机的实际出帧率来自 frame_rate_omniN（配置里是 15）：录制器若按 30 声明，
@@ -120,8 +125,8 @@ int main(int argc, char * argv[])
       yaml["frame_rate_" + sursign] ? yaml["frame_rate_" + sursign].as<double>() : 15.0;
     auto recorder = std::make_unique<tools::Recorder>(omni_record_fps, sursign, record_quality);
 
-    //缓冲时间
-    if (i < omni_count) {
+    // 缓冲时间：只在还有下一路待初始化时等待，编号不连续也不影响
+    if (slot + 1 < omni_ids.size()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(300));
     }
 
@@ -341,7 +346,7 @@ int main(int argc, char * argv[])
     // 注意不能直接落到 else 分支：那里在无目标时 tracker/decider 会返回 {false,false,0,0}，
     // 而 0x0402 的 yaw/pitch 是无条件下发的（control 只影响 shoot），
     // 直接走 else 会把云台拽回世界系 0 度。
-    if (omni_count == 0 && armors.empty() && tracker.state() == "lost") {
+    if (omni_ids.empty() && armors.empty() && tracker.state() == "lost") {
       command.shoot = false;
       if (spin_when_no_omni) {
         // 自旋扫描：云台自旋的角度增量（不是角速度），实际转速 ≈ 该增量 × 帧率
