@@ -35,7 +35,11 @@ SpinOutput SpinDecision::update(TimePoint now, const Eigen::Vector3d & gimbal_po
   SpinOutput out;
 
   if (has_aim) {
-    // 命中有效目标：立即退出自旋并清空确认计数，不把"停不下来"的滞回留给调用方
+    // 命中有效目标：退出自旋、清零确认计数，并把**当前姿态记为失瞄锚点**。
+    // 下一轮自旋将从这里接续（yaw 继续转、pitch 围绕这里点头），不回零位。
+    anchor_yaw_ = gimbal_pos[0];
+    anchor_pitch_ = gimbal_pos[1];
+    has_anchor_ = true;
     miss_count_ = 0;
     spinning_ = false;
     start_ = TimePoint{};
@@ -57,15 +61,25 @@ SpinOutput SpinDecision::update(TimePoint now, const Eigen::Vector3d & gimbal_po
   if (!spinning_) {
     spinning_ = true;
     start_ = now;  // 波形从第 5 帧开始，避免确认期内相位空转
+
+    // 首次启动且从未命中过目标：用当前姿态兜底建立锚点
+    if (!has_anchor_) {
+      anchor_yaw_ = gimbal_pos[0];
+      anchor_pitch_ = gimbal_pos[1];
+      has_anchor_ = true;
+    }
+    // 从失瞄点接续，不从世界系零位重新开始
+    yaw_cursor_ = anchor_yaw_;
   }
 
   const double elapsed = std::chrono::duration<double>(now - start_).count();
   const double phase = kTwoPi * kPitchFrequencyHz * elapsed;
 
-  // 基于当前实际 yaw 叠加增量：下位机无条件执行角度，因此下一帧的 gimbal_pos 已经跟上
-  out.yaw = tools::limit_rad(kSpinYawStep + gimbal_pos[0]);
-  // 绕平视上下点头；pitch=0 附近摆动，避免扫地面或抬头看天
-  out.pitch = kPitchAmplitude * std::sin(phase);
+  // yaw 从锚点逐帧累加；确认期内下发的就是锚点姿态，因此与云台实际朝向连续
+  yaw_cursor_ = tools::limit_rad(yaw_cursor_ + kSpinYawStep);
+  out.yaw = yaw_cursor_;
+  // pitch 围绕失瞄角度上下点头；第一帧相位为 0，正好停在锚点 pitch 上
+  out.pitch = tools::limit_rad(anchor_pitch_ + kPitchAmplitude * std::sin(phase));
   return out;
 }
 

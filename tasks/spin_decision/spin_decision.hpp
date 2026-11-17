@@ -18,7 +18,9 @@
  *   1) 命中任何有效目标后必须调用 reset()，否则下次自旋会接着上次的点头相位；
  *   2) yaw 基于"当前世界系 yaw + 固定增量"，与下位机无条件执行角度的语义一致；
  *   3) pitch 用正弦波绕平视上下点头，幅度与频率是本文件的常量，调参改这里；
- *   4) 5 帧短滞回是本模块内的常量，不设开关、不进配置。
+ *   4) 5 帧短滞回是本模块内的常量，不设开关、不进配置；
+ *   5) 命中目标时记录当前姿态作为"失瞄锚点"，下一轮自旋从该锚点接续：
+ *      yaw 从锚点继续累加，pitch 围绕锚点摆动，而不是回到零位。
  */
 
 #include <chrono>
@@ -45,7 +47,8 @@ public:
   //   gimbal_pos  当前世界系绝对姿态 yaw/pitch/roll，rad
   //   has_aim     本帧状态机是否产出了有效瞄准角
   // 输出：本帧应使用的 {yaw, pitch}；连续丢失不足 5 帧时原样返回 gimbal_pos 的角度
-  // 备注：连续 5 帧 has_aim=false 才启动自旋更新；一旦 has_aim=true 立即退出并清零计数。
+  // 备注：连续 5 帧 has_aim=false 才启动自旋更新；一旦 has_aim=true 立即退出、
+  //       清零计数并把当时姿态记为失瞄锚点，供下一轮接续。
   //       **所有关于"是否更新"的判定都在本函数内完成**，调用方不做帧数检查。
   //       非对称设计：进入慢、退出快，避免目标出现后仍混入自旋角造成抖动。
   SpinOutput update(
@@ -54,9 +57,15 @@ public:
 private:
   using TimePoint = std::chrono::steady_clock::time_point;  // 单调时钟
 
-  TimePoint start_{};    // 本轮自旋起点；默认构造表示尚未开始
-  int miss_count_ = 0;   // 连续无有效瞄准角的帧数，达到 kConfirmFrames 才启动自旋
-  bool spinning_ = false;  // 当前是否处于自旋状态
+  TimePoint start_{};     // 本轮波形相位起点；默认构造表示尚未开始
+  int miss_count_ = 0;    // 连续无有效瞄准角的帧数，达到 kConfirmFrames 才启动自旋
+  bool spinning_ = false; // 当前是否处于自旋状态
+
+  // 失瞄锚点：命中目标时记录，下一轮自旋从这里继续，而不是回到零位
+  double anchor_yaw_ = 0;     // 失瞄瞬间的世界系 yaw，rad
+  double anchor_pitch_ = 0;   // 失瞄瞬间的世界系 pitch，rad；同时是点头波形的中心
+  double yaw_cursor_ = 0;     // 本轮自旋的 yaw 游标，从 anchor_yaw_ 起逐帧累加
+  bool has_anchor_ = false;   // 是否已记录锚点；首次启动且从未命中时用当前姿态兜底
 };
 
 }  // namespace spin_decision
