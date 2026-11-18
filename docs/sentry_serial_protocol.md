@@ -1,491 +1,222 @@
-# Sentry 视觉节点通信协议
+# Sentry 视觉节点通信协议（iceoryx2 中转架构）
 
-> 适用入口：`src/sentry_multithread.cpp`
-> 数据来源：下位机（MCU / 串口）+ 导航模块（ROS2）
+> 适用入口：`src/sentry_multithread.cpp`、`tests/sentry_multithread_debug.cpp`
+> 通信载体：**iceoryx2 publish-subscribe（同机共享内存，零拷贝）**
+> 对端进程：`info_relay`（独立仓库，独占串口 / CAN）
 
-本文件描述 `sentry_multithread` 入口从下位机**接收**的数据、为完成闭环**发送**给下位机的数据，
-以及经 ROS2 **转发给导航模块**（导航速度输入、云台关节反馈、裁判状态）的数据。
-
-> **2026-11 接收方向协议变更（下行未动）**
-> 下位机（`UICRM-Embedded`，分支 `Martin/referee`）已把上位机通信改成 `host_comm` v1.0 上行帧 +
-> 裁判帧原样转发。上位机解包同步重写，代码在 `io/serial/protocol/`：
-> `referee.hpp/.cpp`（A5 分帧 + CRC + 重同步）、`host_protocol.hpp/.cpp`（0x0500~0x0505）、
-> `seasons/2027/protocol.hpp/.cpp`（裁判转发帧）、`link.hpp/.cpp`（按 cmd_id 号段分派）。
->
-> **下文 §3「接收」的 cmd_id 与字段已作废**，现行映射：
->
-> | cmd_id | 内容 | 结构体 |
-> | --- | --- | --- |
-> | 0x0500 | 协议版本与硬件构型（`gimbal_type` 决定关节角解释方式），1Hz | `host_comm::host_version_t` |
-> | 0x0501 | 机器人状态（软件使能 / 模式 / 在线位域），1Hz | `host_comm::host_robot_status_t` |
-> | 0x0502 | 底盘实测速度与航向角反馈，100Hz | `host_comm::host_chassis_status_t` |
-> | 0x0503 | 云台姿态（IMU 世界角 + 小yaw 关节角 + 自瞄裁决），500Hz | `host_comm::host_gimbal_status_t` |
-> | 0x0504 | 发射模块状态，50Hz | `host_comm::host_shoot_status_t` |
-> | 0x0505 | 调试日志，事件驱动 | `host_comm::host_log_t` |
-> | 0x0001 / 0x0003 / 0x0201 / 0x0202 / 0x0206 / 0x0207 / 0x0208 / 0x020D | 下位机转发的裁判帧（2027 赛季） | `referee_comm::v2027::*` |
->
-> `ImuState` 的搬运关系（IMU 在小yaw / 相机板，可用 `gimbal_imu_axis: lower` 反转）：
-> `upper_yaw = yaw_angle`，`lower_yaw = yaw_angle - upper_yaw_angle`，
-> `pitch = pitch_angle`，`roll = roll_angle`。
-> `reset_pending()` 改为「0x0500 的 `uptime_ms` 回落」即 MCU 重启。
->
-> **已接入的业务语义**
-> - 敌我颜色：`0x0201.robot_id`（红方 1~11，蓝方 101~111；3/103 步兵，7/107 哨兵）→
->   `SerialBoard::own_team_red()` → 取反作为敌人颜色，覆盖配置里的 `enemy_color`
->   （`Tracker::set_enemy_color` / `Decider::set_enemy_color`）。拿不到 robot_id 时仍用配置值。
-> - 热量保护：`0x0202.shooter_17mm_barrel_heat` + `0x0201.shooter_barrel_heat_limit` →
->   `SerialBoard::can_shoot()`：热量到 `limit - heat_stop_margin` 停止开火，
->   回落到 `limit - 2*heat_stop_margin` 自动恢复（只掐 `shoot` 位，跟瞄照常）。
->
-> §2 的帧头 / CRC 规则保持不变。
->
-> **下行同样精简了（以 `io/serial/gimbal/packet.hpp` 为准，§4 的字段表已作废）**
->
-> | cmd_id | data 段 | 字段 |
-> | --- | --- | --- |
-> | 0x0402 | 9 字节 | `pitch`(f32, 世界系绝对角) / `yaw`(f32, 世界系绝对角) / `shoot`(u8, `control && shoot`) |
-> | 0x0405 | 16 字节 | `vx`(f32) / `vy`(f32, 下发前取反，符号约定已确认) / `wz`(f32) / `target_angle`(f32, 已确认暂时固定发 0) |
->
-> 固件按 `sizeof` 严格校验长度，多一字节少一字节都整帧丢弃；`packet.hpp` 里有对应的
-> `static_assert` 兜底。
+本文件描述视觉进程**从中转进程接收什么**、**向中转进程发送什么**、以及这些字段如何对应到下位机帧。
+串口收发、分帧、CRC、协议解析、下行报文打包**全部不在本工程内**，实现与帧结构请见 `info_relay` 仓库的
+`msg/relay_msgs.hpp`、`src/relay.cpp`、`IO/`。
 
 ---
 
-## 1. 通信链路
+## 1. 进程边界与职责
 
-| 链路 | 载体 | 用途 | 代码 |
-| --- | --- | --- | --- |
-| 串口 | `io::SerialBoard` | 与 MCU（云台/底盘主控）互发数据帧 | `io/serial/serial_board.cpp` |
-| ROS2 | `io::ROS2` | 订阅导航速度指令 | `io/ros2/subscribe2nav.cpp` |
-| ROS2 | `io::ROS2` | 发布裁判状态（导航决策节点的输入） | `io/ros2/publish2nav.cpp` |
+```
+下位机 MCU ──串口/CAN──▶ info_relay ──iceoryx2──▶ 视觉进程（本工程）
+                              ▲                        │
+                              └───────iceoryx2─────────┘
+```
 
-串口参数（`configs/sentry.yaml` + `io/serial/serial_board.cpp`）：
-
-| 参数 | 值 | 配置项 |
+| 职责 | info_relay | 视觉进程 |
 | --- | --- | --- |
-| 波特率 | 921600 | `baud_rate` |
-| 数据位 | 8 | 固定 |
-| 校验位 | 无 | 固定 |
-| 停止位 | 1 | 固定 |
-| 流控 | 无 | 固定 |
-| 弹速 | 28.0 m/s | `bullet_speed` |
-| 裁判系统开关 | false | `use_referee_system` |
-| 比赛开始进度阈值 | 4 | `game_start_progress_threshold` |
+| 打开 / 持有串口或 CAN | **是（唯一持有者）** | 否，不打开任何设备 |
+| 分帧、CRC、赛季协议解析 | **是** | 否 |
+| 解析结果发布到共享内存 | **是** | 否 |
+| 云台瞄准指令落地成下位机帧 | **是** | 否，只发布 `cmd_aim` |
+| 相机采集、YOLO、PnP、跟踪、瞄准决策 | 否 | **是** |
+| 是否开火的最终判据 | 否 | **是**（热量 + 链路状态） |
+| 录像（H.264 硬编） | 否 | **是**（`tools::Recorder`） |
+
+视觉进程里已**不存在** `io/serial/`、`io/can/`、`io/ros2/` 中的导航桥接代码。
+唯一的通信入口是 `io/relay/relay_client.{hpp,cpp}`。
 
 ---
 
-## 2. 帧结构（串口）
+## 2. 主题与载荷
 
-所有串口数据包都以统一的 `Header` 开头，结构体按 `__attribute__((packed))` 紧凑排列，**多字节字段为小端序（Little-Endian）**。定义见 `io/serial/gimbal/packet.hpp`。
+主题全名为 `<relay_prefix>/<topic>`，默认前缀 `rm_vision`（视觉侧配置项 `relay_prefix`）。
+载荷定义在 `info_relay/msg/relay_msgs.hpp`，本工程持有一份**字节兼容副本** `io/relay/relay_msgs.hpp`，
+两侧都必须通过尺寸与 `kSchemaVersion` 校验（当前 **3**）。
 
-### 2.1 通用帧头 Header（7 字节）
+| 主题 | 载荷 | 尺寸 | 频率 | 方向 | 本工程 |
+| --- | --- | --- | --- | --- | --- |
+| `imu` | `Imu` | 48 B | 500 Hz（有新帧才发） | relay → 视觉 | **订阅** |
+| `robot` | `Robot` | 40 B | 1 Hz 及变化即发 | relay → 视觉 | **订阅** |
+| `game` | `Game` | 24 B | 1 Hz | relay → 视觉 | **订阅** |
+| `health` | `Health` | 48 B | 10 Hz | relay → 视觉 | **订阅** |
+| `chassis` | `Chassis` | 40 B | 100 Hz | relay → 视觉 | **不订阅**（无消费者） |
+| `cmd_aim` | `AimCmd` | 24 B | 视觉帧率 | 视觉 → relay | **发布** |
+| `cmd_nav` | `NavCmd` | 24 B | 导航帧率 | 视觉/导航 → relay | **不发布**（不参与导航） |
 
-| 偏移 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 0 | `header` | uint8 | 帧起始标志，固定 `0xA5` |
-| 1 | `data_length` | uint16 | 数据段长度（不含帧头与 CRC16） |
-| 3 | `seq` | uint8 | 序号（当前发送恒为 0） |
-| 4 | `crc8` | uint8 | 帧头校验，CRC8 结果 |
-| 5 | `cmd_id` | uint16 | 命令 ID，区分包类型 |
+只订阅实际消费的四个主题，可减少接收线程唤醒与共享内存占用。声明见
+`io/relay/relay_contract.hpp` 的 `kSubscribeChassis = false` / `kPublishNavCmd = false`。
 
-### 2.2 校验规则
+### 2.1 `Imu` → 姿态与自瞄门控
 
-| 校验 | 初始值 | 覆盖范围 | 存放位置 | 实现 |
-| --- | --- | --- | --- | --- |
-| CRC8 | `0xFF`（poly `0x2F`，RoboMaster 标准） | 帧头前 4 字节（偏移 0~3） | 偏移 4（`header.crc8`） | `crc8::Append_CRC8_Check_Sum` |
-| CRC16 | `0xFFFF`（poly `0x1021`，RoboMaster 标准 / CCITT） | 除最后 2 字节外的整包 | 最后 2 字节，小端 | `crc16::Append_CRC16_Check_Sum` |
+| 字段 | 类型 / 单位 | 视觉侧用途 |
+| --- | --- | --- |
+| `t_ns` | uint64 / ns | 姿态插值的唯一时间基准（中转打点，本侧不重打） |
+| `seq` | uint64 | 丢样统计 |
+| `uptime_ms` | uint32 / ms | 数值回落 → `relay_client.reset_pending()` → `tracker.reset()` |
+| `gimbal_type` | uint8 | 0 无 / 1 单yaw / 2 双yaw / 3 折叠，决定关节角解释 |
+| `gimbal_enable` | uint8 | 云台软件使能（只服从，不做二次裁决） |
+| `autoaim_enabled` | uint8 | MCU 对自瞄的最终裁决 |
+| `pitch_rad` / `yaw_rad` / `roll_rad` | float / rad | 合成 `R_gimbal2world` 送 `Solver` |
+| `upper_yaw_rad` | float / rad | 小yaw 关节角；`lower_yaw = yaw_rad - upper_yaw_rad` |
+| `fold_yaw_rad` | float / rad | 折叠关节角，本赛制恒为 0 |
 
-> 导航命令 `0x0405` 与自瞄 `0x0402`、遥测回传（0x502 等）**共用同一套 RM 标准 CRC**（init `0xFF` / `0xFFFF`），不存在特例。`SerialBoard::send(NavCommand)` 同样调用上面的 `crc8::Append_CRC8_Check_Sum` / `crc16::Append_CRC16_Check_Sum`。
+**角度约定**：上电时车头朝向为 0，世界系绝对角，`[0, 2π)`，逆时针为正；pitch 向上为负。
+单yaw 构型下 `upper_yaw_rad = 0`，`yaw_rad` 即唯一 yaw。
 
-CRC 表与算法见 `io/serial/gimbal/protocol_crc.cpp`。接收端解析流程（`SerialBoard::receiveThread`）：读取 `0xA5` → 读帧头剩余 6 字节 → 校验 CRC8 → 按 `cmd_id` 读取定长 payload → 校验 CRC16。
-
----
-
-## 3. 接收：下位机 → 视觉
-
-视觉在 `receiveThread` 中按 `cmd_id` 分发处理。各包大小按 packed 结构推算。
-
-### 3.1 `0x502` IMU 姿态（IMUPacket）
-
-**最重要的一路数据**，用于 `serial_board.imu_at()` 获取「大yaw（也就是 gimbal 系）」的世界系姿态。
-
-| 偏移 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 0 | `header` | Header | 见 2.1，`data_length = 17` |
-| 7 | `pitch` | float | 俯仰角（rad），**低头为正、抬头为负** |
-| 11 | `roll` | float | 横滚角（rad） |
-| 15 | `upper_yaw` | float | **小yaw**（顶端轴，主相机所在）的世界系绝对角（rad，`[0, 2π)`） |
-| 19 | `lower_yaw` | float | **大yaw**（中间轴，IMU 与四个全向相机所在）的世界系绝对角（rad，`[0, 2π)`） |
-| 23 | `roboid` | uint8 | 机器人 ID（1~11 红方 / 101~111 蓝方，用于运行时判定敌我颜色；0 = 固件未填） |
-| 24 | `crc16` | uint16 | CRC16 |
-
-总长 **26 字节**（`static_assert` 锁在 `io/serial/gimbal/packet.hpp`）。
-
-**角度约定**（务必与下位机一致）
-
-- 上电瞬间的车头朝向为 **0**，之后所有角度都是相对该方向的绝对角；
-- 范围 `[0, 2π)`，**逆时针（左转）为正**，大yaw / 小yaw 都是如此；
-- `psi = upper_yaw - lower_yaw`（取最短弧，落在 `(-π, π]`）即**小yaw 相对大yaw 的转角**。
-
-**机械结构对应的坐标系**
-
-```
-底盘 ── 大yaw(lower) ── 小yaw(upper，yaw + pitch + roll)
-         │                  ├─ 主相机
-         └─ 4 个全向相机      └─ IMU
-```
-
-- **大yaw 只有 yaw**：`R_大yaw2world = Rz(lower_yaw)`。四个全向相机挂在这根旋转轴的支架上，
-  各自相对大yaw 的位姿是标定值（见配置文件 `tf.frames.omni_cam_N`）。
-- **pitch / roll 属于小yaw 板**：`R_小yaw2world = Rz(upper)·Ry(pitch)·Rx(roll)`。
-  主相机装在小yaw 上，所以用它当基座姿态，**不存在"小yaw 相对角修正"这回事**。
-
-**视觉侧使用**（`io/serial/serial_board.cpp`）：
+视觉侧读取接口：
 
 ```cpp
-// 只取原始角度，各坐标系姿态由 io/tf/tf_tree 复合
-const ImuState s = serial_board.imu_state_at(timestamp - 1ms);
-
-// 大yaw（全向相机所在轴）：纯 yaw
-R_yaw_axis2world = Rz(s.lower_yaw);
-
-// 小yaw 板（主相机所在）：yaw + pitch + roll
-R_small_yaw2world = Rz(s.upper_yaw) * Ry(s.pitch) * Rx(s.roll);
+const ImuState s = serial_board.imu_state_at(timestamp - 1ms);   // 线性插值
+R_gimbal2world = Rz(s.lower_yaw) * Ry(s.pitch) * Rx(s.roll);     // 小yaw 板（主相机）
 ```
 
-接收线程为每帧记录 `steady_clock` 时间戳，`imu_state_at(t)` 按时间戳在相邻两帧之间对四个角做
-线性插值（yaw 取最短弧），与相机曝光时间对齐（入口传入 `timestamp - 1ms`）。
+### 2.2 `Robot` → 敌我颜色、热量、血量
 
-> 单yaw 兵种（步兵等）：只有哨兵是双yaw 平台，其他兵种把唯一的 yaw 填在 `lower_yaw`，
-> `upper_yaw` 不使用；兼容接口 `serial_board.imu_at()` 仍按 `Rz(lower)·Ry(pitch)·Rx(roll)` 返回。
-
-### 3.2 `0x503` 底盘速度（classisPacket）
-
-| 偏移 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 13` |
-| 7 | `vx` | float | 底盘 X 方向速度 |
-| 11 | `vy` | float | 底盘 Y 方向速度 |
-| 15 | `vz` | float | 底盘 Z / 角速度 |
-| 19 | `enable` | uint8 | 使能标志 |
-| 20 | `crc16` | uint16 | CRC16 |
-
-总长 **22 字节**。当前入口仅做 CRC 校验，未参与决策。
-
-### 3.3 `0x504` 按键 / 扳机（bottonPacket）
-
-| 偏移 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 1` |
-| 7 | `start` | bool(1B) | 按键 / 启动状态 |
-| 8 | `crc16` | uint16 | CRC16 |
-
-总长 **10 字节**。当前入口仅做 CRC 校验。
-
-### 3.4 `0x505` 机器人底盘状态（bassPacket）
-
-**复位信号来源**：`serial_board.reset_pending()`。
-
-| 偏移 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 11` |
-| 7 | `roboid` | uint8 | 机器人 ID |
-| 8 | `reset` | bool(1B) | **复位标志**：为真时入口 `tracker.reset()` |
-| 9 | `position[2]` | uint8×2 | 位置信息 |
-| 11 | `HP` | uint8 | 血量 |
-| 12 | `robomode` | uint8 | 机器人模式 |
-| 13 | `canshoot` | bool(1B) | 允许发射 |
-| 14 | `shootmode` | uint8 | 发射模式 |
-| 15 | `superpower` | bool(1B) | 超级电容状态 |
-| 16 | `online` | bool(1B) | 在线状态 |
-| 17 | `two` | bool(1B) | 保留标志 |
-| 18 | `crc16` | uint16 | CRC16 |
-
-总长 **20 字节**。
-
-### 3.5 `0x0001` / `0x0100` 比赛状态（GameStatusPacket）
-
-**比赛开始判定来源**：`serial_board.is_game_started()`。
-
-| 偏移 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 11` |
-| 7 | `game_info` | uint8 | 低 4 位 = `game_type`，高 4 位 = `game_progress` |
-| 8 | `stage_remain_time` | uint16 | 阶段剩余时间（s） |
-| 10 | `sync_timestamp` | uint64 | 同步时间戳 |
-| 18 | `crc16` | uint16 | CRC16 |
-
-总长 **20 字节**。
-
-解析规则（`SerialBoard::handleGameStatus`）：
-
-- `game_type = game_info & 0x0F`
-- `game_progress = (game_info >> 4) & 0x0F`
-- 当 `use_referee_system = true` 时，`game_progress >= 4` 判定为比赛开始；否则（无人裁判系统）启动即视为已开始。
-
-> 该帧同时是导航决策节点 `referee/game_progress` 的数据源（转发细节见 **5.3**）。
-> 注意 `is_game_started()` 只受 `use_referee_system` 门控，而 ROS 转发不受该开关影响：
-> 只要下位机发本帧，`game_progress` 就会被转发出去。
-
-### 3.6 `0x0201` / `0x0102` 机器人状态（GameRobotStatusPacket）
-
-| 偏移 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 13` |
-| 7 | `robot_id` | uint8 | 机器人 ID |
-| 8 | `robot_level` | uint8 | 等级 |
-| 9 | `remain_hp` | uint16 | 剩余血量 |
-| 11 | `max_hp` | uint16 | 最大血量 |
-| 13 | `shooter_cooling_rate` | uint16 | 枪口冷却速率 |
-| 15 | `shooter_heat_limit` | uint16 | 枪口热量上限 |
-| 17 | `chassis_power_limit` | uint16 | 底盘功率上限 |
-| 19 | `mains_power_state` | uint8 | bit0=云台供电, bit1=底盘供电, bit2=发射机构供电 |
-| 20 | `crc16` | uint16 | CRC16 |
-
-总长 **22 字节**。
-
-`mains_power_state` 位定义（`SerialBoard::handleGameRobotStatus`）：
-
-| bit | 含义 |
+| 字段 | 视觉侧用途 |
 | --- | --- |
-| 0 | 云台供电 `mains_power_gimbal` |
-| 1 | 底盘供电 `mains_power_chassis` |
-| 2 | 发射机构供电 `mains_power_shooter` |
+| `robot_id` | 红方 1~11 / 蓝方 101~111，0 表示未收到 |
+| `own_team_red` | 1 红 / 0 蓝 / 2 未知；取反作为敌人颜色，覆盖配置 `enemy_color` |
+| `current_hp` / `maximum_hp` | 血量状态与调试显示 |
+| `barrel_heat_17mm` / `heat_limit` | `relay_client.can_shoot()` 的热量门限 |
+| `valid_mask` | bit0 机器人状态有效 / bit1 比赛状态有效 / bit2 主机状态有效 |
 
-> 该帧的 `remain_hp` / `max_hp` 是导航决策节点 `referee/current_hp`、`referee/maximum_hp`
-> 的数据源（转发细节见 **5.3**）。下位机按 1Hz 周期发送本帧，
-> 血量由 `fake_hp` / `fake_max_hp` 指定（默认 400 / 400）。
+### 2.3 `Game` → 开赛门控
 
-### 3.7 未识别包
+`Game.in_battle == 1` 时 `is_game_started()` 返回 true，主循环才开启推理；否则整段跳过（只出图不推理）。
+`game_progress` 用于日志，视觉侧不再读取 `use_referee_system` / `game_start_progress_threshold`——
+开赛判定完全由中转发布的 `in_battle` 决定（见 `io/relay/relay_client.cpp`）。
 
-`default` 分支按 `header.data_length` 读取并丢弃，仅用于对齐后续数据流。
+### 2.4 `Health` → 链路健康与版本握手
 
----
-
-## 4. 发送：视觉 → 下位机
-
-### 4.1 `0x0402` 自瞄控制指令（SendPacket）
-
-由 `SerialBoard::send(Command)` 下发，入口每帧调用。**（2026-11 精简版，旧字段已删除）**
-
-| 偏移 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 9` |
-| 7 | `pitch` | float | 目标俯仰**世界系绝对角**（rad） |
-| 11 | `yaw` | float | 目标偏航**世界系绝对角**（rad） |
-| 15 | `shoot` | uint8 | `(control && shoot) ? 1 : 0`，再与热量保护 `can_shoot()` 相与 |
-| 16 | `crc16` | uint16 | CRC16 |
-
-总长 **18 字节**。
-
-> 关键约定：`yaw` / `pitch` 为 **IMU 世界系绝对角**，与 `0x0503` 的姿态同一定义。入口中 `aimer.aim()` 输出已满足该定义直接下发；`decider.decide()` 与全向切换的 `delta_yaw/delta_pitch` 为云台系角，需叠加 `gimbal_pos[0]` 后下发。`control` 为假时 `shoot` 强制为 0。
-
-### 4.2 `0x0405` 导航控制指令（NavigationPacket）
-
-由 `SerialBoard::send(NavCommand)` 下发，来源为 ROS2 订阅（独立线程收包即发，与主循环解耦）。
-
-| 偏移 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| 0 | `header` | Header | `data_length = 16` |
-| 7 | `vx` | float | 前向速度，m/s |
-| 11 | `vy` | float | 横向速度，m/s（★下发前取反，符号约定已确认保留） |
-| 15 | `wz` | float | 转向角速度，rad/s |
-| 19 | `target_angle` | float | 目标航向角，rad（已确认暂时固定发 0，导航侧提供航向后透传） |
-| 23 | `crc16` | uint16 | CRC16 |
-
-总长 **25 字节**（结构体 `packed, aligned(1)`）。
-
----
-
-## 5. ROS2 通信
-
-### 5.1 输入：导航速度
-
-入口：`ROS2` 构造时传入发送回调（`SerialBoard::send`），`Subscribe2Nav` 内部启动独立线程 `nav_forward_loop`，阻塞等待 `move_info_queue_`，收到 `Twist` 后立即转换为 `NavCommand` 并经串口下发——不经过主循环，避免被视觉主链路延迟（`io/ros2/subscribe2nav.cpp`）。
-
-| 项 | 值 |
+| 字段 | 用途 |
 | --- | --- |
-| 话题 | `/red_standard_robot1/cmd_vel` |
-| 消息类型 | `geometry_msgs/msg/Twist` |
-| 超时清理 | 收到 ≥2 条消息后启动 1500ms 定时器，超时清空缓存 |
+| `transport_ok` | 中转侧链路判定，与本地超时判定互相印证 |
+| `last_rx_ns` | 定位"中转没收到"还是"视觉没收到" |
+| `last_latency_us` | 视觉发指令到中转写串口的耗时，用于开火时序标定 |
+| `schema_version` | 收到首个 Health 时比对本地 `kSchemaVersion`，不符即判链路失效并打 ERROR |
 
-字段映射：
+### 2.5 `AimCmd` → 下发的唯一指令
 
-| NavCommand | Twist 字段 |
-| --- | --- |
-| `vx` | `linear.x` |
-| `vy` | `linear.y` |
-| `wz` | `angular.z` |
-
-> 旋转角速度取自 `angular.z`（与导航规范 `cmd_vel.angular.z` 一致，且已含 `fake_vel_transform` 叠加的自旋分量）。
-
-### 5.2 输出：云台关节反馈（JointState）
-
-由 `io::ROS2` 的发布节点直接发布，数据来自 `SerialBoard` 的串口接收线程：**收到一帧 CRC 正确的 `0x502` 才发布一次**，不重复包装旧角度，也不额外启动程序或重复占用串口。
-
-| 项 | 值 |
-| --- | --- |
-| 话题 | `/red_standard_robot1/serial/gimbal_joint_state` |
-| 消息类型 | `sensor_msgs/msg/JointState` |
-| `name` | `gimbal_yaw_joint`、`gimbal_pitch_joint` |
-| `position` | `limit_rad(lower_yaw)`（rad，`(-π, π]`）、`0.0`（大yaw 无俯仰自由度） |
-| `velocity` / `effort` | 空 |
-| `header.stamp` | 发布时刻的 ROS 时间（每个采样重新取） |
-| 频率 | 跟随 `0x502` 帧率，上限 100Hz（超采样时丢弃中间帧，始终发最新采样） |
-
-> 注意：`0x502` 的 `lower_yaw` 是「以上电时车头朝向为 0」的世界系绝对角，**不是「云台相对底盘」**。
-> 若要满足导航侧 TF 的关节语义，需下位机补充 `chassis_yaw`（底盘世界系 yaw）或直接补 `relative_yaw`，
-> 视觉侧再改为 `limit_rad(lower_yaw - chassis_yaw)`（改动点见 `SerialBoard::receiveThread` 的注释）。
-
-### 5.3 输出：裁判状态（导航决策节点的输入）
-
-这是视觉侧**唯一**为导航决策节点（`pb_nav_goal_decision`）提供的输入：把串口收到的裁判帧
-翻译成三个标准标量话题。完整链路：
-
-```
-下位机 0x0001 / 0x0201
-   │  0xA5 分帧 + CRC8/CRC16（见 3.5 / 3.6）
-   ▼
-SerialBoard::receiveThread -> handleGameStatus / handleGameRobotStatus
-   │  game_status_ / robot_status_ + game_status_received_ / robot_status_received_
-   │  SerialBoard::referee_state()：一次加锁取得快照（含两个有效位）
-   ▼
-io::Publish2Nav（复用既有发布节点与 spin 线程，5 Hz 定时拉取）
-   │  绝对话题名发布
-   ▼
-pb_nav_goal_decision（namespace = red_standard_robot1，相对名 referee/xxx 订阅）
-   → game_started_ / hp_low_ → Nav2 navigate_to_pose
-```
-
-#### 5.3.1 话题清单
-
-| 话题（绝对名） | 类型 | 方向 | 频率 | QoS | 发布节点 | 订阅节点 |
-| --- | --- | --- | --- | --- | --- | --- |
-| `/red_standard_robot1/referee/game_progress` | `std_msgs/msg/UInt8` | 视觉 → 导航 | 5 Hz（源 1~5 Hz） | depth 10 / reliable / volatile | `auto_aim_target_pos_publisher` | `goal_decision_node` |
-| `/red_standard_robot1/referee/current_hp` | `std_msgs/msg/Int32` | 视觉 → 导航 | 5 Hz | 同上 | 同上 | 同上 |
-| `/red_standard_robot1/referee/maximum_hp` | `std_msgs/msg/Int32` | 视觉 → 导航 | 5 Hz | 同上 | 同上 | 同上 |
-
-> 话题名是**带命名空间的绝对名**，写死在 `io/ros2/publish2nav.cpp` 的
-> `kGameProgressTopic` / `kCurrentHpTopic` / `kMaximumHpTopic` 常量里。
-> 导航侧用相对名 `referee/xxx`，两边因此共同依赖 `red_standard_robot1` 这个命名空间。
-> 导航栈换 namespace 时必须同步改这两处，否则话题静默不匹配（无任何报错）。
-
-#### 5.3.2 字段映射（串口 → ROS → 导航）
-
-| 串口帧 | 偏移 | 帧字段 | 类型 | `RefereeState` | 话题字段 | 导航侧变量 | 语义 / 阈值 |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `0x0001` | 7（高 4 位） | `game_info[7:4]` | uint8（0~15） | `game_progress` | `game_progress.data` | `game_started_` | `>= 4` 视为开赛（配置 `game_start_progress_threshold`） |
-| `0x0201` | 9 | `remain_hp` | uint16 | `current_hp` | `current_hp.data` | `current_hp_` | 原始血量，不做百分比换算 |
-| `0x0201` | 11 | `max_hp` | uint16 | `maximum_hp` | `maximum_hp.data` | `maximum_hp_` | 低血判定的分母：`current_hp <= max_hp * 30%` |
-
-语义要点：
-
-- `uint16 -> int32`、`uint8 -> uint8` 均无损，**视觉侧不做任何缩放/百分比化**，阈值由导航侧配置；
-- 低血判据**含等号**：`max_hp = 400` 时 `remain_hp = 120` 即判为低血并触发返航（T2 转移）；
-- `game_progress` 是"赛制阶段"而不是布尔：`0 未开始 / 4 比赛中 / 5 比赛结束`。导航侧用 `>= 4`
-  判"已开赛"，因此**进入 5（赛后）后仍会被视为进行中**；若要让赛后停跑，需双方另议约定
-  （例如赛后改发 0，或导航侧改为 `== 4`），当前实现按原始值透传。
-
-#### 5.3.3 发布策略与门控
-
-| 规则 | 行为 | 原因 |
+| 字段 | 类型 / 单位 | 语义 |
 | --- | --- | --- |
-| 有效位门控 | 未收到 `0x0001` 不发 `game_progress`；未收到 `0x0201` 不发两条血量 | 导航侧把 `maximum_hp == 0` 解释为"满血值未知"并**永久关闭**低血返航，绝不能发 0 占位 |
-| 周期发布 | 每 200 ms 全量重发，不等值变化 | 裁判帧仅 1~5 Hz，迟加入/重启的订阅方也能立即拿到当前状态；重复同值对导航侧无副作用 |
-| 变化才打日志 | 三个值任一变化时打一条 INFO | 避免 5 Hz 刷屏 |
-| 无数据告警 | 连续 5 s（25 拍）收不到任何有效帧 → WARN 一次 | 区分"没接裁判系统"与"话题名/命名空间不匹配"，提示导航会停在 `WAIT_GAME_START` |
-| 异常值告警 | `robot_status_valid` 为真但 `max_hp <= 0` → WARN 一次 | 帧校验通过却数据异常，导航侧会因此关闭低血判定 |
-| 无数据不伪造 | 未接裁判系统时一条都不发 | 安全优先：无裁判数据时不允许机器人自行跑点 |
+| `t_ns` | uint64 / ns | 视觉发出时刻，中转据此算端到端延迟 |
+| `yaw_rad` | float / rad | 世界系绝对 yaw |
+| `pitch_rad` | float / rad | 世界系绝对 pitch，向上为负 |
+| `shoot` | uint8 | 1 表示请求开火 |
 
-#### 5.3.4 线程与生命周期约束
+**没有 `control` 字段。** 下位机报文 `0x0400` 的 yaw/pitch 被无条件执行，唯一受控的是开火位
+（`shoot`）。因此"不接管"必须显式下发**当前姿态**，而不是留空或填 0——这由 `Fsm::finalize()` 统一保证。
 
-- 定时器跑在 `Publish2Nav` 既有的 spin 线程里（`io::ROS2` 构造时启动），**串口接收线程不进入 ROS**；
-- 数据源由 `std::mutex` 保护：主线程 `set_referee_source()` 写入，spin 线程定时器读取；
-- `set_referee_source()` 只生效一次，重复调用告警并保留第一个；
-- 回调开头判 `rclcpp::ok()`，析构阶段定时器被调度一次时直接返回，不发布、不抛异常；
-- 依赖顺序：`io::ROS2`（内含 `Publish2Nav`）比 `SerialBoard` 先析构，数据源引用不会悬空。
+---
 
-#### 5.3.5 接入方式
+## 3. 接收约定
 
-```cpp
-// src/sentry_multithread.cpp
-io::ROS2 ros2([&serial_board](const io::NavCommand & c) { serial_board.send(c); });
-ros2.set_referee_source([&serial_board]() { return serial_board.referee_state(); });
+`RelayClient` 自建**一条接收线程**，对外接口从主循环调用，规则如下：
+
+| 项 | 约定 |
+| --- | --- |
+| 取样方式 | 每拍把订阅队列**排空**，只保留最新一条；姿态样本额外入有界队列（容量 64）供插值，**绝不排队消费** |
+| 姿态插值 | `imu_state_at(t)` 在相邻样本间线性插值；目标时刻早于/晚于样本区间的端点直接返回端点，不外推 |
+| time base | 全部用中转打的 `t_ns`；禁止在订阅侧重新打时间戳 |
+| 链路失效 | 超过 `relay_timeout_ms`（默认 200 ms）无 IMU，或 `schema_version` 不符 → `link_ok() = false` → `can_shoot() = false`，并强制下发 `shoot = 0` |
+| 安全收敛 | 链路失效时绝不发弹（强制 `shoot=0`）；无有效瞄准角时由状态机自旋决策接管云台；`AimCmd` 不排队，每次只保留最新一条 |
+| 未启动中转 | 视觉正常出图，只是不开火；`RelayClient` 构造不抛异常 |
+| 下发 | `send(Command)` 只写待发槽（非阻塞），接收线程下一拍发布 `cmd_aim` |
+
+启动日志中应看到：
+
+```
+[RelayClient] 已连接主题前缀 rm_vision（订阅 imu/robot/game/health）
+[RelayClient] 收到首个 IMU 样本，链路建立
 ```
 
-未调用 `set_referee_source()` 时定时器空转，裁判话题上不出现任何消息，其余发布（自瞄目标位置、
-云台关节反馈）不受影响。
+---
 
-#### 5.3.6 联调与自测
+## 4. 中转侧的下位机帧映射（供对照，视觉不直接接触）
 
-- fake 模式下虚拟下位机按 `fake_status_hz` 同时发 `0x0001` 与 `0x0201`，血量取
-  `fake_hp` / `fake_max_hp`（把 `fake_hp` 压到 `fake_max_hp` 的 30% 以下即可联调返航）；
-- 自测程序校验解析结果、三个话题的名字/类型/字段值以及"是否周期发布"：
+下位机帧的 cmd_id、CRC、字段布局全部属于 `info_relay` 的实现范围，此处只列出与视觉消费字段的对应关系：
+
+| 下位机上行帧 | 频率 | 映射到主题 | 视觉使用字段 |
+| --- | --- | --- | --- |
+| `0x0500` 协议版本与构型 | 1 Hz | `imu` / `robot` | `gimbal_type`、`uptime_ms` |
+| `0x0501` 机器人状态 | 1 Hz | `robot` | `enable_bits`、`module_online` |
+| `0x0502` 底盘反馈 | 100 Hz | `chassis`（视觉不订阅） | — |
+| `0x0503` 云台姿态 | 500 Hz | `imu` | `pitch/yaw/roll_rad`、`upper_yaw_rad`、两个使能位 |
+| `0x0001` 比赛状态 | 1 Hz | `game` | `game_progress`、`in_battle` |
+| `0x0201` 机器人状态 | 1~10 Hz | `robot` | `robot_id`、`hp`、`heat_limit` |
+| `0x0202` 发射状态 | 10 Hz | `robot` | `barrel_heat_17mm` |
+
+下行：视觉 `AimCmd` → 中转 `0x0400`（`pitch` f32 / `yaw` f32 / `shoot` u8）；中转另有 `0x0401` 导航帧，
+本工程不使用。完整的帧结构与 CRC 规则见 `info_relay/IO/serial/protocol/`。
+
+---
+
+## 5. 配置
+
+| 配置 | 文件 | 作用 |
+| --- | --- | --- |
+| `relay_prefix` | 视觉入口配置 | 主题前缀，必须与中转一致 |
+| `relay_timeout_ms` | 视觉入口配置 | 无 IMU 判定链路失效的阈值，默认 200 ms |
+| `bullet_speed` | 视觉入口配置 | 弹速 m/s，供 `Aimer` 解算 |
+| `link_type` / `com_port` / `baud_rate` / `can_interface` / `can_id` / `io_timeout_ms` | `info_relay/configs/info_relay.yaml` | 中转侧硬件链路，视觉侧**不读取** |
+
+主题前缀不匹配时不会报连接错误，只会"收不到数据"，表现为视觉侧始终不开火——部署时务必核对双端配置。
+
+---
+
+## 6. ROS 2 与调试数据流
+
+- 视觉进程**不再**订阅 `/cmd_vel`、不再发布云台关节与 `referee/*` 三类导航话题；
+- `tests/sentry_multithread_debug.cpp` 仍使用 `auto_aim::DebugStream`（rclcpp → Foxglove），
+  用于开发阶段画面与状态观测，**只订阅业务数据，不参与控制**；
+- 当前 `info_relay` 实现中未包含 ROS 2 节点。若恢复导航/裁判桥接，应在中转侧新增，
+  视觉侧不重新引入。
+
+---
+
+## 7. 本次架构变更的影响
+
+| 变更 | 影响 |
+| --- | --- |
+| 串口/CAN 实现整体迁出视觉工程 | 视觉不再需要串口设备权限；无法单独打开下位机调试，须先启动中转 |
+| `io::Command::control` 删除 | 下位机报文本就没有该位；"不接管时保持姿态"由状态机 `finalize()` 统一回填当前角度 |
+| 导航速度不再经视觉进程 | 导航链路延迟更低；`cmd_nav` 通道在视觉侧移除 |
+| 增加 `Health.schema_version` 握手 | 两端头文件不同步会在启动时明确报错，而非静默错位 |
+| 自旋由 `tasks/spin_decision` 统一决策 | 无有效瞄准角时 yaw 扫描 + pitch 点头，连续丢失 <5 帧保持姿态；带 5 帧短滞回，从失瞄点接续 |
+| 下行多一跳 IPC | 实测 `last_latency_us` 用于开火时序重新标定；通常由几十微秒级开销 |
+| 下发集中在主循环末尾 | 每轮最多一次 `send`，且无有效瞄准角时强制停火 |
+
+---
+
+## 8. 构建与联调
 
 ```bash
-# 该自测已随串口链路迁出，改由 info_relay 侧验证
+# 视觉工程（需系统已安装 iceoryx2）
+cmake -S . -B build -DSP_CONFIG=configs/sentry_example.yaml
+cmake --build build --parallel
+
+# 中转工程（独立目录，单独构建）
+cd info_relay && cmake -S . -B build && cmake --build build
+./build/info_relay                       # 默认 configs/info_relay.yaml
+
+# 视觉入口
+./build/sentry_multithread configs/sentry_example.yaml
 ```
 
-- 现场核对：
+`SP_CONFIG` 决定编译哪些相机 / YOLO 后端（见 README「配置驱动的编译裁剪」）；换车时必须重新配置编译。
+
+自检与观测：
 
 ```bash
-ros2 topic list | grep referee
-ros2 topic echo /red_standard_robot1/referee/current_hp
-ros2 topic hz   /red_standard_robot1/referee/game_progress    # 应约 5 Hz
+./info_relay/build/ipc_selftest                         # 期望 PASS
+ros2 topic list | grep referee                          # 若中转侧已恢复 ROS2 桥接
+grep -E "RelayClient|fsm" logs/*.log | tail             # 链路建立与状态转移
 ```
 
-**test_nav 测试开关（无裁判系统时联调导航）**
-
-配置 `test_nav: true` 后，`SerialBoard::referee_state()` 不再返回解析结果，而是固定返回：
-
-| 项 | 值 | 配置项 |
-| --- | --- | --- |
-| `game_progress` | `4`（比赛中，即导航侧的"比赛开始"信号） | 固定，无配置项 |
-| `maximum_hp` | `400` | `test_nav_max_hp` |
-| `current_hp` | 默认等于 `test_nav_max_hp` | `test_nav_hp` |
-| `game_status_valid` / `robot_status_valid` | 恒为 `true`（一帧没收到也照发） | — |
-
-- 作用范围**仅限 `referee_state()`**（即 referee/* 三个话题）。`is_game_started()` 仍按
-  `use_referee_system` + `0x0001` 判定，**自瞄门控不受影响**；若要让自瞄也视为开赛，
-  用 `use_referee_system: false`（启动即视为已开始）。
-- 打开时启动日志会打一条 WARN：
-  `test_nav enabled: referee state forced to game_progress=4 hp=400/400 (incoming 0x0001/0x0201 ignored)`。
-- 验证：裁判转发由 info_relay 侧自行校验
-  —— 该配置让虚拟下位机上报 `50/400` 的低血量，测试断言对外仍是 `400/400`（即开关确实覆盖了真实帧）。
-
-#### 5.3.7 对接前提（需与固件一致）
-
-- 帧长必须与结构体一致：`0x0001` 的 `data_length = 11`（整帧 20 B）、`0x0201` 的
-  `data_length = 13`（整帧 22 B）。长度不符会被 `receiveThread` 丢弃或错帧，表现为"血量一直不变"；
-- cmd_id 只认 `0x0001`/`0x0100` 与 `0x0201`/`0x0102`。若固件改发官方 `0x0003`（或按官方全字段
-  长度转发），本链路会**静默失效**（`max_hp` 恒为 0 → 导航永不返航），需同步修改
-  `serial_board.cpp` 的分发分支与 `packet.hpp` 的结构体；
-- 当前只转发上述三个量。`stage_remain_time`、`robot_level`、`chassis_power_limit`、
-  `mains_power_state` 已解析缓存但未发布，导航侧后续需要时可直接加话题，无需改串口层。
-
----
-
-## 6. 接收数据在入口中的用途速查
-
-| 数据 | 包 / 来源 | 入口中的用途 |
-| --- | --- | --- |
-| IMU 姿态 | `0x502` | `solver.set_R_gimbal2world(q)`、`gimbal_pos`、自旋角计算 |
-| 比赛开始 | `0x0001`/`0x0100` | `is_game_started()` 门控自瞄逻辑 |
-| 复位信号 | `0x505` (reset) | `tracker.reset()` |
-| 弹速 | `bullet_speed`（yaml） | `aimer.aim(..., bullet_speed)` |
-| 导航速度 | ROS2 `cmd_vel` | 下发 `0x0405` |
-| 云台关节反馈 | `0x502` -> ROS2 `gimbal_joint_state` | 供导航侧构建 JointState TF（见 5.2） |
-| 裁判状态 | `0x0001`/`0x0201` -> ROS2 `referee/*` | 供导航决策节点判「开赛 / 血量过低返航」（见 5.3） |
-
----
-
-## 7. 结构体定义位置索引
-
-| 结构体 | 文件 |
-| --- | --- |
-| `Header` / 所有 Packet | `io/serial/gimbal/packet.hpp` |
-| `Command` / `NavCommand` / `RefereeState` | `io/command.hpp` |
-| CRC 算法 | `io/serial/gimbal/protocol_crc.cpp` / `protocol_crc.hpp` |
-| 串口收发与解析 | `io/serial/serial_board.cpp` / `serial_board.hpp` |
-| ROS2 订阅 | `io/ros2/subscribe2nav.cpp` |
-| ROS2 发布（目标位置 / 关节反馈 / 裁判状态） | `io/ros2/publish2nav.cpp` |
+> 无硬件环境下无法端到端验证；当前仓库已移除虚拟相机与虚拟下位机。
